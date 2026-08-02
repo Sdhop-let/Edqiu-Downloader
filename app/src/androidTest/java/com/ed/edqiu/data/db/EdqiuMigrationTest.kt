@@ -115,7 +115,7 @@ class EdqiuMigrationTest {
     }
 
     private companion object {
-        const val DB_NAME = "xinvox-migration-test.db"
+        const val DB_NAME = "edqiu-migration-test.db"
         const val CREATE_VERSION_1 =
             """
             CREATE TABLE IF NOT EXISTS saved_links (
