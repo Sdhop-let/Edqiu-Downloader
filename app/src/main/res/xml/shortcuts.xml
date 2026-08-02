@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="com.ed.edqiu.capture.CaptureIntentActivity">
+        <data android:mimeType="text/plain" />
+        <category android:name="com.ed.edqiu.category.SHARE_LINK" />
+    </share-target>
+
+    <shortcut
+        android:shortcutId="save_x_link"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/share_shortcut_save_link"
+        android:shortcutLongLabel="@string/share_shortcut_save_link_long">
+        <intent
+            android:action="android.intent.action.SEND"
+            android:targetClass="com.ed.edqiu.capture.CaptureIntentActivity"
+            android:targetPackage="com.ed.twitterdownload" />
+        <categories android:name="com.ed.edqiu.category.SHARE_LINK" />
+    </shortcut>
+</shortcuts>

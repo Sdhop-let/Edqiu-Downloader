@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Edqiu</string>
+    <string name="tagline">推特视频链接收件箱</string>
+    <string name="accessibility_service_label">Edqiu 自动捕获</string>
+    <string name="accessibility_service_description">在受支持应用出现复制操作后，尽力识别系统当前剪贴板中的 Twitter/X 链接；不读取输入法历史或页面正文。</string>
+    <string name="capture_activity_label">保存到 Edqiu</string>
+    <string name="share_shortcut_save_link">保存链接</string>
+    <string name="share_shortcut_save_link_long">保存链接到 Edqiu</string>
+</resources>

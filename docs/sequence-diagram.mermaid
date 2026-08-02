@@ -1,0 +1,145 @@
+sequenceDiagram
+    autonumber
+    actor User as 用户
+    participant Screen as CloudBackupScreen
+    participant VM as CloudBackupViewModel
+    participant Tgt as BaiduPanTarget
+    participant Auth as BaiduDeviceCodeAuth
+    participant Api as BaiduPanApi
+    participant BAIDU as openapi.baidu.com
+    participant Store as EncryptedCredentialStore
+
+    Note over User,Store: 场景1：百度网盘 设备码扫码授权
+
+    User->>Screen: 点击「登录百度网盘」
+    Screen->>VM: startAuth("baidu")
+    VM->>Tgt: startDeviceCodeAuth()
+    Tgt->>Auth: requestDeviceCode(clientId)
+    Auth->>BAIDU: POST /oauth/2.0/device/code
+    BAIDU-->>Auth: {device_code, user_code, qrcode_url, expires_in, interval}
+    Auth-->>Tgt: DeviceCodeSession
+    Tgt-->>VM: 返回二维码URL + device_code
+    VM-->>Screen: 打开 BaiduAuthDialog
+    Screen->>User: WebView 展示二维码（附 user_code 提示）
+
+    loop 轮询 interval 秒，最长 expires_in
+        Screen->>VM: pollToken()
+        VM->>Tgt: pollToken(device_code)
+        Tgt->>Auth: pollToken(device_code)
+        Auth->>BAIDU: POST /oauth/2.0/token (grant_type=device_token)
+        alt 用户已扫码并确认授权
+            BAIDU-->>Auth: {access_token, refresh_token, expires_in}
+            Auth-->>Tgt: AuthResult(success)
+            Tgt->>Store: save("baidu", access_token+refresh_token+expiresAt)
+            Tgt-->>VM: 授权成功
+            VM-->>Screen: 关闭弹窗，刷新状态
+        else 等待中（pending / expired_token）
+            BAIDU-->>Auth: 错误码（不致命）
+            Auth-->>Tgt: AuthResult(waiting)
+            Tgt-->>VM: 继续轮询
+        else 用户拒绝 / 超时
+            BAIDU-->>Auth: 错误码（致命）
+            Auth-->>Tgt: AuthResult(failed, 原因)
+            Tgt-->>VM: 授权失败
+            VM-->>Screen: 提示错误
+    end
+end
+
+sequenceDiagram
+    autonumber
+    actor User as 用户
+    participant Screen as CloudBackupScreen
+    participant VM as CloudBackupViewModel
+    participant Tgt as AliPanTarget
+    participant Web as AliPanWebViewAuth
+    participant ALI as aliyundrive.com / openapi.alipan.com
+    participant Store as EncryptedCredentialStore
+
+    Note over User,Store: 场景2：阿里云盘 refresh_token 获取与自动刷新
+
+    User->>Screen: 点击「登录阿里云盘」
+    Screen->>VM: startAuth("aliyun")
+    VM->>Tgt: startAuth()
+    Tgt->>Web: openLoginWebView()
+    Web->>ALI: WebView 加载 aliyundrive.com 登录页
+    User->>Web: 完成网页登录
+    Web->>Web: 尝试截取（localStorage.token / 跳转URL参数）
+    alt 自动截取成功
+        Web-->>Tgt: refreshToken
+    else 自动截取失败
+        User->>VM: 手动粘贴 refresh_token（TOKEN_PASTE 兜底）
+        VM->>Tgt: setRefreshToken(pasted)
+    end
+    Tgt->>Store: save("aliyun", refresh_token)
+    Tgt->>ALI: POST /oauth/access_token (grant_type=refresh_token)
+    ALI-->>Tgt: {access_token, refresh_token, expires_in}
+    Tgt->>Store: save("aliyun", access_token+refresh_token+expiresAt)
+    Tgt-->>VM: 授权完成
+    VM-->>Screen: 刷新为已授权状态
+
+    Note over Tgt,ALI: 备份时自动刷新（token 过期兜底）
+    Tgt->>Tgt: ensureAccessToken()（校验 expiresAt，过期则刷新）
+
+sequenceDiagram
+    autonumber
+    actor Trigger as 用户点击立即备份 / BackupWorker
+    participant Engine as BackupEngine
+    participant Store as BackupTaskStore(JSON)
+    participant Reg as ProviderRegistry
+    participant Tgt as BackupTarget(百度/阿里/WebDAV族)
+    participant Up as ChunkedUploader
+    participant Api as BaiduPanApi/AliPanApi
+    participant FS as 本地文件系统
+
+    Note over Trigger,FS: 场景3：备份任务队列执行（含分片上传与断点续传）
+
+    Trigger->>Engine: runQueue()
+    Engine->>Store: load() → List<BackupTask>
+    Engine->>Reg: get(targetId)
+    Engine->>Tgt: prepareRemote()（MKCOL / 建目录 / 建 /apps/XInvox）
+    Tgt-->>Engine: Result.success
+
+    loop 每个 PENDING 任务
+        Engine->>Store: upsert(status=UPLOADING)
+        Engine->>Tgt: exists(remotePath)
+        alt 远端已存在
+            Engine->>Store: upsert(status=DONE, bytesDone=size, skipped)
+        else 不存在
+            Engine->>Tgt: uploadFile(local, remotePath, progress)
+            alt 支持分片（百度/阿里）
+                Tgt->>Up: computeSha1(file)
+                Tgt->>Tgt: ensureAccessToken()
+                Tgt->>Api: 创建上传会话（百度 superfile / 阿里 create+part_urls）
+                alt 阿里秒传命中（content_hash 匹配）
+                    Api-->>Tgt: exist=true，无需上传
+                else 正常分片
+                    Api-->>Tgt: sessionId + partUrls
+                    Tgt->>Up: split(file, chunkSize)
+                    loop 每个分片
+                        Tgt->>Api: 上传分片（百度 partseq / 阿里 PUT part_url）
+                        Api-->>Tgt: 分片md5/etag
+                        Tgt->>Up: 记录分片收据到 resumeState
+                        Tgt-->>Engine: onProgress(bytesDone)
+                        Engine->>Store: upsert(bytesDone 增量落盘)
+                    end
+                    Tgt->>Api: complete（百度 create / 阿里 complete）
+                    Api-->>Tgt: 文件已创建
+                end
+            else 走 WebDAV 整文件 PUT（123 / CD2 / 高级）
+                Tgt->>FS: 读取文件流
+                Tgt-->>Engine: onProgress(bytesDone)
+            end
+            Tgt-->>Engine: UploadReceipt
+            Engine->>Store: upsert(status=DONE, attempt+1)
+        end
+    end
+
+    alt 单任务失败且未达最大重试
+        Engine->>Store: upsert(status=PENDING, attempt+1, errorMessage)
+        Engine->>Engine: scheduleRetry(指数退避 30s/2m/10m)
+    else 重试耗尽
+        Engine->>Store: upsert(status=FAILED)
+    end
+
+    Engine-->>Trigger: BackupSummary(uploaded, skipped, failed)
+    Trigger-->>Engine: （WorkManager 场景）BackupWorker 结束 → setForeground 通知更新

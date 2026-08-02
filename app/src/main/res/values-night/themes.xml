@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Edqiu" parent="android:Theme.Material.NoActionBar">
+        <!-- dark 主题：状态栏/导航栏透明；windowLightStatusBar=false（深色图标 over 浅色状态栏 = 不可见，
+             因为 dark 主题背景是深色状态栏应配 light icons → 这里设 false 即"白图标"） -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
+</resources>

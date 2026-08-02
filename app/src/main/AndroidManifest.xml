@@ -1,0 +1,113 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <queries>
+        <package android:name="com.ed.twitterdownload" />
+        <package android:name="com.ed.twitterdownloader" />
+        <package android:name="com.twitter.android" />
+        <package android:name="com.x.android" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="twitter" />
+        </intent>
+        <provider android:authorities="com.ed.twitterdownload.media" />
+        <provider android:authorities="com.ed.twitterdownloader.media" />
+    </queries>
+
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 网盘直连备份（T01）：后台备份前台服务（WorkManager setForeground） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- API 34+ 前台服务类型 dataSync 必需 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- API 33+ 进度通知运行时申请；申请失败时静默降级为不展示通知（任务照跑） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <permission
+        android:name="com.ed.twitterdownload.permission.READ_DOWNLOAD_MEDIA"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.ed.twitterdownload.permission.READ_DOWNLOAD_MEDIA" />
+    <uses-permission android:name="com.ed.twitterdownloader.permission.READ_DOWNLOAD_MEDIA" />
+
+    <application
+        android:name=".EdqiuApplication"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Edqiu"
+        tools:targetApi="31">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="true"
+            android:theme="@style/Theme.Edqiu">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <activity
+            android:name=".capture.CaptureIntentActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="@string/capture_activity_label"
+            android:noHistory="true"
+            android:theme="@style/Theme.Edqiu.Transparent">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".capture.EdqiuAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <provider
+            android:name="com.ed.twitterdownloader.provider.DownloadMediaProvider"
+            android:authorities="com.ed.twitterdownload.media"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:readPermission="com.ed.twitterdownload.permission.READ_DOWNLOAD_MEDIA" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- 网盘直连备份（T01）：WorkManager 前台服务声明 dataSync 类型（API 34+ FGS 必需）。
+             通知渠道 backup_progress 在 BackupWorker(T05) 内创建（架构文档 M2 约定）。 -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+    </application>
+
+</manifest>

@@ -1,0 +1,275 @@
+classDiagram
+    direction LR
+
+    class BackupTarget {
+        <<interface>>
+        +id: String
+        +displayName: String
+        +authMode: AuthMode
+        +capabilities: BackupCapabilities
+        +isConfigured(): Boolean
+        +isAuthorized(): Boolean
+        +prepareRemote(): Result~Unit~
+        +exists(remotePath: String): Result~Boolean~
+        +uploadFile(local: File, remotePath: String, progress: (Float) -> Unit): Result~UploadReceipt~
+        +testConnection(): Result~Unit~
+    }
+
+    class AuthMode {
+        <<enum>>
+        DEVICE_CODE_QR
+        WEBDAV_CREDENTIAL
+        WEBVIEW_TOKEN
+        NONE
+    }
+
+    class BackupCapabilities {
+        +supportsChunked: Boolean
+        +supportsRapidUpload: Boolean
+        +defaultChunkSize: Long
+        +fixedRemoteRoot: String?
+        +maxRetry: Int
+    }
+
+    class UploadReceipt {
+        +remotePath: String
+        +size: Long
+        +rapidMatched: Boolean
+        +uploadedAt: Long
+    }
+
+    class BackupTask {
+        +taskId: String
+        +targetId: String
+        +localPath: String
+        +remotePath: String
+        +size: Long
+        +status: BackupTaskStatus
+        +attempt: Int
+        +bytesDone: Long
+        +errorMessage: String?
+        +createdAt: Long
+        +updatedAt: Long
+    }
+
+    class BackupTaskStatus {
+        <<enum>>
+        PENDING
+        UPLOADING
+        DONE
+        FAILED
+        CANCELLED
+    }
+
+    class CredentialStore {
+        <<interface>>
+        +save(providerId: String, values: Map~String, String~)
+        +read(providerId: String): Map~String, String~
+        +clear(providerId: String)
+    }
+
+    class EncryptedCredentialStore {
+        +save(providerId: String, values: Map~String, String~)
+        +read(providerId: String): Map~String, String~
+        +clear(providerId: String)
+    }
+
+    class BackupTaskStore {
+        <<interface>>
+        +load(): List~BackupTask~
+        +upsert(task: BackupTask)
+        +delete(taskId: String)
+        +observe(): Flow~List~BackupTask~~
+    }
+
+    class JsonBackupTaskStore {
+        -file: File
+        -mutex: Mutex
+        +load(): List~BackupTask~
+        +upsert(task: BackupTask)
+        +delete(taskId: String)
+        +observe(): Flow~List~BackupTask~~
+    }
+
+    class HttpClient {
+        +getJson(url: String, headers: Map): JsonElement
+        +postJson(url: String, body: String, headers: Map): JsonElement
+        +putStream(url: String, bytes: ByteArray, headers: Map, progress: (Long) -> Unit): Int
+        +head(url: String, headers: Map): Int
+        +options(url: String, headers: Map): Int
+    }
+
+    class ChunkedUploader {
+        +computeSha1(file: File): String
+        +split(file: File, chunkSize: Long): List~Chunk~
+        +uploadChunks(chunks: List~Chunk~, uploader: suspend (Chunk) -> Result~String~, resumeState: MutableMap~Int, String~, progress: (Long) -> Unit): Result~Unit~
+    }
+
+    class BackupEngine {
+        -taskStore: BackupTaskStore
+        -registry: ProviderRegistry
+        -credentialStore: CredentialStore
+        +enqueue(targetId: String, files: List~File~): List~String~
+        +runQueue(): Result~BackupSummary~
+        +cancel(taskId: String)
+        +retryFailed(targetId: String)
+        +state: StateFlow~BackupUiState~
+        -runSingleTask(task: BackupTask): Result~Unit~
+        -scheduleRetry(task: BackupTask)
+    }
+
+    class BackupUiState {
+        +tasks: List~BackupTask~
+        +running: Boolean
+        +lastSummary: BackupSummary?
+    }
+
+    class ProviderRegistry {
+        +register(target: BackupTarget)
+        +get(id: String): BackupTarget?
+        +all(): List~BackupTarget~
+        +detectCloudDrive2(): Result~CloudDrive2Target?~
+    }
+
+    class WebDavEngine {
+        +mkcol(url: String, cred: WebDavCredential)
+        +exists(url: String, cred: WebDavCredential): Boolean
+        +put(url: String, file: File, cred: WebDavCredential, progress: (Long) -> Unit)
+        +probe(url: String, cred: WebDavCredential): Boolean
+        -openConnection(url: String, method: String, cred: WebDavCredential): HttpURLConnection
+    }
+
+    class WebDavCredential {
+        +serverUrl: String
+        +username: String
+        +password: String
+        +remotePath: String
+    }
+
+    class WebDavBackupTarget {
+        +id: String = "webdav"
+        +displayName: String = "WebDAV（高级）"
+        +authMode: AuthMode = WEBDAV_CREDENTIAL
+        +uploadFile(...)
+    }
+
+    class Pan123Target {
+        +id: String = "pan123"
+        +displayName: String = "123网盘"
+        +authMode: AuthMode = WEBDAV_CREDENTIAL
+        +buildServerUrl(accountId: String): String
+    }
+
+    class CloudDrive2Target {
+        +id: String = "clouddrive2"
+        +displayName: String = "CloudDrive2"
+        +authMode: AuthMode = NONE
+        +detectLocal(): Boolean
+    }
+
+    class BaiduPanTarget {
+        +id: String = "baidu"
+        +displayName: String = "百度网盘"
+        +authMode: AuthMode = DEVICE_CODE_QR
+        +capabilities: BackupCapabilities (chunked, fixedRoot=/apps/XInvox)
+        +uploadFile(...)
+        -ensureAccessToken(): String
+        +startDeviceCodeAuth(): DeviceCodeSession
+        +pollToken(deviceCode: String): AuthResult
+    }
+
+    class BaiduDeviceCodeAuth {
+        +requestDeviceCode(clientId: String): DeviceCodeSession
+        +pollToken(deviceCode: String, clientId: String, clientSecret: String): AuthResult
+    }
+
+    class BaiduPanApi {
+        +createSuperFileSession(path: String, totalSize: Long): SuperFileSession
+        +uploadChunk(session, partseq: Int, bytes: ByteArray): String
+        +completeSuperFile(session, chunkMd5List: List~String~): Boolean
+        +meta(path: String): JsonElement?
+    }
+
+    class AliPanTarget {
+        +id: String = "aliyun"
+        +displayName: String = "阿里云盘"
+        +authMode: AuthMode = WEBVIEW_TOKEN
+        +capabilities: BackupCapabilities (chunked, rapid)
+        +uploadFile(...)
+        -ensureAccessToken(): String
+        +setRefreshToken(token: String)
+    }
+
+    class AliPanWebViewAuth {
+        +openLoginWebView(onToken: (String) -> Unit)
+        +captureFromStorage(html: String): String?
+        +captureFromUrl(url: String): String?
+    }
+
+    class AliPanApi {
+        +accessToken(refreshToken: String): TokenBundle
+        +createFile(driveId: String, parentId: String, name: String, size: Long, sha1: String?, partCount: Int): CreateResult
+        +uploadPart(uploadUrl: String, bytes: ByteArray): String
+        +listUploadedParts(driveId: String, fileId: String, uploadId: String): List~Int~
+        +completeFile(driveId: String, fileId: String, uploadId: String): Boolean
+    }
+
+    class BackupWorker {
+        +doWork(): Result
+    }
+
+    class BackupScheduler {
+        +scheduleOnce(context: Context, targetId: String)
+        +schedulePeriodic(context: Context, intervalMinutes: Long)
+        +cancel(context: Context)
+    }
+
+    class CloudBackupViewModel {
+        +targets: StateFlow~List~BackupTargetStatus~~
+        +tasks: StateFlow~List~BackupTask~~
+        +startAuth(targetId: String)
+        +backupNow(targetId: String)
+        +cancelTask(taskId: String)
+    }
+
+    BackupTarget <|.. WebDavBackupTarget
+    BackupTarget <|.. Pan123Target
+    BackupTarget <|.. CloudDrive2Target
+    BackupTarget <|.. BaiduPanTarget
+    BackupTarget <|.. AliPanTarget
+
+    WebDavBackupTarget --> WebDavEngine
+    WebDavBackupTarget --> WebDavCredential
+    Pan123Target --> WebDavEngine
+    Pan123Target --> WebDavCredential
+    CloudDrive2Target --> WebDavEngine
+    CloudDrive2Target --> WebDavCredential
+
+    BaiduPanTarget --> BaiduDeviceCodeAuth
+    BaiduPanTarget --> BaiduPanApi
+    BaiduPanTarget --> ChunkedUploader
+    BaiduPanTarget --> CredentialStore
+
+    AliPanTarget --> AliPanWebViewAuth
+    AliPanTarget --> AliPanApi
+    AliPanTarget --> ChunkedUploader
+    AliPanTarget --> CredentialStore
+
+    BackupEngine --> BackupTaskStore
+    BackupEngine --> ProviderRegistry
+    BackupEngine --> CredentialStore
+    BackupEngine --> BackupUiState
+
+    EncryptedCredentialStore ..|> CredentialStore
+    JsonBackupTaskStore ..|> BackupTaskStore
+
+    ProviderRegistry --> BackupTarget
+
+    BackupWorker --> BackupEngine
+    BackupScheduler --> BackupWorker
+    CloudBackupViewModel --> BackupEngine
+    CloudBackupViewModel --> ProviderRegistry
+
+    HttpClient <-- BaiduDeviceCodeAuth
+    HttpClient <-- BaiduPanApi
+    HttpClient <-- AliPanApi

@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>XInvox · Glass You — Liquid Glass × Monet 原型</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  /* Monet tonal palette — 由种子色动态生成（本原型以 CSS 变量模拟取色结果） */
+  --p40:#2F4C8F;   /* primary */
+  --p80:#8FA7DE;   /* primary dark */
+  --p90:#DEE6F8;   /* primary container light */
+  --p30:#3B5BB5;   /* primary 30 */
+  --s90:#F2E2D8;   /* secondary container */
+  --s30:#8C5A3C;
+  --t90:#DCE9F2;   /* tertiary container */
+  --t40:#2F6E8F;
+  --n0:#101417;    /* onSurface */
+  --n60:#64748B;   /* onSurfaceVariant */
+  --n90:#EDF1F5;   /* surface */
+  --n94:#F4F7FA;   /* surfaceContainer */
+  --n92:#EFF3F8;   /* surfaceContainerHigh */
+  --wall1:#DCE6F5; --wall2:#F6EDE4; --wall3:#E4EEF2; /* 模拟壁纸渐变 */
+  --st-pending:#B45309; --st-ok:#087251; --st-fail:#B91C1C;
+  --glass-1:rgba(244,247,250,.55);
+  --glass-2:rgba(239,243,248,.68);
+  --glass-3:rgba(235,240,246,.80);
+  --edge:rgba(255,255,255,.45);
+  --edge-dark:rgba(255,255,255,.10);
+  --ink:#101417;
+  --radius-tab:28px;
+}
+body{
+  font-family:Inter,"SF Pro Text","Segoe UI",system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  background:#dfe7ef;color:var(--ink);
+  min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:36px 24px;
+  background-image:radial-gradient(circle at 20% 20%,#c8d6e8 0,transparent 40%),radial-gradient(circle at 80% 70%,#e8ddd2 0,transparent 45%);
+}
+.page-title{font-size:22px;font-weight:850;letter-spacing:-.02em;margin-bottom:4px}
+.page-sub{font-size:13px;color:var(--n60);margin-bottom:26px}
+.board{display:flex;gap:44px;align-items:flex-start;flex-wrap:wrap;justify-content:center}
+
+/* ============ 手机框 ============ */
+.phone{width:392px;flex:none;position:relative}
+.screen{
+  width:392px;height:844px;border-radius:44px;overflow:hidden;position:relative;
+  background:linear-gradient(160deg,var(--wall1),var(--wall2) 55%,var(--wall3));
+  box-shadow:0 34px 90px rgba(15,23,42,.30),inset 0 0 0 2px rgba(255,255,255,.55),inset 0 0 0 5px rgba(15,23,42,.06);
+  transition:background 600ms ease;
+}
+/* 动态光斑模拟壁纸 */
+.screen::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(circle at 72% 18%,rgba(255,255,255,.55),transparent 34%),
+             radial-gradient(circle at 18% 78%,rgba(120,150,220,.22),transparent 42%);
+  z-index:0}
+.dynamic-island{position:absolute;top:12px;left:50%;transform:translateX(-50%);width:120px;height:34px;background:#0c0f12;border-radius:20px;z-index:50;box-shadow:inset 0 1px 2px rgba(255,255,255,.15)}
+.viewport{position:absolute;top:0;left:0;right:0;bottom:0;z-index:1}
+
+/* ============ 玻璃通用 ============ */
+.glass{backdrop-filter:blur(24px) saturate(1.12);-webkit-backdrop-filter:blur(24px) saturate(1.12);position:relative}
+.glass::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  box-shadow:inset 0 1.5px 0 var(--edge),inset 0 -1px 0 var(--edge-dark),0 8px 30px rgba(15,23,42,.06)}
+.g2{backdrop-filter:blur(40px) saturate(1.18);-webkit-backdrop-filter:blur(40px) saturate(1.18)}
+.g3{backdrop-filter:blur(48px) saturate(1.22);-webkit-backdrop-filter:blur(48px) saturate(1.22)}
+
+/* ============ 屏幕切换 ============ */
+.scr{position:absolute;inset:0;padding:64px 16px 110px;display:flex;flex-direction:column;gap:12px;
+  opacity:0;visibility:hidden;transform:translateY(10px);transition:opacity .28s ease,transform .32s cubic-bezier(.22,.9,.3,1.1),visibility .28s;overflow:hidden}
+.scr.active{opacity:1;visibility:visible;transform:none}
+
+/* ============ 收件箱 ============ */
+.hero{position:relative;z-index:2;padding:4px 6px 0}
+.eyebrow{font-size:11px;font-weight:800;letter-spacing:.14em;color:var(--p40);text-transform:uppercase}
+.h-title{font-size:30px;font-weight:900;letter-spacing:-.03em;margin-top:3px}
+.h-sub{font-size:13px;color:var(--n60);margin-top:4px;line-height:1.5}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:16px}
+.metric{background:var(--glass-1);border-radius:18px;padding:12px 13px}
+.metric b{display:block;font-size:21px;letter-spacing:-.03em}
+.metric span{font-size:11px;color:var(--n60);font-weight:600}
+.toolbar{display:flex;gap:9px;margin-top:2px}
+.search{flex:1;height:46px;border-radius:20px;background:var(--glass-2);display:flex;align-items:center;gap:9px;padding:0 15px;font-size:13px;color:var(--n60)}
+.search .mag{width:15px;height:15px;border:2px solid var(--n60);border-radius:50%;position:relative;flex:none}
+.search .mag::after{content:"";position:absolute;right:-4px;bottom:-3px;width:6px;height:2px;background:var(--n60);border-radius:2px;transform:rotate(45deg)}
+.sort{height:46px;padding:0 15px;border-radius:18px;background:var(--n0);color:#fff;display:flex;align-items:center;font-size:12px;font-weight:800;gap:6px}
+.chips{display:flex;gap:8px;margin-top:2px}
+.chip{border-radius:999px;padding:8px 13px;font-size:12px;color:var(--n60);background:var(--glass-1);cursor:pointer;font-weight:700;transition:all .22s;border:0}
+.chip.on{background:var(--p90);color:var(--p30);box-shadow:inset 0 0 0 1px rgba(47,76,143,.18)}
+.chip .cnt{opacity:.7;margin-left:3px}
+.list{display:flex;flex-direction:column;gap:10px;margin-top:2px;overflow-y:auto;padding:0 2px 4px;flex:1;scrollbar-width:none}
+.list::-webkit-scrollbar{display:none}
+.lcard{background:var(--glass-1);border-radius:20px;padding:13px;display:flex;gap:12px;cursor:pointer;transition:transform .18s ease}
+.lcard:hover{transform:translateY(-1px)}
+.lthumb{width:78px;height:78px;border-radius:16px;position:relative;flex:none;overflow:hidden;
+  background:linear-gradient(135deg,var(--p40),var(--p80))}
+.lthumb.g1{background:linear-gradient(135deg,#173a6e,#5f7fc4)}
+.lthumb.g2{background:linear-gradient(135deg,#2c4a1e,#6d9c55)}
+.lthumb.g3{background:linear-gradient(135deg,#5c2b1e,#c47a5f)}
+.lthumb .avatar{position:absolute;right:6px;bottom:6px;width:24px;height:24px;border-radius:50%;border:2px solid #fff;background:var(--t40)}
+.lthumb .play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.92);z-index:2}
+.lthumb .play::after{content:"";position:absolute;left:10px;top:7px;border-left:8px solid var(--n0);border-top:5px solid transparent;border-bottom:5px solid transparent}
+.sdot{position:absolute;left:7px;top:7px;width:11px;height:11px;border-radius:50%;border:2px solid #fff;z-index:2}
+.sdot.ok{background:var(--st-ok)}.sdot.pend{background:var(--st-pending)}.sdot.fail{background:var(--st-fail)}
+.lbody{flex:1;min-width:0}
+.lrow{display:flex;align-items:center;gap:7px}
+.lauthor{font-size:14px;font-weight:850;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill{font-size:10px;font-weight:850;border-radius:999px;padding:4px 8px;white-space:nowrap}
+.pill.pend{background:#FBF1E1;color:var(--st-pending)}
+.pill.ok{background:#E1F3EC;color:var(--st-ok)}
+.pill.fail{background:#FBE7E7;color:var(--st-fail)}
+.lcopy{font-size:12.5px;color:#475569;line-height:1.4;margin-top:6px;height:35px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.lmeta{display:flex;justify-content:space-between;margin-top:7px;font-size:10.5px;color:var(--n60);font-weight:600}
+.curl{font-size:10.5px;color:var(--p40);font-weight:700}
+.fab{position:absolute;right:24px;bottom:96px;width:58px;height:58px;border-radius:22px;background:var(--p40);color:#fff;display:flex;align-items:center;justify-content:center;font-size:26px;z-index:20;box-shadow:0 16px 40px rgba(47,76,143,.38);cursor:pointer;transition:transform .2s}
+.fab:hover{transform:scale(1.06)}
+
+/* ============ 液态胶囊 Tab Bar ============ */
+.tabbar{position:absolute;left:16px;right:16px;bottom:14px;height:64px;border-radius:var(--radius-tab);background:var(--glass-2);display:flex;align-items:center;padding:6px;z-index:30}
+.tab{flex:1;height:52px;border-radius:22px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;position:relative;cursor:pointer;color:var(--n60);transition:color .22s;border:0;background:transparent;z-index:2}
+.tab .ti{width:24px;height:24px;position:relative;transition:transform .3s cubic-bezier(.34,1.56,.64,1)}
+.tab .ti::before{content:"";position:absolute;inset:0;border-radius:7px;background:currentColor;transition:border-radius .28s}
+.tab.on{color:#fff}
+.tab.on .ti{transform:scale(1.12)}
+.tab.on .ti::before{border-radius:50%}
+.tab .tl{font-size:10px;font-weight:800;letter-spacing:.02em;opacity:0;transform:translateY(4px);transition:all .2s;position:absolute;top:36px;white-space:nowrap}
+.tab.on .tl{opacity:1;transform:none}
+/* 胶囊指示器 — 弹性移动 */
+.capsule{position:absolute;top:6px;bottom:6px;width:calc(33.333% - 4px);left:6px;border-radius:22px;z-index:1;
+  background:linear-gradient(135deg,var(--p40),var(--p80));
+  box-shadow:inset 0 1.5px 0 rgba(255,255,255,.35),0 10px 26px rgba(47,76,143,.35);
+  transition:transform .34s cubic-bezier(.34,1.35,.6,1);will-change:transform}
+.capsule::after{content:"";position:absolute;inset:2px;border-radius:20px;background:radial-gradient(circle at 30% 22%,rgba(255,255,255,.30),transparent 45%)}
+.tabbar[data-tab="1"] .capsule{transform:translateX(0)}
+.tabbar[data-tab="2"] .capsule{transform:translateX(100%)}
+.tabbar[data-tab="3"] .capsule{transform:translateX(200%)}
+/* 图标形状（简化线性图标） */
+.ti.inbox::after{content:"";position:absolute;left:4px;top:4px;width:16px;height:16px;border-radius:5px;border:2.4px solid var(--n0);opacity:0;transition:opacity .2s}
+.ti.recycle::after{content:"";position:absolute;left:5px;top:4px;width:14px;height:15px;border:2.4px solid var(--n0);border-radius:2px;opacity:0;transition:opacity .2s}
+.ti.gear::after{content:"";position:absolute;left:4px;top:4px;width:16px;height:16px;border:2.4px solid var(--n0);border-radius:50%;opacity:0;transition:opacity .2s}
+.tab.on .ti::after{opacity:1}
+.tabbar .tab .ti{color:currentColor}
+.tab:not(.on) .ti::before{opacity:.55}
+
+/* ============ 设置页 ============ */
+.scr-head{display:flex;align-items:center;gap:10px;padding:0 4px}
+.scr-head .back{width:36px;height:36px;border-radius:13px;background:var(--glass-2);display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;color:var(--ink)}
+.scr-head h2{font-size:21px;font-weight:900;letter-spacing:-.02em}
+.group{background:var(--glass-1);border-radius:22px;padding:15px 16px}
+.g-title{font-size:12px;font-weight:850;color:var(--p40);letter-spacing:.04em;margin-bottom:10px;text-transform:uppercase}
+.grow{display:flex;align-items:center;gap:13px;padding:11px 0}
+.grow+.grow{border-top:1px solid rgba(100,116,139,.13)}
+.grow .gi{width:38px;height:38px;border-radius:13px;background:var(--glass-2);display:flex;align-items:center;justify-content:center;font-size:17px;flex:none}
+.grow .gt{flex:1;min-width:0}
+.grow .gt b{display:block;font-size:14.5px;font-weight:800}
+.grow .gt span{font-size:12px;color:var(--n60);line-height:1.4;display:block;margin-top:2px}
+.grow .arr{color:var(--n60);font-size:15px}
+/* 动态开关 */
+.switch{width:52px;height:32px;border-radius:16px;position:relative;cursor:pointer;flex:none;transition:background .24s cubic-bezier(.4,0,.2,1);background:var(--n92);box-shadow:inset 0 0 0 1px rgba(100,116,139,.4);-webkit-user-select:none;user-select:none}
+.switch::before{content:"";position:absolute;left:4px;top:4px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(15,23,42,.25),inset 0 1px 0 rgba(255,255,255,.9);transition:transform .22s cubic-bezier(.34,1.4,.64,1);z-index:2}
+.switch::after{content:"☾";position:absolute;left:8px;top:6.5px;font-size:11px;color:var(--n60);transition:all .18s;z-index:3}
+.switch.on{background:linear-gradient(135deg,var(--p40),var(--p80));box-shadow:inset 0 0 0 1px rgba(255,255,255,.25),0 0 14px rgba(47,76,143,.35)}
+.switch.on::before{transform:translateX(20px)}
+.switch.on::after{content:"✦";left:30px;color:#fff;font-size:9px;top:7.5px}
+/* 种子色选择器 */
+.seed-row{display:flex;gap:10px;margin-top:4px}
+.seed{width:34px;height:34px;border-radius:50%;cursor:pointer;border:0;transition:transform .2s;position:relative}
+.seed:hover{transform:scale(1.14)}
+.seed.sel::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:2px solid var(--p40);opacity:.75}
+.seed.s1{background:#2F4C8F}.seed.s2{background:#101417}.seed.s3{background:#E8583A}.seed.s4{background:#3E7C4F}.seed.s5{background:#7C5CBF}.seed.s6{background:#C45B7E}
+.glabel{font-size:12.5px;font-weight:750;color:var(--n60);margin:12px 0 8px;display:flex;justify-content:space-between}
+/* 毛玻璃强度滑杆 */
+.range{width:100%;-webkit-appearance:none;appearance:none;height:6px;border-radius:4px;background:linear-gradient(90deg,var(--p40) var(--v,60%),rgba(100,116,139,.25) var(--v,60%));outline:none}
+.range::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:#fff;border:3px solid var(--p40);box-shadow:0 2px 8px rgba(15,23,42,.3);cursor:pointer}
+.about{font-size:11px;color:var(--n60);text-align:center;padding:8px}
+
+/* ============ 播放器 ============ */
+.player-screen{padding:0}
+.pvideo{position:absolute;inset:0;background:#06070a;display:flex;align-items:center;justify-content:center}
+.pvideo .pv-bg{position:absolute;inset:-40%;background:linear-gradient(135deg,#1a2745,#3a2f4a 45%,#0e1a2e);filter:blur(60px) saturate(1.4);opacity:.85}
+.pvideo .pv-center{position:relative;z-index:2;width:100%;aspect-ratio:16/9;background:radial-gradient(circle at 50% 40%,#20305a,#0a0e18 72%)}
+.pv-art{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:56px;opacity:.5}
+/* 播放器顶栏 */
+.p-top{position:absolute;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;gap:10px;padding:58px 16px 14px;background:linear-gradient(180deg,rgba(6,7,10,.75),transparent);opacity:1;transition:opacity .3s}
+.p-top.hidden,.p-bottom.hidden{opacity:0;pointer-events:none}
+.p-btn{width:38px;height:38px;border-radius:13px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.p-title{flex:1;color:#fff;font-size:14px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 播放器底部控制层 — L2 玻璃 */
+.p-bottom{position:absolute;left:14px;right:14px;bottom:16px;z-index:10;border-radius:26px;background:rgba(22,26,34,.62);border:1px solid rgba(255,255,255,.12);
+  backdrop-filter:blur(40px) saturate(1.18);-webkit-backdrop-filter:blur(40px) saturate(1.18);
+  padding:16px 16px 14px;transition:opacity .3s;box-shadow:0 20px 50px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.14)}
+.p-seek{position:relative;height:22px;display:flex;align-items:center;cursor:pointer;-webkit-user-select:none;user-select:none}
+.p-seek .track{position:absolute;left:0;right:0;height:6px;border-radius:4px;background:rgba(255,255,255,.18);overflow:hidden}
+.p-seek .buf{position:absolute;left:0;top:0;bottom:0;width:70%;background:rgba(255,255,255,.28);border-radius:4px}
+.p-seek .done{position:absolute;left:0;top:0;bottom:0;width:37%;background:linear-gradient(90deg,var(--p80),#cdd9f2);border-radius:4px;transition:width .1s linear}
+.p-seek .knob{position:absolute;left:37%;top:50%;transform:translate(-50%,-50%);width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 0 0 4px rgba(255,255,255,.18);transition:left .1s linear}
+.p-time{display:flex;justify-content:space-between;font-size:11px;color:rgba(255,255,255,.75);font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums}
+.p-ctl{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
+.p-left{display:flex;align-items:center;gap:10px}
+.p-big{width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#fff,#dde4f0);border:0;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--n0);box-shadow:0 8px 24px rgba(0,0,0,.4),inset 0 1.5px 0 #fff;transition:transform .15s}
+.p-big:hover{transform:scale(1.07)}
+.p-big .ic{font-size:22px}
+.p-jump{width:44px;height:44px;border-radius:16px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);color:#fff;font-size:13px;font-weight:800;cursor:pointer;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);transition:transform .15s}
+.p-jump:hover{transform:scale(1.08)}
+.p-right{display:flex;align-items:center;gap:8px}
+.lq-btn{height:38px;min-width:52px;padding:0 13px;border-radius:15px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;font-size:14px;font-weight:850;cursor:pointer;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);transition:all .15s;font-variant-numeric:tabular-nums}
+.lq-btn:hover{background:rgba(255,255,255,.24)}
+.lq-btn.pop{animation:pop .3s cubic-bezier(.34,1.56,.64,1)}
+@keyframes pop{0%{transform:scale(1)}45%{transform:scale(1.22)}100%{transform:scale(1)}}
+.lq-btn.mute.on{color:#ffb4ab;border-color:rgba(255,180,171,.5);background:rgba(185,28,28,.3)}
+.p-qlist{display:none;position:absolute;left:14px;right:14px;bottom:188px;z-index:12;border-radius:22px;background:rgba(24,28,36,.72);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(44px) saturate(1.2);-webkit-backdrop-filter:blur(44px) saturate(1.2);padding:10px;max-height:300px;overflow-y:auto}
+.p-qlist.show{display:block}
+.q-item{display:flex;gap:10px;padding:9px;border-radius:14px;cursor:pointer;align-items:center}
+.q-item:hover{background:rgba(255,255,255,.08)}
+.q-item .qt{flex:1;min-width:0}
+.q-item .qt b{display:block;color:#fff;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-item .qt span{color:rgba(255,255,255,.55);font-size:10.5px}
+.q-thumb{width:44px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--p40),var(--p80));flex:none}
+.q-item.cur{background:rgba(255,255,255,.14)}
+.q-item.cur .qt b::after{content:" ▸";color:var(--p80)}
+
+/* ============ 迷你播放条 ============ */
+.minibar{position:absolute;left:16px;right:16px;bottom:92px;height:58px;border-radius:20px;background:var(--glass-2);display:flex;align-items:center;gap:11px;padding:8px 12px;z-index:25;cursor:pointer;box-shadow:0 14px 40px rgba(15,23,42,.18)}
+.mb-thumb{width:42px;height:42px;border-radius:13px;background:linear-gradient(135deg,var(--p40),var(--p80));flex:none;position:relative;overflow:hidden}
+.mb-thumb::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 30% 25%,rgba(255,255,255,.3),transparent 50%)}
+.mb-meta{flex:1;min-width:0}
+.mb-meta b{display:block;font-size:13px;font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mb-meta span{font-size:10.5px;color:var(--n60);font-weight:700}
+.mb-play{width:38px;height:38px;border-radius:14px;background:var(--p40);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px;border:0;flex:none}
+.mb-progress{position:absolute;left:12px;right:12px;bottom:0;height:3px;border-radius:3px;background:rgba(100,116,139,.25)}
+.mb-progress i{display:block;height:100%;width:37%;border-radius:3px;background:var(--p40)}
+
+/* ============ 右栏：说明 ============ */
+.spec{width:340px;flex:none;padding-top:10px}
+.spec-card{background:rgba(255,255,255,.75);border:1px solid rgba(255,255,255,.7);border-radius:22px;padding:20px;margin-bottom:14px;box-shadow:0 12px 40px rgba(15,23,42,.08);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+.spec-card h3{font-size:15px;font-weight:850;margin-bottom:10px;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+.spec-card h3 .tag{font-size:10px;background:var(--p90);color:var(--p30);border-radius:8px;padding:3px 8px;font-weight:850}
+.spec-card p{font-size:12.5px;color:#475569;line-height:1.65}
+.spec-card ul{list-style:none;margin-top:8px}
+.spec-card li{font-size:12px;color:#475569;padding:5px 0 5px 20px;position:relative;line-height:1.5}
+.spec-card li::before{content:"";position:absolute;left:4px;top:11px;width:7px;height:7px;border-radius:50%;background:var(--p40);opacity:.6}
+.token-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.tok{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:750;color:#475569}
+.tok i{width:22px;height:22px;border-radius:7px;display:inline-block;box-shadow:inset 0 0 0 1px rgba(15,23,42,.08)}
+.badge{display:inline-block;font-size:10px;font-weight:850;border-radius:8px;padding:3px 8px;margin:2px}
+.bg-pend{background:#FBF1E1;color:var(--st-pending)}.bg-ok{background:#E1F3EC;color:var(--st-ok)}.bg-fail{background:#FBE7E7;color:var(--st-fail)}
+.foot{font-size:11px;color:var(--n60);text-align:center;margin-top:18px;line-height:1.6}
+.kbd{font-size:10px;background:rgba(100,116,139,.12);border-radius:6px;padding:2px 6px;font-weight:800}
+</style>
+</head>
+<body>
+<div class="page-title">XInvox · Glass You</div>
+<div class="page-sub">Liquid Glass × Monet — 实时模糊毛玻璃 · 动态开关 · 液态胶囊底栏 · 播放器实用化</div>
+
+<div class="board">
+  <!-- ============ 手机 ============ -->
+  <div class="phone">
+    <div class="screen" id="screen">
+      <div class="dynamic-island"></div>
+
+      <!-- 收件箱 -->
+      <div class="scr active" id="scr-inbox">
+        <div class="hero">
+          <div class="eyebrow">XINVOX QUEUE</div>
+          <div class="h-title">视频收件箱</div>
+          <div class="h-sub">自动捕获、整理并处理 X / Twitter 视频链接</div>
+          <div class="metrics">
+            <div class="metric glass"><b>42</b><span>全部</span></div>
+            <div class="metric glass"><b>9</b><span>待下载</span></div>
+            <div class="metric glass"><b>2</b><span>失败</span></div>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="search glass g2"><span class="mag"></span>搜索作者、文案或链接</div>
+          <div class="sort">排序 ▾</div>
+        </div>
+        <div class="chips">
+          <button class="chip on">全部 <span class="cnt">42</span></button>
+          <button class="chip">待下载 <span class="cnt">9</span></button>
+          <button class="chip">已下载 <span class="cnt">31</span></button>
+          <button class="chip">失败 <span class="cnt">2</span></button>
+        </div>
+        <div class="list">
+          <div class="lcard glass">
+            <div class="lthumb g1"><span class="sdot ok"></span><span class="avatar"></span><span class="play"></span></div>
+            <div class="lbody">
+              <div class="lrow"><span class="lauthor">@elonmusk</span><span class="pill ok">已下载</span></div>
+              <div class="lcopy">Starship Flight 8 完整回收画面——这可能是人类航天史上最疯狂的一分钟。箭体翻转、着陆点火、机械臂稳稳接住…</div>
+              <div class="lmeta"><span class="curl">x.com/i/status/18942851…</span><span>2 小时前</span></div>
+            </div>
+          </div>
+          <div class="lcard glass">
+            <div class="lthumb g2"><span class="sdot pend"></span><span class="avatar"></span></div>
+            <div class="lbody">
+              <div class="lrow"><span class="lauthor">@NASA</span><span class="pill pend">待下载</span></div>
+              <div class="lcopy">James Webb 望远镜捕捉到猎户座星云内部的新生恒星簇，红外影像揭示气体与尘埃中的细节结构…</div>
+              <div class="lmeta"><span class="curl">x.com/i/status/18940217…</span><span>5 小时前</span></div>
+            </div>
+          </div>
+          <div class="lcard glass">
+            <div class="lthumb g3"><span class="sdot fail"></span><span class="avatar"></span></div>
+            <div class="lbody">
+              <div class="lrow"><span class="lauthor">@kittens_club</span><span class="pill fail">失败</span></div>
+              <div class="lcopy">三只小猫第一次见雪的反应合集 🐱❄️ 第 2 只直接原地起飞，最后一只淡定围观全程…</div>
+              <div class="lmeta"><span class="curl">x.com/i/status/18938745…</span><span>1 天前</span></div>
+            </div>
+          </div>
+          <div class="lcard glass">
+            <div class="lthumb g1"><span class="sdot ok"></span><span class="avatar"></span><span class="play"></span></div>
+            <div class="lbody">
+              <div class="lrow"><span class="lauthor">@veritasium</span><span class="pill ok">已下载</span></div>
+              <div class="lcopy">为什么电池永远造不出完美的？——锂离子电池的物理极限与下一代固态电池的突破方向全解析…</div>
+              <div class="lmeta"><span class="curl">x.com/i/status/18937590…</span><span>2 天前</span></div>
+            </div>
+          </div>
+          <div class="lcard glass">
+            <div class="lthumb g2"><span class="sdot pend"></span><span class="avatar"></span></div>
+            <div class="lbody">
+              <div class="lrow"><span class="lauthor">@NBA</span><span class="pill pend">待下载</span></div>
+              <div class="lcopy">总决赛 G7 最后 2 分钟全场沸腾时刻：绝平三分 + 抢断快攻暴扣，压哨绝杀定乾坤…</div>
+              <div class="lmeta"><span class="curl">x.com/i/status/18936124…</span><span>3 天前</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 设置 -->
+      <div class="scr" id="scr-settings">
+        <div class="scr-head">
+          <div class="back" onclick="go('inbox')">←</div>
+          <h2>设置</h2>
+        </div>
+        <div class="group glass">
+          <div class="g-title">外观 · Appearance</div>
+          <div class="glabel"><span>莫奈种子色</span><span>跟随壁纸动态取色</span></div>
+          <div class="seed-row" id="seedRow">
+            <button class="seed s1 sel" data-i="0" onclick="setSeed(0)" title="墨蓝 #2F4C8F"></button>
+            <button class="seed s2" data-i="1" onclick="setSeed(1)" title="曜石黑 #101417"></button>
+            <button class="seed s3" data-i="2" onclick="setSeed(2)" title="珊瑚橙 #E8583A"></button>
+            <button class="seed s4" data-i="3" onclick="setSeed(3)" title="抹茶绿 #3E7C4F"></button>
+            <button class="seed s5" data-i="4" onclick="setSeed(4)" title="薰衣草紫 #7C5CBF"></button>
+            <button class="seed s6" data-i="5" onclick="setSeed(5)" title="玫瑰粉 #C45B7E"></button>
+          </div>
+          <div class="glabel"><span>毛玻璃强度</span><span id="glassVal">60%</span></div>
+          <input class="range" type="range" min="0" max="100" value="60" id="glassRange" oninput="setGlass(this.value)">
+        </div>
+        <div class="group glass">
+          <div class="g-title">捕获 · Capture</div>
+          <div class="grow"><div class="gi">📋</div><div class="gt"><b>回到前台检查剪贴板</b><span>仅在 App 回到前台时读取</span></div><div class="switch on" onclick="this.classList.toggle('on')"></div></div>
+          <div class="grow"><div class="gi">♿</div><div class="gt"><b>无障碍自动捕获</b><span>在受支持应用复制时读取</span></div><div class="switch" onclick="this.classList.toggle('on')"></div></div>
+        </div>
+        <div class="group glass">
+          <div class="g-title">下载 · Download</div>
+          <div class="grow"><div class="gi">🔄</div><div class="gt"><b>下载失败自动重试</b><span>30 秒、2 分钟退避重试</span></div><div class="switch on" onclick="this.classList.toggle('on')"></div></div>
+          <div class="grow"><div class="gi">📡</div><div class="gt"><b>后台更新下载状态</b><span>约每 15 分钟扫描一次</span></div><div class="switch on" onclick="this.classList.toggle('on')"></div></div>
+          <div class="grow"><div class="gi">📁</div><div class="gt"><b>监控目录</b><span>Android/data/.../Download</span></div><span class="arr">›</span></div>
+        </div>
+        <div class="group glass">
+          <div class="g-title">备份 · Backup</div>
+          <div class="grow"><div class="gi">☁️</div><div class="gt"><b>每日自动备份</b><span>最近成功：2026-07-31 03:00</span></div><div class="switch" onclick="this.classList.toggle('on')"></div></div>
+          <div class="grow"><div class="gi">💾</div><div class="gt"><b>立即备份</b><span>导出到已选目录</span></div><span class="arr">›</span></div>
+        </div>
+        <div class="about glass">XInvox 1.2.0 · Glass You Build</div>
+      </div>
+
+      <!-- 播放器 -->
+      <div class="scr player-screen" id="scr-player">
+        <div class="pvideo">
+          <div class="pv-bg"></div>
+          <div class="pv-center"><div class="pv-art">🌌</div></div>
+        </div>
+        <div class="p-top" id="pTop">
+          <button class="p-btn" onclick="go('inbox')">←</button>
+          <div class="p-title">Starship Flight 8 · 完整回收画面</div>
+          <button class="p-btn" onclick="toggleFullscreen()">⛶</button>
+        </div>
+        <div class="p-bottom" id="pBottom">
+          <div class="p-seek" onclick="seekClick(event)">
+            <div class="track"><div class="buf"></div><div class="done" id="seekDone"></div></div>
+            <div class="knob" id="seekKnob"></div>
+          </div>
+          <div class="p-time"><span id="curTime">01:23</span><span id="totTime">03:45</span></div>
+          <div class="p-ctl">
+            <div class="p-left">
+              <button class="p-jump" onclick="jump(-15)">⏪15</button>
+              <button class="p-big" id="playBtn" onclick="togglePlay()"><span class="ic">▶</span></button>
+              <button class="p-jump" onclick="jump(15)">15⏩</button>
+            </div>
+            <div class="p-right">
+              <button class="lq-btn" id="speedBtn" onclick="cycleSpeed()">1x</button>
+              <button class="lq-btn mute" id="muteBtn" onclick="toggleMute()">🔊</button>
+              <button class="p-btn" style="width:44px;height:44px" onclick="toggleQueue()">☰</button>
+            </div>
+          </div>
+        </div>
+        <div class="p-qlist" id="qList">
+          <div class="q-item cur"><span class="q-thumb"></span><span class="qt"><b>Starship Flight 8 完整回收</b><span>03:45 · 已下载</span></span></div>
+          <div class="q-item"><span class="q-thumb" style="background:linear-gradient(135deg,#173a6e,#5f7fc4)"></span><span class="qt"><b>Webb 望远镜星云影像</b><span>02:10 · 已下载</span></span></div>
+          <div class="q-item"><span class="q-thumb" style="background:linear-gradient(135deg,#5c2b1e,#c47a5f)"></span><span class="qt"><b>三只小猫第一次见雪</b><span>00:48 · 已下载</span></span></div>
+          <div class="q-item"><span class="q-thumb" style="background:linear-gradient(135deg,#2c4a1e,#6d9c55)"></span><span class="qt"><b>电池物理极限解析</b><span>18:22 · 已下载</span></span></div>
+          <div class="q-item"><span class="q-thumb" style="background:linear-gradient(135deg,#173a6e,#5f7fc4)"></span><span class="qt"><b>NBA 总决赛 G7 绝杀</b><span>02:33 · 已下载</span></span></div>
+        </div>
+      </div>
+
+      <!-- 迷你播放条 -->
+      <div class="minibar glass g2" id="miniBar" onclick="go('player')">
+        <div class="mb-thumb"></div>
+        <div class="mb-meta"><b>Starship Flight 8 · 完整回收</b><span>03:45 · 播放中</span></div>
+        <button class="mb-play" onclick="event.stopPropagation();togglePlay()">⏸</button>
+        <div class="mb-progress"><i id="mbProg"></i></div>
+      </div>
+
+      <!-- 液态胶囊 Tab Bar -->
+      <div class="tabbar glass g2" id="tabbar" data-tab="1">
+        <div class="capsule"></div>
+        <button class="tab on" data-t="1" onclick="go('inbox')">
+          <span class="ti inbox"></span><span class="tl">收件箱</span>
+        </button>
+        <button class="tab" data-t="2" onclick="go('settings')">
+          <span class="ti recycle"></span><span class="tl">回收站</span>
+        </button>
+        <button class="tab" data-t="3" onclick="go('player')">
+          <span class="ti gear"></span><span class="tl">播放器</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 右栏说明 ============ -->
+  <div class="spec">
+    <div class="spec-card">
+      <h3>🫧 设计语言 <span class="tag">Glass You</span></h3>
+      <p><b>Material You / Monet 动态取色</b> 提供色彩主权——主色从壁纸实时提取；<b>Apple Liquid Glass 材质</b> 提供质感主权——实时模糊、折射高光、边缘光。点击左侧种子色圆点，可实时预览取色对全 App 的影响。</p>
+      <div class="token-row">
+        <span class="tok"><i style="background:#2F4C8F"></i>primary</span>
+        <span class="tok"><i style="background:#DEE6F8"></i>p90</span>
+        <span class="tok"><i style="background:#F4F7FA"></i>surface</span>
+        <span class="tok"><i style="background:#64748B"></i>onSurfaceV</span>
+      </div>
+    </div>
+    <div class="spec-card">
+      <h3>🧊 三层玻璃材质 <span class="tag">性能分级</span></h3>
+      <p>L1 页面层（55% 透 / blur 24px）→ L2 浮层底栏与播放器控制层（65% / 40px）→ L3 弹出层（78% / 48px）。低端机自动降级为半透明 + 高光模拟，滚动动画期间使用缓存模糊，保证帧率。</p>
+    </div>
+    <div class="spec-card">
+      <h3>💊 液态胶囊底栏 <span class="tag">Liquid Capsule</span></h3>
+      <p>选中胶囊以 <b>Spring(0.6, 320)</b> 弹性滑动，图标从线性切换为圆角填充，标签仅在选中时浮现。点击三个 Tab 体验切换动效。</p>
+    </div>
+    <div class="spec-card">
+      <h3>🎛 动态开关 <span class="tag">Dynamic Toggle</span></h3>
+      <p>M3 Switch 增强三态：滑块位移（Spring 0.55/400）、轨道渐变辉光、开关图标切换（☾ ↔ ✦）。点击设置页任意开关体验。</p>
+    </div>
+    <div class="spec-card">
+      <h3>🎬 播放器实用化 <span class="tag">功能零损失</span></h3>
+      <p>播放/暂停、±15s、进度 seek、倍速循环 <b class="badge bg-ok">1x</b><b class="badge bg-ok">1.25x</b><b class="badge bg-ok">1.5x</b><b class="badge bg-ok">2x</b>、静音、全屏、播放队列全部保留，控制层 3 秒自动隐藏（点画面唤出）。进入播放器页体验。</p>
+    </div>
+    <div class="spec-card">
+      <h3>⌨️ 原型操作</h3>
+      <ul>
+        <li>左侧手机底部 Tab 切换三屏</li>
+        <li>设置页：种子色 6 选 1 + 毛玻璃强度滑杆</li>
+        <li>开关点击体验动态切换</li>
+        <li>播放器：▶ 播放模拟、倍速循环、静音、☰ 队列、⛶ 全屏模拟</li>
+        <li>播放器画面点击 → 控制层显隐（3 秒自动隐藏）</li>
+      </ul>
+    </div>
+    <div class="foot">XInvox · Glass You Prototype v0.1 — 设计文档见 docs/superpowers/specs/2026-08-01-liquid-glass-monet-design.md</div>
+  </div>
+</div>
+
+<script>
+/* ============ 种子色预设（模拟 Monet 取色） ============ */
+const SEEDS=[
+  {p40:"#2F4C8F",p80:"#8FA7DE",p90:"#DEE6F8",p30:"#3B5BB5",t90:"#DCE9F2",t40:"#2F6E8F",wall1:"#DCE6F5",wall2:"#F6EDE4",wall3:"#E4EEF2"},
+  {p40:"#101417",p80:"#5A6670",p90:"#E3E8EC",p30:"#2A343C",t90:"#E2E8EE",t40:"#3B4A57",wall1:"#DFE4E8",wall2:"#EEF1F3",wall3:"#E6EAEE"},
+  {p40:"#E8583A",p80:"#F0A08C",p90:"#FDE3DB",p30:"#C0442A",t90:"#FDECDD",t40:"#B5632F",wall1:"#F8E3DA",wall2:"#F3EEE2",wall3:"#F7E8E4"},
+  {p40:"#3E7C4F",p80:"#8FC49E",p90:"#DFF0E4",p30:"#2E6340",t90:"#E6F0DF",t40:"#5C8A3E",wall1:"#E2EFE2",wall2:"#F0F3E6",wall3:"#E4EFE9"},
+  {p40:"#7C5CBF",p80:"#B6A2E2",p90:"#EAE2F9",p30:"#63439F",t90:"#F0E2F5",t40:"#8A4FB0",wall1:"#E8E2F5",wall2:"#F2EAEF",wall3:"#E9E4F4"},
+  {p40:"#C45B7E",p80:"#E4A4BC",p90:"#FBE3EC",p30:"#A54463",t90:"#FDE5E5",t40:"#B0564F",wall1:"#F7E2E9",wall2:"#F5EFE6",wall3:"#F6E4EA"}
+];
+let seedIdx=0;
+function setSeed(i){
+  seedIdx=i;const s=SEEDS[i];
+  const r=document.querySelector(':root');
+  for(const k in s)r.style.setProperty('--'+k,s[k]);
+  document.querySelectorAll('#seedRow .seed').forEach((el,idx)=>el.classList.toggle('sel',idx===i));
+}
+/* ============ 屏幕 / Tab ============ */
+function go(scr){
+  document.querySelectorAll('.scr').forEach(el=>el.classList.remove('active'));
+  document.getElementById('scr-'+scr).classList.add('active');
+  const map={inbox:1,settings:2,player:3};
+  const tb=document.getElementById('tabbar');
+  tb.dataset.tab=map[scr];
+  tb.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',+t.dataset.t===map[scr]));
+  if(scr==='player'){hideControls();setTimeout(startFadeTimer,1500);}
+  else{clearFadeTimer();}
+  document.getElementById('miniBar').style.display=(scr==='inbox')?'flex':'none';
+}
+/* ============ 毛玻璃强度 ============ */
+function setGlass(v){
+  document.getElementById('glassVal').textContent=v+'%';
+  document.querySelectorAll('.glass').forEach(el=>{
+    const b=20+v*0.4;el.style.backdropFilter=`blur(${b}px) saturate(${1.08+v*0.002})`;
+    el.style.webkitBackdropFilter=`blur(${b}px) saturate(${1.08+v*0.002})`;
+  });
+}
+/* ============ 播放器模拟 ============ */
+let playing=false,cur=83,speed=1,spdIdx=0,spdArr=[1,1.25,1.5,2],muted=false,fadeT=null,playTimer=null;
+const dur=225;
+function tick(){if(!playing)return;cur+=0.14;if(cur>dur)cur=0;renderSeek();}
+function renderSeek(){
+  const pct=cur/dur*100;
+  document.getElementById('seekDone').style.width=pct+'%';
+  document.getElementById('seekKnob').style.left=pct+'%';
+  document.getElementById('curTime').textContent=fmt(cur);
+  document.getElementById('mbProg').style.width=pct+'%';
+}
+function fmt(s){s=Math.floor(s);const m=Math.floor(s/60);return String(m).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
+function togglePlay(){
+  playing=!playing;
+  document.getElementById('playBtn').querySelector('.ic').textContent=playing?'⏸':'▶';
+  const mb=document.getElementById('miniBar').querySelector('.mb-play');mb.textContent=playing?'⏸':'▶';
+  if(playing&&!playTimer){playTimer=setInterval(tick,100);}
+  else if(!playing&&playTimer){clearInterval(playTimer);playTimer=null;}
+}
+function jump(d){cur=Math.max(0,Math.min(dur,cur+d));renderSeek();}
+function seekClick(e){
+  const box=e.currentTarget.getBoundingClientRect();
+  cur=(e.clientX-box.left)/box.width*dur;renderSeek();
+}
+function cycleSpeed(){
+  spdIdx=(spdIdx+1)%spdArr.length;speed=spdArr[spdIdx];
+  const b=document.getElementById('speedBtn');
+  b.textContent=speed+'x';b.classList.remove('pop');void b.offsetWidth;b.classList.add('pop');
+}
+function toggleMute(){
+  muted=!muted;
+  const b=document.getElementById('muteBtn');
+  b.textContent=muted?'🔇':'🔊';b.classList.toggle('on',muted);
+}
+function toggleQueue(){document.getElementById('qList').classList.toggle('show');}
+function toggleFullscreen(){
+  const scr=document.getElementById('screen');
+  if(!document.fullscreenElement){scr.requestFullscreen&&scr.requestFullscreen();}
+  else{document.exitFullscreen&&document.exitFullscreen();}
+}
+/* 控制层自动隐藏 */
+function hideControls(){document.getElementById('pTop').classList.add('hidden');document.getElementById('pBottom').classList.add('hidden');document.getElementById('qList').classList.remove('show');}
+function showControls(){document.getElementById('pTop').classList.remove('hidden');document.getElementById('pBottom').classList.remove('hidden');}
+function startFadeTimer(){clearFadeTimer();fadeT=setTimeout(hideControls,3000);}
+function clearFadeTimer(){if(fadeT){clearTimeout(fadeT);fadeT=null;}}
+document.addEventListener('click',function(e){
+  const scr=document.getElementById('scr-player');
+  if(scr.contains(e.target)&&!e.target.closest('.p-top,.p-bottom,.p-qlist')){
+    if(document.getElementById('pBottom').classList.contains('hidden')){showControls();}
+    else{hideControls();}
+    startFadeTimer();
+  }
+});
+/* 初始化 */
+renderSeek();
+</script>
+</body>
+</html>
