@@ -2,45 +2,65 @@ package com.ed.edqiu.backup.provider
 
 import android.util.Base64
 import android.util.Log
-import com.ed.twitterdownloader.data.model.MediaFileTypes
+import com.ed.edqiu.data.model.MediaFileTypes
 import com.ed.edqiu.backup.http.toUserMessage
 import com.ed.edqiu.backup.model.BackupException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
 
 /**
  * WebDAV 核心引擎。
  *
- * 从旧版 `WebDavSyncService` 提取（MKCOL / HEAD / PUT / OPTIONS + BasicAuth + 目录逐级创建 +
- * URL 构建 + 路径段编码），行为保持兼容，被以下模块复用：
+ * 使用 OkHttp 替代 HttpURLConnection——后者拒绝 MKCOL 等 WebDAV 扩展方法
+ * （Android 的 HttpURLConnection.setRequestMethod 仅允许标准 HTTP 方法）。
+ *
+ * 被以下模块复用：
  * - [WebDavBackupTarget]（自定义 WebDAV，高级）
  * - [Pan123Target]（123 网盘）
  * - [CloudDrive2Target]（CloudDrive2 本机 WebDAV）
  * - `WebDavSyncService`（旧版「立即同步」薄门面）
  *
- * 传输层保留 HttpURLConnection（架构文档 1.2），超时统一 connect 20s / read 30s。
+ * 传输层超时统一 connect 20s / read 30s / write 30s。
  * 所有方法返回 `Result<T>`，失败为面向用户的中文 [BackupException]，不含敏感字段（密码打码）。
  */
 class WebDavEngine {
 
     companion object {
         private const val TAG = "WebDavEngine"
-        private const val CONNECT_TIMEOUT_MS = 20_000
-        private const val READ_TIMEOUT_MS = 30_000
+        private const val CONNECT_TIMEOUT_MS = 20_000L
+        private const val READ_TIMEOUT_MS = 30_000L
+        private const val WRITE_TIMEOUT_MS = 30_000L
         private const val USER_AGENT = "Edqiu-WebDAV/1.0"
         private const val BUFFER_SIZE = 64 * 1024
 
         /** MKCOL 视为「目录已存在/创建成功」的状态码（宽容处理，与旧版一致）。 */
         private val MKCOL_OK_CODES = setOf(
-            HttpURLConnection.HTTP_CREATED,      // 201
-            HttpURLConnection.HTTP_OK,           // 200
-            HttpURLConnection.HTTP_NO_CONTENT,   // 204
-            HttpURLConnection.HTTP_BAD_METHOD,   // 405：目录已存在时部分服务器返回
+            201,  // HTTP_CREATED
+            200,  // HTTP_OK
+            204,  // HTTP_NO_CONTENT
+            405,  // HTTP_BAD_METHOD：目录已存在时部分服务器返回
         )
+
+        /** 安全写入文件名前缀（去掉 query / 截断超长），用于日志不暴露敏感。 */
+        private fun safeUrlForLog(url: String): String = url.take(160)
+    }
+
+    private val client: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .writeTimeout(WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
     }
 
     /**
@@ -79,6 +99,25 @@ class WebDavEngine {
         return "Basic " + Base64.encodeToString(token.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
     }
 
+    private fun buildRequest(
+        url: String,
+        method: String,
+        credential: WebDavCredential,
+        body: RequestBody? = null,
+    ): Request {
+        val effectiveBody = when {
+            body != null -> body
+            method == "GET" || method == "HEAD" || method == "OPTIONS" -> null
+            else -> ByteArray(0).toRequestBody(null)
+        }
+        return Request.Builder()
+            .url(url)
+            .method(method, effectiveBody)
+            .header("Authorization", basicAuth(credential.username, credential.password))
+            .header("User-Agent", USER_AGENT)
+            .build()
+    }
+
     /**
      * 逐级创建远程目录（MKCOL），目录已存在不报错。
      * 例如 remotePath=`Edqiu/Sub` 会依次创建 `/Edqiu` 与 `/Edqiu/Sub`。
@@ -102,26 +141,32 @@ class WebDavEngine {
     }
 
     private fun mkcolInternal(url: String, credential: WebDavCredential) {
-        val connection = openConnection(url, "MKCOL", credential)
-        try {
-            val code = connection.responseCode
-            if (code !in MKCOL_OK_CODES) {
-                Log.w(TAG, "MKCOL returned HTTP $code for $url")
+        val request = buildRequest(url, "MKCOL", credential)
+        client.newCall(request).execute().use { response ->
+            val code = response.code
+            if (code in MKCOL_OK_CODES) {
+                Log.i(TAG, "MKCOL OK $code for ${safeUrlForLog(url)}")
+            } else {
+                // 非宽容状态码：4xx/5xx 通常意味着认证失败 / quota 满 / 路径无效
+                Log.w(TAG, "MKCOL non-standard HTTP $code for ${safeUrlForLog(url)}")
             }
-        } finally {
-            connection.disconnect()
         }
     }
 
     /** HEAD 判断远程文件是否存在（2xx 视为存在；网络异常按失败返回）。 */
     suspend fun exists(url: String, credential: WebDavCredential): Result<Boolean> = withContext(Dispatchers.IO) {
         runCatching {
-            val connection = openConnection(url, "HEAD", credential)
-            try {
-                val code = connection.responseCode
-                code in 200..299
-            } finally {
-                connection.disconnect()
+            val request = buildRequest(url, "HEAD", credential)
+            client.newCall(request).execute().use { response ->
+                val code = response.code
+                if (code in 200..299) {
+                    true
+                } else {
+                    // 404 → 文件不存在；3xx 跟随重定向暂未处理但归 false；4xx/5xx 按不存在处理
+                    // 但 401/403 不算"不存在"——上层若需精确语义应单独处理
+                    Log.i(TAG, "HEAD non-2xx HTTP $code for ${safeUrlForLog(url)}（按不存在处理）")
+                    false
+                }
             }
         }.toUserFriendly()
     }
@@ -142,32 +187,20 @@ class WebDavEngine {
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             require(file.isFile) { "本地文件不存在：${file.name}" }
-            val connection = openConnection(url, "PUT", credential).apply {
-                doOutput = true
-                setRequestProperty("Content-Type", MediaFileTypes.mimeTypeForExtension(file.extension))
-                setRequestProperty("Content-Length", file.length().toString())
-            }
-            try {
-                connection.outputStream.use { output ->
-                    file.inputStream().use { input ->
-                        val buffer = ByteArray(BUFFER_SIZE)
-                        var written = 0L
-                        while (true) {
-                            val read = input.read(buffer)
-                            if (read < 0) break
-                            output.write(buffer, 0, read)
-                            written += read
-                            progress(written)
-                        }
-                    }
-                }
-                val code = connection.responseCode
+            val size = file.length()
+            val body = StreamingFileRequestBody(file, size, progress)
+            val request = buildRequest(url, "PUT", credential, body)
+            val startedAt = System.currentTimeMillis()
+            client.newCall(request).execute().use { response ->
+                val code = response.code
+                val elapsed = System.currentTimeMillis() - startedAt
                 if (code !in 200..299) {
+                    Log.w(TAG, "PUT failed HTTP $code (size=$size B, ${elapsed}ms) for ${safeUrlForLog(url)}")
                     throw BackupException("WebDAV 上传失败 HTTP $code：${file.name}")
                 }
+                val speedKbps = if (elapsed > 0) (size * 8 / elapsed) else 0L
+                Log.i(TAG, "PUT OK $code (size=$size B, ${elapsed}ms, ~${speedKbps} kbps) for ${safeUrlForLog(url)}")
                 Unit
-            } finally {
-                connection.disconnect()
             }
         }.toUserFriendly()
     }
@@ -181,28 +214,47 @@ class WebDavEngine {
      */
     suspend fun probe(url: String, credential: WebDavCredential): Result<Boolean> = withContext(Dispatchers.IO) {
         runCatching {
-            val connection = openConnection(url, "OPTIONS", credential)
-            try {
-                val code = connection.responseCode
+            val request = buildRequest(url, "OPTIONS", credential)
+            client.newCall(request).execute().use { response ->
+                val code = response.code
                 when {
-                    code in 200..399 -> true
-                    code == HttpURLConnection.HTTP_UNAUTHORIZED || code == HttpURLConnection.HTTP_FORBIDDEN ->
+                    code in 200..399 -> {
+                        Log.i(TAG, "PROBE OK $code for ${safeUrlForLog(url)}")
+                        true
+                    }
+                    code == 401 || code == 403 -> {
+                        Log.w(TAG, "PROBE 鉴权失败 HTTP $code for ${safeUrlForLog(url)}")
                         throw BackupException("WebDAV 认证失败（HTTP $code），请检查账号与密码")
-                    else -> throw BackupException("WebDAV 服务不可用（HTTP $code）")
+                    }
+                    else -> {
+                        Log.w(TAG, "PROBE 服务不可用 HTTP $code for ${safeUrlForLog(url)}")
+                        throw BackupException("WebDAV 服务不可用（HTTP $code）")
+                    }
                 }
-            } finally {
-                connection.disconnect()
             }
         }.toUserFriendly()
     }
 
-    private fun openConnection(url: String, method: String, credential: WebDavCredential): HttpURLConnection {
-        return (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = CONNECT_TIMEOUT_MS
-            readTimeout = READ_TIMEOUT_MS
-            setRequestProperty("Authorization", basicAuth(credential.username, credential.password))
-            setRequestProperty("User-Agent", USER_AGENT)
+    /** 流式文件上传 RequestBody，按写入字节数回调进度。 */
+    private class StreamingFileRequestBody(
+        private val file: File,
+        private val size: Long,
+        private val progress: (Long) -> Unit,
+    ) : RequestBody() {
+        override fun contentType() = MediaFileTypes.mimeTypeForExtension(file.extension).toMediaType()
+        override fun contentLength(): Long = size
+        override fun writeTo(sink: BufferedSink) {
+            file.inputStream().use { input ->
+                val buffer = ByteArray(BUFFER_SIZE)
+                var written = 0L
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    sink.write(buffer, 0, read)
+                    written += read
+                    progress(written)
+                }
+            }
         }
     }
 }

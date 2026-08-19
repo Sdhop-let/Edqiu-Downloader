@@ -1,4 +1,4 @@
-package com.ed.edqiu.ui.util
+﻿package com.ed.edqiu.ui.util
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -11,9 +11,14 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 
-private const val DOWNLOADER_MEDIA_AUTHORITY = "com.ed.twitterdownload.media"
-private const val LEGACY_DOWNLOADER_MEDIA_AUTHORITY = "com.ed.twitterdownloader.media"
-private val DOWNLOADER_MEDIA_AUTHORITIES = setOf(DOWNLOADER_MEDIA_AUTHORITY, LEGACY_DOWNLOADER_MEDIA_AUTHORITY)
+private const val DOWNLOADER_MEDIA_AUTHORITY = "com.ed.Edqiu.media"
+private const val LEGACY_DOWNLOADER_MEDIA_AUTHORITY = "com.ed.edqiu.media"
+private const val OLDEST_DOWNLOADER_MEDIA_AUTHORITY = "com.ed.twitterdownload.media"
+private val DOWNLOADER_MEDIA_AUTHORITIES = setOf(
+    DOWNLOADER_MEDIA_AUTHORITY,
+    LEGACY_DOWNLOADER_MEDIA_AUTHORITY,
+    OLDEST_DOWNLOADER_MEDIA_AUTHORITY,
+)
 
 /** 时间格式化：复制时间/下载时间展示。 */
 fun formatTime(ts: Long): String {

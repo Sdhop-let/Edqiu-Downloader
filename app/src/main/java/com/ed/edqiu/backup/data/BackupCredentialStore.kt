@@ -2,8 +2,10 @@ package com.ed.edqiu.backup.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import java.security.KeyStore
 
 /**
  * 凭证加密存储接口。
@@ -39,17 +41,49 @@ interface CredentialStore {
 @Suppress("DEPRECATION") // EncryptedSharedPreferences 处于维护模式，功能稳定，是当前最小成本方案
 class EncryptedCredentialStore(context: Context) : CredentialStore {
 
-    private val masterKey: MasterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
+    private val prefs: SharedPreferences = createEncryptedPrefs(context)
 
-    private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
-        context,
-        PREFS_FILE_NAME,
-        masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
+    /**
+     * 创建加密 SharedPreferences，密钥失配时降级重建，避免拖垮 App 启动。
+     *
+     * EncryptedSharedPreferences 的 keyset 由 Android Keystore 的 master key 加密落盘；
+     * 刷机 / 数据恢复 / 清除凭据等操作会让 master key 与密文失配，create() 抛出
+     * AEADBadTagException。此处捕获后清理损坏密文与 master key 并重建空存储——
+     * 仅丢失网盘凭证（需重新登录），不导致闪退。
+     */
+    private fun createEncryptedPrefs(context: Context): SharedPreferences {
+        return try {
+            doCreate(context)
+        } catch (e: Exception) {
+            Log.w(TAG, "加密凭证密钥失配，降级重建空存储", e)
+            context.deleteSharedPreferences(PREFS_FILE_NAME)
+            deleteMasterKey()
+            doCreate(context)
+        }
+    }
+
+    private fun doCreate(context: Context): SharedPreferences =
+        EncryptedSharedPreferences.create(
+            context,
+            PREFS_FILE_NAME,
+            masterKey(context),
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        )
+
+    private fun masterKey(context: Context): MasterKey =
+        MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+
+    private fun deleteMasterKey() {
+        try {
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+                .deleteEntry(MASTER_KEY_ALIAS)
+        } catch (e: Exception) {
+            Log.w(TAG, "删除 master key 失败（忽略）", e)
+        }
+    }
 
     override fun save(providerId: String, values: Map<String, String>) {
         if (values.isEmpty()) return
@@ -84,6 +118,8 @@ class EncryptedCredentialStore(context: Context) : CredentialStore {
 
     private companion object {
         const val PREFS_FILE_NAME = "backup_credentials"
+        const val TAG = "EncryptedCredentialStore"
+        const val MASTER_KEY_ALIAS = "_androidx_security_master_key_"
     }
 }
 

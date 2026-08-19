@@ -3,6 +3,7 @@ package com.ed.edqiu.di
 import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.ed.edqiu.backup.data.BackupLedgerRepository
 import com.ed.edqiu.backup.data.BackupTaskStore
 import com.ed.edqiu.backup.data.CredentialStore
 import com.ed.edqiu.backup.engine.BackupEngine
@@ -30,6 +31,7 @@ class EdqiuViewModelFactory(
     private val backupTaskStore: BackupTaskStore,
     private val backupEngine: BackupEngine,
     private val backupCredentialStore: CredentialStore,
+    private val backupLedgerRepository: BackupLedgerRepository,
     private val application: Application
 ) : ViewModelProvider.Factory {
 
@@ -63,6 +65,7 @@ class EdqiuViewModelFactory(
                     engine = backupEngine,
                     taskStore = backupTaskStore,
                     credentialStore = backupCredentialStore,
+                    ledgerRepository = backupLedgerRepository,
                     settingsRepository = settingsRepository
                 ) as T
             else -> throw IllegalArgumentException("未知的 ViewModel: $modelClass")

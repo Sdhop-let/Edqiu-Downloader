@@ -14,7 +14,7 @@
         <intent
             android:action="android.intent.action.SEND"
             android:targetClass="com.ed.edqiu.capture.CaptureIntentActivity"
-            android:targetPackage="com.ed.twitterdownload" />
+            android:targetPackage="com.ed.Edqiu" />
         <categories android:name="com.ed.edqiu.category.SHARE_LINK" />
     </shortcut>
 </shortcuts>

@@ -155,6 +155,14 @@ fun CloudBackupScreen(
             onTokenReceived = vm::onAliTokenReceived,
         )
 
+        ProviderId.PAN123_OPEN -> uiState.pan123AuthorizeUrl?.let { url ->
+            Pan123AuthDialog(
+                authorizeUrl = url,
+                onDismiss = vm::cancelAuth,
+                onCodeReceived = vm::onPan123CodeReceived,
+            )
+        }
+
         ProviderId.PAN123 -> WebDavCredentialDialog(
             title = "登录 123 网盘",
             subtitle = "账号为手机号/邮箱，密码为 123 网盘网页端生成的 WebDAV 密码。服务器地址可留空（按账号 ID 自动拼接）。",

@@ -1,9 +1,9 @@
-package com.ed.edqiu
+﻿package com.ed.edqiu
 
 import com.ed.edqiu.background.BackgroundSyncScheduler
 import com.ed.edqiu.background.HistoryBackupScheduler
 import com.ed.edqiu.di.AppContainer
-import com.ed.twitterdownloader.TwitterDownloaderApp
+import com.ed.edqiu.TwitterDownloaderApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

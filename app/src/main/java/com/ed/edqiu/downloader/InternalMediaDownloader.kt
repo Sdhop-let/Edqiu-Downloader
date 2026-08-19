@@ -1,12 +1,12 @@
-package com.ed.edqiu.downloader
+﻿package com.ed.edqiu.downloader
 
 import android.content.Context
 import android.os.Environment
 import android.util.Log
-import com.ed.twitterdownloader.data.model.DownloadStatus
-import com.ed.twitterdownloader.data.model.DownloadTask
-import com.ed.twitterdownloader.data.model.MediaType
-import com.ed.twitterdownloader.data.repository.DownloadTaskBus
+import com.ed.edqiu.data.model.DownloadStatus
+import com.ed.edqiu.data.model.DownloadTask
+import com.ed.edqiu.data.model.MediaType
+import com.ed.edqiu.data.repository.DownloadTaskBus
 import com.ed.edqiu.domain.TweetIdExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

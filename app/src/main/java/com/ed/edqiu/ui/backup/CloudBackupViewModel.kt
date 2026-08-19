@@ -1,14 +1,15 @@
-package com.ed.edqiu.ui.backup
+﻿package com.ed.edqiu.ui.backup
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.ed.twitterdownloader.data.preferences.CloudSyncPreferences
+import com.ed.edqiu.data.preferences.CloudSyncPreferences
 import com.ed.edqiu.backup.BackupFiles
 import com.ed.edqiu.backup.BackupScope
 import com.ed.edqiu.backup.BackupScheduler
 import com.ed.edqiu.backup.BackupSettings
 import com.ed.edqiu.backup.auth.BaiduAuthProgress
+import com.ed.edqiu.backup.data.BackupLedgerRepository
 import com.ed.edqiu.backup.data.BackupSecrets
 import com.ed.edqiu.backup.data.BackupTaskStore
 import com.ed.edqiu.backup.data.CredentialStore
@@ -21,6 +22,7 @@ import com.ed.edqiu.backup.model.BackupTaskStatus
 import com.ed.edqiu.backup.model.ProviderId
 import com.ed.edqiu.backup.provider.AliPanTarget
 import com.ed.edqiu.backup.provider.BaiduPanTarget
+import com.ed.edqiu.backup.provider.Pan123OpenTarget
 import com.ed.edqiu.backup.provider.Pan123Target
 import com.ed.edqiu.backup.provider.ProviderRegistry
 import com.ed.edqiu.data.preferences.SettingsRepository
@@ -36,6 +38,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 /** 网盘在列表中的展示状态。 */
 data class ProviderUiState(
@@ -62,6 +65,8 @@ data class CloudBackupUiState(
     /** 正在授权的网盘 id（决定渲染哪个授权 Dialog）。 */
     val pendingAuthProviderId: String? = null,
     val baiduAuth: BaiduAuthUiState = BaiduAuthUiState(),
+    /** 123 网盘授权页 URL（授权 Dialog 用，发起授权时生成）。 */
+    val pan123AuthorizeUrl: String? = null,
     /** 一次性提示消息（Snackbar）。 */
     val message: String? = null,
 )
@@ -83,15 +88,17 @@ class CloudBackupViewModel(
     private val engine: BackupEngine,
     private val taskStore: BackupTaskStore,
     private val credentialStore: CredentialStore,
+    private val ledgerRepository: BackupLedgerRepository,
     private val settingsRepository: SettingsRepository,
 ) : AndroidViewModel(application) {
 
     private val context = application.applicationContext
 
-    /** 授权侧状态（网盘列表 / 待授权网盘 / 提示消息）。 */
+    /** 授权侧状态（网盘列表 / 待授权网盘 / 123 授权页 / 提示消息）。 */
     private data class AuthUiState(
         val providers: List<ProviderUiState> = emptyList(),
         val pendingAuthProviderId: String? = null,
+        val pan123AuthorizeUrl: String? = null,
         val message: String? = null,
     )
 
@@ -129,6 +136,7 @@ class CloudBackupViewModel(
             autoBackupEnabled = settings.autoBackupEnabled,
             pendingAuthProviderId = auth.pendingAuthProviderId,
             baiduAuth = baidu,
+            pan123AuthorizeUrl = auth.pan123AuthorizeUrl,
             message = auth.message,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CloudBackupUiState())
@@ -157,6 +165,7 @@ class CloudBackupViewModel(
             ProviderId.BAIDU -> startBaiduAuth()
             ProviderId.ALIYUN -> _auth.update { it.copy(pendingAuthProviderId = ProviderId.ALIYUN) }
             ProviderId.PAN123 -> _auth.update { it.copy(pendingAuthProviderId = ProviderId.PAN123) }
+            ProviderId.PAN123_OPEN -> startPan123Auth()
             ProviderId.WEBDAV -> _auth.update { it.copy(pendingAuthProviderId = ProviderId.WEBDAV) }
             ProviderId.CLOUDDRIVE2 -> viewModelScope.launch {
                 registry.detectCloudDrive2()
@@ -170,7 +179,7 @@ class CloudBackupViewModel(
     fun cancelAuth() {
         pollJob?.cancel()
         pollJob = null
-        _auth.update { it.copy(pendingAuthProviderId = null) }
+        _auth.update { it.copy(pendingAuthProviderId = null, pan123AuthorizeUrl = null) }
         _baiduAuth.value = BaiduAuthUiState()
     }
 
@@ -198,6 +207,29 @@ class CloudBackupViewModel(
                 onFailure = { error ->
                     _auth.update { it.copy(pendingAuthProviderId = null) }
                     postMessage("阿里云盘授权失败：${error.message ?: "未知错误"}")
+                },
+            )
+        }
+    }
+
+    /** 123 网盘 OAuth 授权码回调（WebView 拦截 code 后触发）。 */
+    fun onPan123CodeReceived(code: String) {
+        viewModelScope.launch {
+            val target = registry.get(ProviderId.PAN123_OPEN) as? Pan123OpenTarget
+            if (target == null) {
+                _auth.update { it.copy(pendingAuthProviderId = null, pan123AuthorizeUrl = null) }
+                postMessage("123 网盘适配器未注册")
+                return@launch
+            }
+            target.setAuthCode(code).fold(
+                onSuccess = {
+                    _auth.update { it.copy(pendingAuthProviderId = null, pan123AuthorizeUrl = null) }
+                    refreshProviders()
+                    postMessage("123 网盘授权成功")
+                },
+                onFailure = { error ->
+                    _auth.update { it.copy(pendingAuthProviderId = null, pan123AuthorizeUrl = null) }
+                    postMessage("123 网盘授权失败：${error.message ?: "未知错误"}")
                 },
             )
         }
@@ -277,7 +309,7 @@ class CloudBackupViewModel(
         viewModelScope.launch {
             when (providerId) {
                 ProviderId.BAIDU -> (registry.get(providerId) as? BaiduPanTarget)?.clearAuth()
-                ProviderId.ALIYUN, ProviderId.PAN123 -> credentialStore.clear(providerId)
+                ProviderId.ALIYUN, ProviderId.PAN123, ProviderId.PAN123_OPEN -> credentialStore.clear(providerId)
                 ProviderId.WEBDAV -> CloudSyncPreferences(context).apply {
                     serverUrl = ""
                     username = ""
@@ -285,6 +317,8 @@ class CloudBackupViewModel(
                     remotePath = "Edqiu"
                 }
             }
+            // 换账号后旧账本（DONE 记录 + 云端 file id）失效，一并清除避免误跳过
+            runCatching { ledgerRepository.clear(providerId) }
             refreshProviders()
             postMessage("已清除登录状态，请重新授权")
         }
@@ -340,7 +374,7 @@ class CloudBackupViewModel(
                 .map { it.taskId }
                 .toSet()
             val monitorUri = settingsRepository.monitorDirUriFlow.first()
-            val files = BackupFiles.collect(context, monitorUri, scope, providerId, doneTaskIds)
+            val files = BackupFiles.collect(context, monitorUri, scope, providerId, doneTaskIds, ledgerRepository)
             if (files.isEmpty()) {
                 postMessage("没有需要备份的新文件")
                 return@launch
@@ -411,8 +445,34 @@ class CloudBackupViewModel(
             ProviderId.BAIDU -> BackupSecrets.mask(creds["access_token"])
             ProviderId.ALIYUN -> BackupSecrets.mask(creds["refresh_token"])
             ProviderId.PAN123 -> BackupSecrets.mask(creds["password"])
+            ProviderId.PAN123_OPEN -> BackupSecrets.mask(creds["refresh_token"])
             ProviderId.WEBDAV -> BackupSecrets.mask(CloudSyncPreferences(context).password)
             else -> ""
+        }
+    }
+
+    /** 发起 123 网盘 OAuth 授权：生成授权页 URL 后弹出 WebView 登录。 */
+    private fun startPan123Auth() {
+        val target = registry.get(ProviderId.PAN123_OPEN) as? Pan123OpenTarget
+        if (target == null) {
+            postMessage("123 网盘适配器未注册")
+            return
+        }
+        if (!target.isClientConfigured) {
+            postMessage("未配置 123 网盘应用资质，请在构建配置中填写 PAN123_CLIENT_ID")
+            return
+        }
+        val state = UUID.randomUUID().toString()
+        val url = runCatching { target.buildAuthorizeUrl(state) }.getOrNull()
+        if (url.isNullOrBlank()) {
+            postMessage("生成 123 网盘授权链接失败，请检查应用资质配置")
+            return
+        }
+        _auth.update {
+            it.copy(
+                pendingAuthProviderId = ProviderId.PAN123_OPEN,
+                pan123AuthorizeUrl = url,
+            )
         }
     }
 

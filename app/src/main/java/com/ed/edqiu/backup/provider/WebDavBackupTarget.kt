@@ -1,7 +1,7 @@
-package com.ed.edqiu.backup.provider
+﻿package com.ed.edqiu.backup.provider
 
 import android.content.Context
-import com.ed.twitterdownloader.data.preferences.CloudSyncPreferences
+import com.ed.edqiu.data.preferences.CloudSyncPreferences
 import com.ed.edqiu.backup.model.AuthMode
 import com.ed.edqiu.backup.model.BackupCapabilities
 import com.ed.edqiu.backup.model.BackupTarget

@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -20,6 +21,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.ed.edqiu.EdqiuApplication
+import com.ed.edqiu.backup.data.BackupLedgerRepository
 import com.ed.edqiu.backup.model.BackupTask
 import com.ed.edqiu.backup.model.BackupTaskStatus
 import com.ed.edqiu.data.repository.DownloadMonitor
@@ -138,10 +140,11 @@ object BackupFiles {
     }
 
     /**
-     * 收集待备份文件（跳过已完成任务）。
+     * 收集待备份文件（跳过已完成任务 + 账本中未变化的文件）。
      *
      * @param providerId   目标 provider id（任务幂等 id 用）
      * @param doneTaskIds  已完成任务 id 集合（跳过对应文件）
+     * @param ledger       备份账本（可选）：size + mtime 未变的文件直接跳过，避免重复上传
      */
     suspend fun collect(
         context: Context,
@@ -149,10 +152,16 @@ object BackupFiles {
         scope: BackupScope,
         providerId: String,
         doneTaskIds: Set<String>,
+        ledger: BackupLedgerRepository? = null,
     ): List<File> = withContext(Dispatchers.IO) {
         val raw = resolveFiles(context, monitorUri)
         filterByScope(raw, scope)
-            .filter { BackupTask.computeId(providerId, it.name) !in doneTaskIds }
+            .filter { file ->
+                val taskId = BackupTask.computeId(providerId, file.name)
+                if (taskId in doneTaskIds) return@filter false
+                // 账本增量：文件相对账本未变化（size + mtime 一致）→ 跳过
+                ledger?.isUnchanged(providerId, file.name, file) != true
+            }
     }
 
     private fun resolveFiles(context: Context, monitorUri: String?): List<File> {
@@ -245,7 +254,10 @@ class BackupWorker(
             .filter { it.targetId == targetId && it.status == BackupTaskStatus.DONE }
             .map { it.taskId }
             .toSet()
-        val files = BackupFiles.collect(applicationContext, monitorUri, scope, targetId, doneTaskIds)
+        val files = BackupFiles.collect(
+            applicationContext, monitorUri, scope, targetId, doneTaskIds,
+            container.backupLedgerRepository,
+        )
         if (files.isNotEmpty()) {
             container.backupEngine.enqueue(targetId, files)
         }
@@ -273,7 +285,11 @@ class BackupWorker(
     }
 
     private fun createForegroundInfo(title: String, progress: Float?): ForegroundInfo =
-        ForegroundInfo(NOTIFICATION_ID, buildNotification(title, progress))
+        ForegroundInfo(
+            NOTIFICATION_ID,
+            buildNotification(title, progress),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+        )
 
     private fun buildNotification(title: String, progress: Float?): Notification {
         val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)

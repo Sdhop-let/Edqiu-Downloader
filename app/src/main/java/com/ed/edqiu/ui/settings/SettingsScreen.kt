@@ -1,4 +1,4 @@
-package com.ed.edqiu.ui.settings
+﻿package com.ed.edqiu.ui.settings
 
 import android.content.Intent
 import android.net.Uri
@@ -42,10 +42,19 @@ import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Verified
+import androidx.compose.material.icons.outlined.AspectRatio
+import androidx.compose.material.icons.outlined.BlurOn
+import androidx.compose.material.icons.outlined.Brush
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Science
+import androidx.compose.material.icons.outlined.Style
+import androidx.compose.material.icons.outlined.SwipeRight
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -53,6 +62,8 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -66,20 +77,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ed.edqiu.data.backup.HistoryBackupRepository
 import com.ed.edqiu.data.backup.RestoreMode
 import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.system.DeviceCapabilityReader
 import com.ed.edqiu.ui.components.DynamicSwitch
+import com.ed.edqiu.ui.components.GlassSurface
+import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.navigation.LocalSnackbarController
+import com.ed.edqiu.ui.navigation.SnackbarController
 import com.ed.edqiu.ui.theme.Monet
+import com.ed.edqiu.ui.theme.MonetSpec
+import com.ed.edqiu.ui.theme.ThemeMode
+import com.ed.edqiu.ui.theme.TonalStyle
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
@@ -228,13 +248,13 @@ fun SettingsScreen(
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text(
-                        text = "收件箱设置",
+                        text = if (section == XSection.APPEARANCE) "主题设置" else "收件箱设置",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Black,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "外观、存储备份、捕获与同步",
+                        text = if (section == XSection.APPEARANCE) "外观、莫奈取色与界面缩放" else "外观、存储备份、捕获与同步",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -243,32 +263,12 @@ fun SettingsScreen(
         }
 
         if (section == null || section == XSection.APPEARANCE) {
-        // 外观：莫奈种子色选择器
-        SectionCard(
-            title = "外观",
-            subtitle = "莫奈种子色决定全 App 的主色调（状态色不随壁纸变化）",
-            icon = Icons.Default.AutoAwesome
-        ) {
-            SwitchRow(
-                title = "动态取色（跟随壁纸）",
-                description = "关闭后使用下方预设种子色；开启时跟随 Android 12+ 系统壁纸自动取色",
-                checked = dynamicColor,
-                onCheckedChange = { scope.launch { settings.setDynamicColor(it) } }
+            // 主题设置页（2026-08-15 按设计稿重构）
+            ThemeSettingsSection(
+                settings = settings,
+                scope = scope,
+                snackbar = snackbar
             )
-            // 动态取色开启时灰显种子色选择（提示用户当前在跟随壁纸）
-            SeedColorSelector(
-                selectedIndex = seedIndex,
-                enabled = !dynamicColor,
-                onSelect = { index ->
-                    scope.launch {
-                        // 选种子色 = 明确手动指定 → 自动关闭动态取色
-                        settings.setDynamicColor(false)
-                        settings.setSeedColorIndex(index)
-                    }
-                    snackbar.show("已切换到「${Monet.seedPresets.getOrNull(index)?.name ?: "墨蓝"}」种子色")
-                }
-            )
-        }
         }
 
         if (section == null || section == XSection.BACKUP) {
@@ -285,7 +285,7 @@ fun SettingsScreen(
                 onClick = { monitorPicker.launch(null) }
             )
             Text(
-                text = "默认扫描 com.ed.twitterdownload，并兼容 com.ed.Edqiu、com.ed.edqiu、com.ed.twitterdownloader 旧目录。Android/data 可通过默认路径或手动路径保存。",
+                text = "默认扫描 com.ed.Edqiu，并兼容 com.ed.edqiu、com.ed.twitterdownload 旧目录。Android/data 可通过默认路径或手动路径保存。",
                 style = MaterialTheme.typography.bodySmall,
                 color = Muted,
                 modifier = Modifier.padding(top = 8.dp)
@@ -481,12 +481,10 @@ private fun SectionCard(
     icon: ImageVector,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Card(
+    GlassSurface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(26.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+        tier = GlassTier.L1,
+        shape = RoundedCornerShape(22.dp)
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -595,4 +593,579 @@ private fun android.content.Context.persistTreePermission(uri: Uri): Boolean {
 }
 
 private const val DEFAULT_DOWNLOAD_PATH =
-    "/storage/emulated/0/Android/data/com.ed.twitterdownload/files/Download"
+    "/storage/emulated/0/Android/data/com.ed.Edqiu/files/Download"
+
+private val ScienceIcon = Icons.Outlined.Science
+private val StyleIcon = Icons.Outlined.Style
+
+/**
+ * 主题设置页（2026-08-15 按设计稿重构）
+ *
+ * 布局：顶部预览卡 + 主题模式 segmented + 三卡组（颜色 / 效果 / 手势）。
+ * 所有开关 / 下拉接 SettingsRepository 持久化。
+ */
+@Composable
+private fun ThemeSettingsSection(
+    settings: SettingsRepository,
+    scope: kotlinx.coroutines.CoroutineScope,
+    snackbar: SnackbarController
+) {
+    val themeMode by settings.themeModeFlow.collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
+    val dynamicColor by settings.dynamicColorFlow.collectAsStateWithLifecycle(initialValue = false)
+    val accentColor by settings.accentColorFlow.collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_ACCENT_COLOR)
+    val tonalStyle by settings.tonalStyleFlow.collectAsStateWithLifecycle(initialValue = TonalStyle.TONAL_SPOT)
+    val monetSpec by settings.monetSpecFlow.collectAsStateWithLifecycle(initialValue = MonetSpec.SPEC_2021)
+    val blurEnabled by settings.blurEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
+    val blurIntensity by settings.blurIntensityFlow.collectAsStateWithLifecycle(initialValue = 0.6f)
+    val floatingTabBar by settings.floatingTabBarFlow.collectAsStateWithLifecycle(initialValue = true)
+    val liquidGlass by settings.liquidGlassEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
+    val predictiveBack by settings.predictiveBackFlow.collectAsStateWithLifecycle(initialValue = true)
+    val displayScale by settings.displayScaleFlow.collectAsStateWithLifecycle(initialValue = 0.8f)
+    val accent = Color(accentColor)
+
+    var accentPickerOpen by remember { mutableStateOf(false) }
+    var tonalExpanded by remember { mutableStateOf(false) }
+    var specExpanded by remember { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        // 顶部预览卡
+        ThemePreviewCard(keyColor = accent, liquidGlassEnabled = liquidGlass)
+
+        // 主题模式 segmented
+        ThemeSegmented(
+            selected = themeMode,
+            onSelect = { mode -> scope.launch { settings.setThemeMode(mode) } }
+        )
+
+        // ===== 颜色卡组 =====
+        GroupCard {
+            SettingItemRow(
+                icon = Icons.Outlined.Palette,
+                title = "启用 Monet 颜色",
+                subtitle = "开启后中性面（背景/卡片）跟随 Android 12+ 系统壁纸",
+                trailing = {
+                    DynamicSwitch(
+                        checked = dynamicColor,
+                        onCheckedChange = { scope.launch { settings.setDynamicColor(it) } }
+                    )
+                }
+            )
+            ThinDivider()
+            SettingItemRow(
+                icon = Icons.Outlined.Brush,
+                title = "强调色",
+                subtitle = "全局强调色，实时作用于按钮、链接与选中态",
+                onClick = { accentPickerOpen = true },
+                trailing = {
+                    AccentSwatch(accent)
+                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted, modifier = Modifier.size(18.dp))
+                }
+            )
+            ThinDivider()
+            Box {
+                SettingItemRow(
+                    icon = StyleIcon,
+                    title = "色彩风格",
+                    subtitle = "Material 3 多风格色板（TonalSpot/Vibrant/Expressive…）",
+                    onClick = { tonalExpanded = true },
+                    trailing = { ValueDropdown(tonalStyle.label) }
+                )
+                DropdownMenu(expanded = tonalExpanded, onDismissRequest = { tonalExpanded = false }) {
+                    TonalStyle.entries.forEach { style ->
+                        DropdownMenuItem(
+                            text = { Text(style.label) },
+                            onClick = {
+                                scope.launch { settings.setTonalStyle(style) }
+                                tonalExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+            ThinDivider()
+            Box {
+                SettingItemRow(
+                    icon = ScienceIcon,
+                    title = "色彩标准",
+                    subtitle = "色度计算标准，切换后配色即时更新",
+                    onClick = { specExpanded = true },
+                    trailing = { ValueDropdown(monetSpec.label) }
+                )
+                DropdownMenu(expanded = specExpanded, onDismissRequest = { specExpanded = false }) {
+                    MonetSpec.entries.forEach { spec ->
+                        DropdownMenuItem(
+                            text = { Text(spec.label) },
+                            onClick = {
+                                scope.launch { settings.setMonetSpec(spec) }
+                                specExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        // ===== 效果卡组 =====
+        GroupCard {
+            SettingItemRow(
+                icon = Icons.Outlined.BlurOn,
+                title = "模糊",
+                subtitle = "背景莫奈色域与玻璃磨砂层的模糊",
+                trailing = {
+                    DynamicSwitch(
+                        checked = blurEnabled,
+                        onCheckedChange = { scope.launch { settings.setBlurEnabled(it) } }
+                    )
+                }
+            )
+            if (blurEnabled) {
+                Text(
+                    text = "模糊强度 ${(blurIntensity * 100).toInt()}%",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 16.dp)
+                )
+                Slider(
+                    value = blurIntensity,
+                    onValueChange = { scope.launch { settings.setBlurIntensity(it) } },
+                    valueRange = 0f..1f,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                )
+            }
+            ThinDivider()
+            SettingItemRow(
+                icon = Icons.Outlined.Visibility,
+                title = "悬浮底栏",
+                subtitle = "使用 Apple 风格的悬浮底栏",
+                trailing = {
+                    DynamicSwitch(
+                        checked = floatingTabBar,
+                        onCheckedChange = { scope.launch { settings.setFloatingTabBar(it) } }
+                    )
+                }
+            )
+            ThinDivider()
+            SettingItemRow(
+                icon = Icons.Outlined.Layers,
+                title = "液态玻璃",
+                subtitle = "全局玻璃质感（半透明/磨砂/折射），各层级统一生效",
+                trailing = {
+                    DynamicSwitch(
+                        checked = liquidGlass,
+                        onCheckedChange = { scope.launch { settings.setLiquidGlassEnabled(it) } }
+                    )
+                }
+            )
+        }
+
+        // ===== 手势卡组 =====
+        GroupCard {
+            SettingItemRow(
+                icon = Icons.Outlined.SwipeRight,
+                title = "预测性返回手势",
+                subtitle = "从屏幕边缘右滑返回，动画实时跟随手指（Android 14+）",
+                trailing = {
+                    DynamicSwitch(
+                        checked = predictiveBack,
+                        onCheckedChange = { scope.launch { settings.setPredictiveBack(it) } }
+                    )
+                }
+            )
+            SettingItemRow(
+                icon = Icons.Outlined.AspectRatio,
+                title = "界面缩放",
+                subtitle = "调整全局显示比例",
+                trailing = {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            "${(displayScale * 100).toInt()}%",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Icon(
+                            Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            tint = Muted,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            )
+            Slider(
+                value = displayScale,
+                onValueChange = { scope.launch { settings.setDisplayScale(it) } },
+                valueRange = 0.7f..1.0f,
+                steps = 5,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+            )
+        }
+    }
+
+    if (accentPickerOpen) {
+        AccentColorPickerDialog(
+            initial = accent,
+            onDismiss = { accentPickerOpen = false },
+            onConfirm = { argb ->
+                scope.launch { settings.setAccentColor(argb) }
+                accentPickerOpen = false
+            }
+        )
+    }
+}
+
+/** 强调色小圆点（右侧值预览） */
+@Composable
+private fun AccentSwatch(color: Color) {
+    Box(
+        modifier = Modifier
+            .size(22.dp)
+            .clip(CircleShape)
+            .background(color)
+            .border(1.5.dp, Color.White, CircleShape)
+    )
+}
+
+/** 强调色扩展预设（预设色 + 常用色） */
+private val AccentPresets: List<Pair<String, Int>> = listOf(
+    "墨蓝" to 0xFF2F4C8F.toInt(),
+    "珊瑚橙" to 0xFFE8583A.toInt(),
+    "抹茶绿" to 0xFF3E7C4F.toInt(),
+    "薰衣草紫" to 0xFF7C5CBF.toInt(),
+    "玫瑰粉" to 0xFFC45B7E.toInt(),
+    "曜石黑" to 0xFF101417.toInt(),
+    "天空蓝" to 0xFF2563EB.toInt(),
+    "青瓷" to 0xFF0F766E.toInt(),
+    "琥珀" to 0xFFB45309.toInt(),
+    "莓红" to 0xFFB91C1C.toInt(),
+    "靛蓝" to 0xFF4F46E5.toInt(),
+    "灰蓝" to 0xFF64748B.toInt()
+)
+
+/**
+ * 强调色完整选择器：预设色板 + HSV 三滑块（色相/饱和度/明度）+ 实时预览。
+ * 满足「完整的颜色选择」——可选取任意色，选中即写入强调色并全局生效。
+ */
+@Composable
+private fun AccentColorPickerDialog(
+    initial: Color,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit
+) {
+    val initHsv = remember(initial) { colorToHsv(initial) }
+    var hue by remember { mutableStateOf(initHsv[0]) }
+    var sat by remember { mutableStateOf(initHsv[1]) }
+    var value by remember { mutableStateOf(initHsv[2]) }
+    val current = Color.hsv(hue, sat, value)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择强调色", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                // 预设色板
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AccentPresets.chunked(6).forEach { row ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            row.forEach { (name, argb) ->
+                                val c = Color(argb)
+                                val selected = argb == current.toArgb()
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            val hsv = colorToHsv(c)
+                                            hue = hsv[0]; sat = hsv[1]; value = hsv[2]
+                                        }
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .clip(CircleShape)
+                                            .background(c)
+                                            .border(
+                                                width = if (selected) 2.5.dp else 1.dp,
+                                                color = if (selected) MaterialTheme.colorScheme.onSurface else Color.White,
+                                                shape = CircleShape
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (selected) {
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                                        }
+                                    }
+                                    Text(name, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 实时预览 + 色相滑杆
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(current)
+                            .border(1.dp, Color.White, RoundedCornerShape(14.dp))
+                    )
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("色相", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(22.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(Brush.horizontalGradient((0..360 step 36).map { Color.hsv(it.toFloat(), 1f, 1f) }))
+                        ) {
+                            Slider(
+                                value = hue,
+                                onValueChange = { hue = it },
+                                valueRange = 0f..360f,
+                                modifier = Modifier.matchParentSize(),
+                                colors = SliderDefaults.colors(
+                                    activeTrackColor = Color.Transparent,
+                                    inactiveTrackColor = Color.Transparent,
+                                    thumbColor = Color.White,
+                                    activeTickColor = Color.Transparent,
+                                    inactiveTickColor = Color.Transparent
+                                )
+                            )
+                        }
+                    }
+                }
+
+                // 饱和度滑杆
+                HueSatValSlider(
+                    label = "饱和度",
+                    value = sat,
+                    onValueChange = { sat = it },
+                    gradient = Brush.horizontalGradient(
+                        listOf(
+                            Color.hsv(hue, 0f, value),
+                            Color.hsv(hue, 1f, value)
+                        )
+                    )
+                )
+                // 明度滑杆
+                HueSatValSlider(
+                    label = "明度",
+                    value = value,
+                    onValueChange = { value = it },
+                    gradient = Brush.horizontalGradient(
+                        listOf(
+                            Color.hsv(hue, sat, 0f),
+                            Color.hsv(hue, sat, 1f)
+                        )
+                    )
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(current.toArgb()) }) { Text("确定") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+/** 通用 HSV 滑杆（带渐变轨道） */
+@Composable
+private fun HueSatValSlider(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    gradient: Brush
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(22.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(gradient)
+        ) {
+            Slider(
+                value = value,
+                onValueChange = onValueChange,
+                valueRange = 0f..1f,
+                modifier = Modifier.matchParentSize(),
+                colors = SliderDefaults.colors(
+                    activeTrackColor = Color.Transparent,
+                    inactiveTrackColor = Color.Transparent,
+                    thumbColor = Color.White,
+                    activeTickColor = Color.Transparent,
+                    inactiveTickColor = Color.Transparent
+                )
+            )
+        }
+    }
+}
+
+/** RGB → HSV（h ∈ [0,360), s/v ∈ [0,1]） */
+private fun colorToHsv(c: Color): FloatArray {
+    val r = c.red; val g = c.green; val b = c.blue
+    val max = maxOf(r, g, b)
+    val min = minOf(r, g, b)
+    val v = max
+    val d = max - min
+    val s = if (max == 0f) 0f else d / max
+    var h = 0f
+    if (d > 0f) {
+        h = when (max) {
+            r -> ((g - b) / d + if (g < b) 6f else 0f)
+            g -> (b - r) / d + 2f
+            else -> (r - g) / d + 4f
+        } * 60f
+    }
+    return floatArrayOf(h, s, v)
+}
+
+/** 顶部预览卡：mini header + tab 栏 + 4 色块（按设计稿） */
+@Composable
+private fun ThemePreviewCard(keyColor: Color, liquidGlassEnabled: Boolean) {
+    GlassSurface(
+        modifier = Modifier.fillMaxWidth(),
+        tier = GlassTier.L1,
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // header 预览（灰色矩形）
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f))
+            )
+            // tab 栏预览（玻璃时高一点，圆角更大）
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(if (liquidGlassEnabled) 40.dp else 32.dp)
+                    .clip(RoundedCornerShape(if (liquidGlassEnabled) 14.dp else 10.dp))
+                    .background(
+                        if (liquidGlassEnabled) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.85f)
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.30f))
+                )
+            }
+            // 4 色块（强调色 + 3 深色）
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Box(modifier = Modifier.size(20.dp).clip(RoundedCornerShape(6.dp)).background(keyColor))
+                Box(modifier = Modifier.size(20.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)))
+                Box(modifier = Modifier.size(20.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.40f)))
+                Box(modifier = Modifier.size(20.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.20f)))
+            }
+        }
+    }
+}
+
+/** 主题模式 segmented：跟随系统 / 浅色 / 深色 */
+@Composable
+private fun ThemeSegmented(selected: ThemeMode, onSelect: (ThemeMode) -> Unit) {
+    GlassSurface(
+        modifier = Modifier.fillMaxWidth(),
+        tier = GlassTier.L1,
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(modifier = Modifier.padding(4.dp)) {
+            ThemeMode.entries.forEach { mode ->
+                val isSelected = mode == selected
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (isSelected) MaterialTheme.colorScheme.surface.copy(alpha = 0.92f) else Color.Transparent)
+                        .clickable { onSelect(mode) }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        mode.label,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                        fontSize = 14.sp,
+                        color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 玻璃卡组容器 */
+@Composable
+private fun GroupCard(content: @Composable ColumnScope.() -> Unit) {
+    GlassSurface(
+        modifier = Modifier.fillMaxWidth(),
+        tier = GlassTier.L1,
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+            content()
+        }
+    }
+}
+
+/** 设置项：图标 + 标题 + 副标题 + 右侧控件 */
+@Composable
+private fun SettingItemRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String? = null,
+    trailing: @Composable (() -> Unit)? = null,
+    onClick: (() -> Unit)? = null
+) {
+    val rowMod = if (onClick != null) Modifier.fillMaxWidth().clickable(onClick = onClick) else Modifier.fillMaxWidth()
+    Row(
+        modifier = rowMod.padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
+            if (!subtitle.isNullOrBlank()) Text(
+                subtitle,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        trailing?.invoke()
+    }
+}
+
+/** 右侧值 + 下拉箭头（按钮样式） */
+@Composable
+private fun ValueDropdown(value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(value, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Medium)
+        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted, modifier = Modifier.size(18.dp))
+    }
+}
+
+/** 卡组内细分割线 */
+@Composable
+private fun ThinDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(start = 52.dp),
+        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+    )
+}

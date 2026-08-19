@@ -1,4 +1,4 @@
-package com.ed.edqiu.data.repository
+﻿package com.ed.edqiu.data.repository
 
 import android.content.Context
 import android.net.Uri
@@ -203,10 +203,15 @@ class DownloadMonitor(private val context: Context) {
     companion object {
         private const val TAG = "DownloadMonitor"
         const val INTERNAL_MONITOR_URI = "xinvox://downloads"
-        private const val DOWNLOADER_PACKAGE = "com.ed.twitterdownload"
+        private const val DOWNLOADER_PACKAGE = "com.ed.Edqiu"
         private const val DOWNLOADER_AUTHORITY = "$DOWNLOADER_PACKAGE.media"
-        private const val LEGACY_DOWNLOADER_AUTHORITY = "com.ed.twitterdownloader.media"
-        private val DOWNLOADER_AUTHORITIES = setOf(DOWNLOADER_AUTHORITY, LEGACY_DOWNLOADER_AUTHORITY)
+        private const val LEGACY_DOWNLOADER_AUTHORITY = "com.ed.edqiu.media"
+        private const val OLDEST_DOWNLOADER_AUTHORITY = "com.ed.twitterdownload.media"
+        private val DOWNLOADER_AUTHORITIES = setOf(
+            DOWNLOADER_AUTHORITY,
+            LEGACY_DOWNLOADER_AUTHORITY,
+            OLDEST_DOWNLOADER_AUTHORITY,
+        )
         private const val COLUMN_RELATIVE_PATH = "relative_path"
         private const val COLUMN_LAST_MODIFIED = "last_modified"
         private const val META_SUFFIX = ".meta.json"

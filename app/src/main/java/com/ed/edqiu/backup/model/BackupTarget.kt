@@ -87,6 +87,8 @@ data class UploadReceipt(
     val remotePath: String,
     val size: Long,
     val rapidMatched: Boolean = false,
+    /** 云端文件 id（provider 返回时记录，供账本精确 exists / 续传兜底；未知为 null）。 */
+    val cloudFileId: String? = null,
     val uploadedAt: Long = System.currentTimeMillis(),
 )
 
@@ -106,9 +108,10 @@ object ProviderId {
     const val WEBDAV = "webdav"
     const val BAIDU = "baidu"
     const val PAN123 = "pan123"
+    const val PAN123_OPEN = "pan123_open"
     const val ALIYUN = "aliyun"
     const val CLOUDDRIVE2 = "clouddrive2"
 
     /** 全部已知 provider id，用于注册表一致性校验 / UI 枚举。 */
-    val all: List<String> = listOf(WEBDAV, BAIDU, PAN123, ALIYUN, CLOUDDRIVE2)
+    val all: List<String> = listOf(WEBDAV, BAIDU, PAN123, PAN123_OPEN, ALIYUN, CLOUDDRIVE2)
 }

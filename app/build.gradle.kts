@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -11,27 +13,59 @@ val baiduClientId: String = (project.findProperty("BAIDU_CLIENT_ID") as? String)
 val baiduClientSecret: String = (project.findProperty("BAIDU_CLIENT_SECRET") as? String).orEmpty()
 val aliClientId: String = (project.findProperty("ALI_CLIENT_ID") as? String).orEmpty()
 val aliClientSecret: String = (project.findProperty("ALI_CLIENT_SECRET") as? String).orEmpty()
+val pan123ClientId: String = (project.findProperty("PAN123_CLIENT_ID") as? String).orEmpty()
+val pan123ClientSecret: String = (project.findProperty("PAN123_CLIENT_SECRET") as? String).orEmpty()
+val pan123RedirectUri: String = (project.findProperty("PAN123_REDIRECT_URI") as? String).orEmpty()
 
 private fun String.asBuildConfigString(): String =
     "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+// ---- 1.4.0 起：release 签名（keystore.properties 本地私有，已被 .gitignore 忽略） ----
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val releaseStoreFile = keystoreProps.getProperty("storeFile")?.let {
+    val f = File(it)
+    if (f.isAbsolute) f else project.file(it)
+}
+val releaseStorePassword = keystoreProps.getProperty("storePassword")
+val releaseKeyAlias = keystoreProps.getProperty("keyAlias")
+val releaseKeyPassword = keystoreProps.getProperty("keyPassword")
 
 android {
     namespace = "com.ed.edqiu"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.ed.twitterdownload"
+        applicationId = "com.ed.Edqiu"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 5
+        versionName = "1.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // 网盘直连备份：应用资质占位（百度/阿里 client_id、client_secret）
+        // 网盘直连备份：应用资质占位（百度/阿里/123 client_id、client_secret）
         buildConfigField("String", "BAIDU_CLIENT_ID", baiduClientId.asBuildConfigString())
         buildConfigField("String", "BAIDU_CLIENT_SECRET", baiduClientSecret.asBuildConfigString())
         buildConfigField("String", "ALI_CLIENT_ID", aliClientId.asBuildConfigString())
         buildConfigField("String", "ALI_CLIENT_SECRET", aliClientSecret.asBuildConfigString())
+        buildConfigField("String", "PAN123_CLIENT_ID", pan123ClientId.asBuildConfigString())
+        buildConfigField("String", "PAN123_CLIENT_SECRET", pan123ClientSecret.asBuildConfigString())
+        buildConfigField("String", "PAN123_REDIRECT_URI", pan123RedirectUri.asBuildConfigString())
+    }
+
+    signingConfigs {
+        create("release") {
+            if (releaseStoreFile != null && releaseStorePassword != null &&
+                releaseKeyAlias != null && releaseKeyPassword != null
+            ) {
+                storeFile = releaseStoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
@@ -41,6 +75,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

@@ -22,3 +22,6 @@ val LinkText = Color(0xFF2563EB)
 val StatusPendingDark = Color(0xFFE0C8A8)
 val StatusDownloadedDark = Color(0xFF6EE7B7)
 val StatusFailedDark = Color(0xFFFFA39E)
+
+val GlassHighlight = Color(0xFFFFFFFF)
+val GlassShadow = Color(0xFF0F172A)

@@ -1,4 +1,4 @@
-package com.ed.edqiu.ui.player
+﻿package com.ed.edqiu.ui.player
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -64,8 +64,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ed.twitterdownloader.data.database.DownloadHistoryEntity
-import com.ed.twitterdownloader.ui.components.ThumbnailWithFallback
+import com.ed.edqiu.data.database.DownloadHistoryEntity
+import com.ed.edqiu.ui.components.ThumbnailWithFallback
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.MediaGlassSurface
 import com.ed.edqiu.ui.components.GlassTier

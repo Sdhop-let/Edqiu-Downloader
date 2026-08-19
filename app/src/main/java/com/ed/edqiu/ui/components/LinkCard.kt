@@ -178,12 +178,14 @@ private fun LinkPreviewImage(link: SavedLink, accent: Color) {
         modifier = Modifier
             .size(80.dp)
             .clip(MaterialTheme.shapes.medium)
+            // 2026-08-17 去蓝：不再用 primary→tertiary→accent 的蓝色渐变底（滚动时形成
+            // "蓝色方块遮挡卡片"的视觉），改为中性浅底 + 状态色淡 tint；有封面图时仍显示封面
             .background(
                 Brush.linearGradient(
                     colors = listOf(
-                        MaterialTheme.colorScheme.primary,
-                        MaterialTheme.colorScheme.tertiary,
-                        accent
+                        MaterialTheme.colorScheme.surfaceContainerHigh,
+                        MaterialTheme.colorScheme.surfaceContainer,
+                        accent.copy(alpha = 0.30f)
                     )
                 )
             ),
@@ -201,7 +203,7 @@ private fun LinkPreviewImage(link: SavedLink, accent: Color) {
                 text = "X",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Black,
-                color = Color.White
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 

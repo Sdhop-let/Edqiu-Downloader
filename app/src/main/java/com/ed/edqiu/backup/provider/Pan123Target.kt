@@ -33,7 +33,7 @@ class Pan123Target(
     private val appContext: Context = context.applicationContext
 
     override val id: String = ProviderId.PAN123
-    override val displayName: String = "123网盘"
+    override val displayName: String = "123网盘（WebDAV）"
     override val authMode: AuthMode = AuthMode.WEBDAV_CREDENTIAL
     override val capabilities: BackupCapabilities = BackupCapabilities(
         supportsChunked = false,

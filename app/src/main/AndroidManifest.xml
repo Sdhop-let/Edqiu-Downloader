@@ -3,16 +3,18 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <queries>
+        <package android:name="com.ed.Edqiu" />
         <package android:name="com.ed.twitterdownload" />
-        <package android:name="com.ed.twitterdownloader" />
+        <package android:name="com.ed.edqiu" />
         <package android:name="com.twitter.android" />
         <package android:name="com.x.android" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="twitter" />
         </intent>
+        <provider android:authorities="com.ed.Edqiu.media" />
         <provider android:authorities="com.ed.twitterdownload.media" />
-        <provider android:authorities="com.ed.twitterdownloader.media" />
+        <provider android:authorities="com.ed.edqiu.media" />
     </queries>
 
 
@@ -25,14 +27,17 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <permission
-        android:name="com.ed.twitterdownload.permission.READ_DOWNLOAD_MEDIA"
+        android:name="com.ed.Edqiu.permission.READ_DOWNLOAD_MEDIA"
         android:protectionLevel="signature" />
+    <uses-permission android:name="com.ed.Edqiu.permission.READ_DOWNLOAD_MEDIA" />
+    <!-- 兼容旧包：读取旧版下载目录（同签名） -->
     <uses-permission android:name="com.ed.twitterdownload.permission.READ_DOWNLOAD_MEDIA" />
-    <uses-permission android:name="com.ed.twitterdownloader.permission.READ_DOWNLOAD_MEDIA" />
+    <uses-permission android:name="com.ed.edqiu.permission.READ_DOWNLOAD_MEDIA" />
 
     <application
         android:name=".EdqiuApplication"
         android:allowBackup="true"
+        android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
@@ -86,11 +91,11 @@
         </service>
 
         <provider
-            android:name="com.ed.twitterdownloader.provider.DownloadMediaProvider"
-            android:authorities="com.ed.twitterdownload.media"
+            android:name="com.ed.edqiu.provider.DownloadMediaProvider"
+            android:authorities="com.ed.Edqiu.media"
             android:exported="true"
             android:grantUriPermissions="true"
-            android:readPermission="com.ed.twitterdownload.permission.READ_DOWNLOAD_MEDIA" />
+            android:readPermission="com.ed.Edqiu.permission.READ_DOWNLOAD_MEDIA" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

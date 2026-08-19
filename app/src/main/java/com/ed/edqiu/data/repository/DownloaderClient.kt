@@ -1,4 +1,4 @@
-package com.ed.edqiu.data.repository
+﻿package com.ed.edqiu.data.repository
 
 import android.content.Context
 import android.content.Intent
@@ -52,7 +52,7 @@ class DownloaderClient(private val context: Context) {
     }
 
     private companion object {
-        const val DOWNLOADER_PACKAGE = "com.ed.twitterdownloader"
+        const val DOWNLOADER_PACKAGE = "com.ed.edqiu"
         const val DOWNLOADER_ACTIVITY = "$DOWNLOADER_PACKAGE.MainActivity"
         const val DOWNLOAD_ACTION = "$DOWNLOADER_PACKAGE.action.DOWNLOAD_TWEET"
         const val EXTRA_TWEET_URL = "$DOWNLOADER_PACKAGE.extra.TWEET_URL"

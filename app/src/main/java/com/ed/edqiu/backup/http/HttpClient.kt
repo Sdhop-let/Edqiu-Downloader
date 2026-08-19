@@ -3,6 +3,7 @@ package com.ed.edqiu.backup.http
 import android.util.Log
 import com.ed.edqiu.backup.model.BackupException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -24,6 +25,10 @@ import java.util.concurrent.TimeUnit
  *
  * - 超时统一：connect 20s / read 30s / write 30s（与现有 WebDavSyncService 一致）。
  * - 日志脱敏：不打印 Authorization / Cookie 等敏感头，URL 仅记录 path（去掉 query）。
+ * - **频控退避**：HTTP 429 / 5xx（502/503/504 等瞬时故障）自动按响应头退避重试，
+ *   优先读标准 `Retry-After`（秒），其次读阿里 `x-retry-after`（毫秒），
+ *   均缺失则用默认退避。最多重试 [MAX_HTTP_RETRIES] 次，单次退避上限 [MAX_BACKOFF_MS]。
+ *   这解决「百度 listall 超频 / 阿里 429 / 123 429 导致备份卡死」的问题。
  * - 所有方法返回 `Result<T>`，失败为面向用户的中文 [BackupException]。
  */
 object HttpClient {
@@ -35,6 +40,18 @@ object HttpClient {
     private const val USER_AGENT = "Edqiu-Backup/1.2.0 (Android)"
 
     private const val JSON_MEDIA_TYPE = "application/json; charset=utf-8"
+
+    /** 频控退避：最多重试次数（含首次请求在内共 MAX_HTTP_RETRIES + 1 次请求）。 */
+    private const val MAX_HTTP_RETRIES = 3
+
+    /** 可退避重试的状态码：429 限流 + 瞬时 5xx（网关/服务抖动）。 */
+    private val RETRYABLE_STATUS_CODES = setOf(429, 500, 502, 503, 504)
+
+    /** 默认退避（响应头缺失时），毫秒。 */
+    private const val DEFAULT_BACKOFF_MS = 1_000L
+
+    /** 单次退避上限，防止服务端返回超大 Retry-After 把备份挂起。 */
+    private const val MAX_BACKOFF_MS = 60_000L
 
     /** 敏感请求头，日志中一律跳过（token / 密码脱敏）。 */
     private val SENSITIVE_HEADERS = setOf("Authorization", "Cookie", "Set-Cookie", "X-Auth-Token")
@@ -59,8 +76,7 @@ object HttpClient {
         headers: Map<String, String> = emptyMap(),
     ): Result<JsonElement> = withContext(Dispatchers.IO) {
         runCatching {
-            val request = buildRequest(url = url, headers = headers, method = "GET", body = null)
-            executeForJson(request)
+            executeForJson { buildRequest(url = url, headers = headers, method = "GET", body = null) }
         }
     }
 
@@ -72,8 +88,7 @@ object HttpClient {
     ): Result<JsonElement> = withContext(Dispatchers.IO) {
         runCatching {
             val requestBody = body.toRequestBody(JSON_MEDIA_TYPE.toMediaType())
-            val request = buildRequest(url = url, headers = headers, method = "POST", body = requestBody)
-            executeForJson(request)
+            executeForJson { buildRequest(url = url, headers = headers, method = "POST", body = requestBody) }
         }
     }
 
@@ -85,9 +100,10 @@ object HttpClient {
         progress: (Long) -> Unit = {},
     ): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
-            val body = ProgressRequestBody(bytes, progress)
-            val request = buildRequest(url = url, headers = headers, method = "PUT", body = body)
-            client.newCall(request).execute().use { response ->
+            executeWithBackoff {
+                val body = ProgressRequestBody(bytes, progress)
+                buildRequest(url = url, headers = headers, method = "PUT", body = body)
+            }.use { response ->
                 val code = response.code
                 if (code !in 200..299) {
                     throw BackupException("上传失败（HTTP $code）")
@@ -103,8 +119,8 @@ object HttpClient {
         headers: Map<String, String> = emptyMap(),
     ): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
-            val request = buildRequest(url = url, headers = headers, method = "HEAD", body = null)
-            client.newCall(request).execute().use { it.code }
+            executeWithBackoff { buildRequest(url = url, headers = headers, method = "HEAD", body = null) }
+                .use { it.code }
         }
     }
 
@@ -114,19 +130,62 @@ object HttpClient {
         headers: Map<String, String> = emptyMap(),
     ): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
-            val request = buildRequest(url = url, headers = headers, method = "OPTIONS", body = null)
-            client.newCall(request).execute().use { it.code }
+            executeWithBackoff { buildRequest(url = url, headers = headers, method = "OPTIONS", body = null) }
+                .use { it.code }
         }
     }
 
-    private fun executeForJson(request: Request): JsonElement {
-        client.newCall(request).execute().use { response ->
+    private suspend fun executeForJson(buildRequest: () -> Request): JsonElement {
+        executeWithBackoff(buildRequest).use { response ->
             if (!response.isSuccessful) {
                 throw BackupException("请求失败（HTTP ${response.code}）")
             }
             val text = response.body?.string() ?: "{}"
             return json.parseToJsonElement(text)
         }
+    }
+
+    /**
+     * 带频控退避的请求执行。
+     *
+     * 遇到可重试状态码（429 / 5xx）时，读取响应头计算退避时长，关闭响应后 [delay] 再重试；
+     * 最多重试 [MAX_HTTP_RETRIES] 次。返回最终的 [Response]（由调用方 `use` 关闭）。
+     *
+     * 注意：上传类请求（[putStream]）重试时会重新构造 body，progress 回调从 0 重新累计——
+     * 分片 ≤ 10MB，影响可忽略；WebDAV 整文件 PUT 走 [WebDavEngine]（HttpURLConnection），不经过此处。
+     */
+    private suspend fun executeWithBackoff(buildRequest: () -> Request): Response {
+        var attempt = 0
+        while (true) {
+            val response = client.newCall(buildRequest()).execute()
+            val code = response.code
+            if (code !in RETRYABLE_STATUS_CODES || attempt >= MAX_HTTP_RETRIES) {
+                return response
+            }
+            val backoffMs = retryDelayMs(response)
+            response.close()
+            attempt++
+            Log.w(TAG, "HTTP $code 触发频控退避，${backoffMs}ms 后第 $attempt/$MAX_HTTP_RETRIES 次重试")
+            delay(backoffMs)
+        }
+    }
+
+    /** 计算退避时长：优先 Retry-After（秒）→ x-retry-after（毫秒/秒）→ 默认值。 */
+    private fun retryDelayMs(response: Response): Long {
+        response.header("Retry-After")?.trim()?.takeIf { it.isNotEmpty() }?.let { raw ->
+            raw.toLongOrNull()?.let { seconds ->
+                return (seconds * 1000L).coerceIn(0L, MAX_BACKOFF_MS)
+            }
+            // HTTP-date 格式（如 "Wed, 21 Oct 2026 07:28:00 GMT"）不解析，落到默认值
+        }
+        response.header("x-retry-after")?.trim()?.takeIf { it.isNotEmpty() }?.let { raw ->
+            raw.toLongOrNull()?.let { value ->
+                // 阿里云盘 x-retry-after 为毫秒；部分服务为秒。>10_000 视为毫秒，否则视为秒。
+                val ms = if (value > 10_000L) value else value * 1000L
+                return ms.coerceIn(0L, MAX_BACKOFF_MS)
+            }
+        }
+        return DEFAULT_BACKOFF_MS
     }
 
     private fun buildRequest(

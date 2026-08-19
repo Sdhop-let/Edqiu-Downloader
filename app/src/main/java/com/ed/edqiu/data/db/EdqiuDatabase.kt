@@ -7,12 +7,14 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.ed.edqiu.backup.data.BackupLedgerDao
+import com.ed.edqiu.backup.data.BackupLedgerEntity
 import com.ed.edqiu.data.model.DeletedLinkHistory
 import com.ed.edqiu.data.model.SavedLink
 
 @Database(
-    entities = [SavedLink::class, DeletedLinkHistory::class],
-    version = 4,
+    entities = [SavedLink::class, DeletedLinkHistory::class, BackupLedgerEntity::class],
+    version = 5,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -21,6 +23,8 @@ abstract class EdqiuDatabase : RoomDatabase() {
     abstract fun savedLinkDao(): SavedLinkDao
 
     abstract fun deletedLinkHistoryDao(): DeletedLinkHistoryDao
+
+    abstract fun backupLedgerDao(): BackupLedgerDao
 
     companion object {
         private const val DB_NAME = "xinvox.db"
@@ -85,13 +89,39 @@ abstract class EdqiuDatabase : RoomDatabase() {
             "ALTER TABLE deleted_link_history ADD COLUMN avatar_url TEXT DEFAULT NULL"
         )
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_4_5_SQL.forEach(db::execSQL)
+            }
+        }
+
+        val MIGRATION_4_5_SQL = listOf(
+            """
+            CREATE TABLE IF NOT EXISTS backup_ledger (
+                providerId TEXT NOT NULL,
+                remotePath TEXT NOT NULL,
+                localPath TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime INTEGER NOT NULL,
+                localHash TEXT,
+                cloudFileId TEXT,
+                state TEXT NOT NULL,
+                updatedAt INTEGER NOT NULL,
+                PRIMARY KEY(providerId, remotePath)
+            )
+            """.trimIndent(),
+            "CREATE INDEX IF NOT EXISTS index_backup_ledger_providerId ON backup_ledger(providerId)",
+            "CREATE INDEX IF NOT EXISTS index_backup_ledger_state ON backup_ledger(state)"
+        )
+
         fun getDatabase(context: Context): EdqiuDatabase {
             return INSTANCE ?: synchronized(lock) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     EdqiuDatabase::class.java,
                     DB_NAME
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
                     .also { INSTANCE = it }
             }

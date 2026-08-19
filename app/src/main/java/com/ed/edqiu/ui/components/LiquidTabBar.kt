@@ -1,7 +1,6 @@
 package com.ed.edqiu.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -12,9 +11,9 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -39,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
@@ -46,18 +46,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 
 /**
- * 扁平化液态胶囊底部导航。
+ * 液态玻璃（Liquid Glass）底部导航 — 悬浮胶囊样式。
  *
- * 扁平化原则（2026-08-01 调整）：
- * - **去除外壳玻璃容器**：背景透明，Tab 栏直接贴合在内容上（无悬浮外壳）
- * - **高度 64dp → 56dp**：更精致
- * - **保留选中态胶囊**：纯 primaryContainer 实色，无描边、无渐变
- * - **iOS Tab Bar 视觉密度**：图标 24dp + 选中文字 11sp
- *
- * iOS 式交互不变：
+ * - Tab Bar 外壳完全透明，仅选中胶囊有玻璃背景
+ * - 胶囊尺寸与单个 Tab 按钮完全贴合
+ * - 高度 50dp，圆角 16dp
  * - 按压：胶囊 tween 50ms 立即到位
  * - 松手：spring 弹性回弹落定
  */
@@ -73,62 +68,65 @@ fun LiquidTabBar(
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    badgeCount: Int = 0
+    badgeCount: Int = 0,
+    liquidGlassEnabled: Boolean = true
 ) {
     val primaryContainer = MaterialTheme.colorScheme.primaryContainer
     val onPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
     val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    val dark = MaterialTheme.colorScheme.background.luminance() <= 0.5f
+    val liquidGlass = liquidGlassEnabled && com.ed.edqiu.ui.theme.ThemeEffects.LiquidGlassEnabled.current
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .height(50.dp)
+            .padding(horizontal = 16.dp)
     ) {
         val barWidth = maxWidth
         val itemWidth = barWidth / tabs.size
 
-        // iOS 式交互：记录"当前按住的 tab"
         var pressedIndex by remember { mutableStateOf(-1) }
-
-        val capsuleTargetIndex = if (pressedIndex >= 0) pressedIndex else selectedIndex
-        val capsuleTargetX = itemWidth * capsuleTargetIndex
-
+        val capsuleIndex = if (pressedIndex >= 0) pressedIndex else selectedIndex
+        val capsuleTargetX = itemWidth * capsuleIndex
         val capsuleX by animateFloatAsState(
             targetValue = capsuleTargetX.value,
-            animationSpec = if (pressedIndex >= 0) {
-                tween(durationMillis = 50)
-            } else {
-                spring(dampingRatio = 0.6f, stiffness = 480f)
-            },
+            animationSpec = if (pressedIndex >= 0) tween(50) else spring(dampingRatio = 0.6f, stiffness = 480f),
             label = "capsuleX"
         )
 
-        // 选中态胶囊：扁平化（无描边、无渐变，纯 primaryContainer 实色）
-        Box(
-            modifier = Modifier
-                .offset(x = capsuleX.dp)
-                .width(itemWidth)
-                .fillMaxHeight()
-                .padding(horizontal = 4.dp, vertical = 3.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(primaryContainer)
-                .zIndex(1f)
-        )
+        if (liquidGlass) {
+            GlassSurface(
+                tier = GlassTier.L2,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .offset(x = capsuleX.dp)
+                    .width(itemWidth)
+                    .fillMaxHeight()
+                    .padding(horizontal = 3.dp, vertical = 3.dp)
+            ) { }
+        } else {
+            Box(
+                modifier = Modifier
+                    .offset(x = capsuleX.dp)
+                    .width(itemWidth)
+                    .fillMaxHeight()
+                    .padding(horizontal = 3.dp, vertical = 3.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(primaryContainer)
+            )
+        }
 
-        // Tab 项：垂直布局（图标上 + 文字下），iOS TabBar 标准
-        // 水平排列在 48dp 高度内会拥挤，垂直堆叠后每个 tab 内容区约 35dp，舒适居中
         Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(2f),
+            modifier = Modifier.fillMaxSize(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             tabs.forEachIndexed { index, tab ->
                 val selected = index == selectedIndex
                 val iconScale by animateFloatAsState(
-                    targetValue = if (selected) 1.06f else 1f,
+                    targetValue = if (selected) 1.12f else 1f,
                     animationSpec = spring(dampingRatio = 0.7f, stiffness = 900f),
-                    label = "iconScale$index"
+                    label = "scale$index"
                 )
                 Box(
                     modifier = Modifier
@@ -151,18 +149,17 @@ fun LiquidTabBar(
                             imageVector = if (selected) tab.selectedIcon else tab.icon,
                             contentDescription = tab.label,
                             tint = if (selected) onPrimaryContainer else onSurfaceVariant,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(21.dp)
                         )
                         AnimatedVisibility(
                             visible = selected,
-                            enter = fadeIn(tween(180, easing = FastOutSlowInEasing)) +
-                                slideInVertically(tween(180)) { it / 3 },
+                            enter = fadeIn(tween(180)) + slideInVertically(tween(180)) { it / 3 },
                             exit = fadeOut(tween(100)) + slideOutVertically(tween(100)) { it / 3 }
                         ) {
                             Text(
                                 text = tab.label,
                                 color = onPrimaryContainer,
-                                fontSize = 9.5.sp,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
                                 lineHeight = 11.sp,
                                 modifier = Modifier.padding(top = 1.dp)
@@ -173,22 +170,20 @@ fun LiquidTabBar(
             }
         }
 
-        // 角标
         if (badgeCount > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 4.dp, end = 4.dp)
-                    .size(20.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFFFF3B30))
-                    .zIndex(3f),
+                    .padding(top = 2.dp, end = 2.dp)
+                    .size(18.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(Color(0xFFFF3B30)),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = badgeCount.toString(),
                     color = Color.White,
-                    fontSize = 10.sp,
+                    fontSize = 9.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
