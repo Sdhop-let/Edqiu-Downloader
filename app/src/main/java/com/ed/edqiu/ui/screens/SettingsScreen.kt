@@ -40,6 +40,7 @@ import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.VpnLock
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -52,7 +53,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -79,7 +79,9 @@ import com.ed.edqiu.data.model.ProxySettings
 import com.ed.edqiu.data.preferences.CloudSyncPreferences
 import com.ed.edqiu.data.preferences.CookiePreferences
 import com.ed.edqiu.data.preferences.DownloadPathPreferences
+import com.ed.edqiu.data.preferences.PreDownloadPreferences
 import com.ed.edqiu.data.preferences.ProxyPreferences
+import com.ed.edqiu.data.proxy.ProxyDetector
 import com.ed.edqiu.service.AppUpdateInfo
 import com.ed.edqiu.service.AppUpdateService
 import com.ed.edqiu.service.WebDavSyncService
@@ -88,7 +90,7 @@ import com.ed.edqiu.backup.provider.WebDavEngine
 import com.ed.edqiu.backup.provider.WebDavCredential
 import com.ed.edqiu.background.WebDavAutoBackupScheduler
 import com.ed.edqiu.BuildConfig
-import com.ed.edqiu.ui.components.EdqiuSnackbarHost
+import com.ed.edqiu.ui.components.InlineFeedbackBar
 import com.ed.edqiu.ui.components.DynamicSwitch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -107,6 +109,7 @@ object DlSection {
     const val UPDATE = "update"
     const val NETWORK = "network"
     const val WEBDAV = "webdav"
+    const val PREDOWNLOAD = "predownload"
     const val ABOUT = "about"
 }
 
@@ -114,16 +117,19 @@ object DlSection {
 fun SettingsScreen(
     onBack: () -> Unit,
     showBack: Boolean = false,
-    section: String? = null
+    section: String? = null,
+    onOpenMediaBackup: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
+    // 内联反馈：操作结果固定显示在触发按钮所在卡片内，5s 后动画消失（不再在页面顶部挤压内容）
+    var inlineFeedback by remember { mutableStateOf<String?>(null) }
 
     val proxyPreferences = remember { ProxyPreferences(context) }
     val cookiePreferences = remember { CookiePreferences(context) }
     val pathPreferences = remember { DownloadPathPreferences(context) }
     val cloudSyncPreferences = remember { CloudSyncPreferences(context) }
+    val preDownloadPrefs = remember { PreDownloadPreferences(context) }
 
     var updateStatus by remember { mutableStateOf<String?>(null) }
     var isUpdatingYtdlp by remember { mutableStateOf(false) }
@@ -164,13 +170,19 @@ fun SettingsScreen(
         uri?.let {
             val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
                 android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            context.contentResolver.takePersistableUriPermission(it, flags)
+            val persisted = runCatching {
+                context.contentResolver.takePersistableUriPermission(it, flags)
+            }.isSuccess
+            if (!persisted) {
+                scope.launch { inlineFeedback = "无法持久化目录授权，保存失败，请重试" }
+                return@let
+            }
             val path = uriToDisplayPath(context, it) ?: it.toString()
             displayPath = path
             customPath = it.toString()
             pathPreferences.saveCustomTreeUri(customPath, displayPath)
             useCustomPath = true
-            scope.launch { snackbarHostState.showSnackbar("下载保存路径已更新") }
+            scope.launch { inlineFeedback = ("下载保存路径已更新") }
         }
     }
 
@@ -217,10 +229,10 @@ fun SettingsScreen(
             isCheckingAppUpdate = true
             AppUpdateService.checkForUpdate(context)
                 .onSuccess { info ->
-                    if (info == null) snackbarHostState.showSnackbar("当前已是最新版本")
+                    if (info == null) inlineFeedback = ("当前已是最新版本")
                     else appUpdateInfo = info
                 }
-                .onFailure { e -> snackbarHostState.showSnackbar("检查更新失败：${e.message ?: "网络异常"}") }
+                .onFailure { e -> inlineFeedback = ("检查更新失败：${e.message ?: "网络异常"}") }
             isCheckingAppUpdate = false
         }
     }
@@ -234,12 +246,12 @@ fun SettingsScreen(
                 .onSuccess { apkFile ->
                     val installStarted = AppUpdateService.installApk(context, apkFile)
                     appUpdateInfo = null
-                    snackbarHostState.showSnackbar(
+                    inlineFeedback = (
                         if (installStarted) "系统安装器已打开，请按提示覆盖安装"
                         else "请允许安装未知来源应用后，再点击立即更新"
                     )
                 }
-                .onFailure { e -> snackbarHostState.showSnackbar("下载新版本失败：${e.message ?: "网络异常"}") }
+                .onFailure { e -> inlineFeedback = ("下载新版本失败：${e.message ?: "网络异常"}") }
             isDownloadingAppUpdate = false
         }
     }
@@ -281,7 +293,6 @@ fun SettingsScreen(
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
     ) {
-        EdqiuSnackbarHost(snackbarHostState)
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize(),
@@ -375,7 +386,7 @@ fun SettingsScreen(
                                     else pathPreferences.customPath = customPath
                                     pathPreferences.useCustomPath = true
                                     displayPath = pathPreferences.displayDownloadDir(context)
-                                    scope.launch { snackbarHostState.showSnackbar("下载路径已保存") }
+                                    scope.launch { inlineFeedback = ("下载路径已保存") }
                                 },
                                 enabled = customPath.isNotBlank(),
                                 modifier = Modifier.weight(1f),
@@ -386,6 +397,10 @@ fun SettingsScreen(
                                 Text("保存路径")
                             }
                         }
+                    InlineFeedbackBar(
+                        message = inlineFeedback,
+                        onDismiss = { inlineFeedback = null }
+                    )
                     }
                 }
             }
@@ -420,6 +435,10 @@ fun SettingsScreen(
                         actionText = if (isCheckingAppUpdate) "检查中" else "检查",
                         onClick = { checkAppUpdate() }
                     )
+                    InlineFeedbackBar(
+                        message = inlineFeedback,
+                        onDismiss = { inlineFeedback = null }
+                    )
                 }
             }
             }
@@ -433,7 +452,19 @@ fun SettingsScreen(
                             Text("启用代理", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                             Text("当前 http://${proxyHost.ifBlank { "127.0.0.1" }}:${proxyPort.ifBlank { "7890" }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        DynamicSwitch(checked = proxyEnabled, onCheckedChange = { proxyEnabled = it })
+                        DynamicSwitch(
+                            checked = proxyEnabled,
+                            onCheckedChange = { enabled ->
+                                proxyEnabled = enabled
+                                proxyPreferences.saveProxySettings(
+                                    ProxySettings(
+                                        enabled = enabled,
+                                        host = proxyHost.ifBlank { "127.0.0.1" },
+                                        port = proxyPort.toIntOrNull() ?: 7890
+                                    )
+                                )
+                            }
+                        )
                     }
                     if (proxyEnabled) {
                         Spacer(Modifier.height(12.dp))
@@ -457,19 +488,33 @@ fun SettingsScreen(
                             )
                         }
                         Spacer(Modifier.height(8.dp))
+                        // 自动检测主流代理（Clash / FlClash / Clash Verge / v2rayNG / Shadowsocks）
                         OutlinedButton(
                             onClick = {
                                 scope.launch {
-                                    val detected = withContext(Dispatchers.IO) { proxyPreferences.detectProxySettings() }
-                                    proxyHost = detected.host
-                                    proxyPort = detected.port.toString()
-                                    proxyEnabled = true
-                                    proxyPreferences.saveProxySettings(detected.copy(enabled = true))
-                                    snackbarHostState.showSnackbar("已识别代理：${detected.host}:${detected.port}")
+                                    val detection = withContext(Dispatchers.IO) { ProxyDetector.detect(context) }
+                                    when (detection.kind) {
+                                        "VPN" -> {
+                                            // 系统 VPN 隧道：直连即可，无需填代理
+                                            inlineFeedback = detection.description
+                                        }
+                                        "PROXY" -> {
+                                            detection.port?.let { port ->
+                                                proxyHost = detection.host
+                                                proxyPort = port.toString()
+                                                proxyEnabled = true
+                                                proxyPreferences.saveProxySettings(
+                                                    ProxySettings(enabled = true, host = detection.host, port = port)
+                                                )
+                                            }
+                                            inlineFeedback = detection.description
+                                        }
+                                        else -> inlineFeedback = detection.description
+                                    }
                                 }
                             },
                             modifier = Modifier.fillMaxWidth()
-                        ) { Text("自动识别代理") }
+                        ) { Text("自动检测代理") }
                     }
 
                     HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color(0xFFE2E8F0))
@@ -505,7 +550,7 @@ fun SettingsScreen(
                             onClick = {
                                 cookiePreferences.saveCookies(authToken, ct0)
                                 cookiesConfigured = cookiePreferences.hasCookies()
-                                scope.launch { snackbarHostState.showSnackbar("Cookie 已保存") }
+                                scope.launch { inlineFeedback = ("Cookie 已保存") }
                             }
                         ) { Text("保存 Cookie") }
                         OutlinedButton(
@@ -519,6 +564,10 @@ fun SettingsScreen(
                             }
                         ) { Text("清除") }
                     }
+                    InlineFeedbackBar(
+                        message = inlineFeedback,
+                        onDismiss = { inlineFeedback = null }
+                    )
                 }
             }
             }
@@ -645,12 +694,12 @@ fun SettingsScreen(
                                             .onSuccess {
                                                 connectionVerified = true
                                                 cloudSyncPreferences.connectionVerified = true
-                                                snackbarHostState.showSnackbar("连接成功，WebDAV 配置已保存")
+                                                inlineFeedback = ("连接成功，WebDAV 配置已保存")
                                             }
                                             .onFailure { e ->
                                                 connectionVerified = false
                                                 cloudSyncPreferences.connectionVerified = false
-                                                snackbarHostState.showSnackbar("连接失败：${e.message ?: "未知错误"}")
+                                                inlineFeedback = ("连接失败：${e.message ?: "未知错误"}")
                                             }
                                         isTestingConnection = false
                                     }
@@ -670,9 +719,9 @@ fun SettingsScreen(
                                                     cloudSyncPreferences.lastSyncTime = System.currentTimeMillis()
                                                     lastSyncTime = cloudSyncPreferences.lastSyncTime
                                                 }
-                                                snackbarHostState.showSnackbar("同步完成：新增 $newCount 个，跳过 $skipCount 个")
+                                                inlineFeedback = ("同步完成：新增 $newCount 个，跳过 $skipCount 个")
                                             }
-                                            .onFailure { e -> snackbarHostState.showSnackbar("WebDAV 同步失败：${e.message ?: "未知错误"}") }
+                                            .onFailure { e -> inlineFeedback = ("WebDAV 同步失败：${e.message ?: "未知错误"}") }
                                         isWebDavSyncing = false
                                     }
                                 },
@@ -684,6 +733,21 @@ fun SettingsScreen(
                         if (connectionVerified) {
                             Spacer(Modifier.height(12.dp))
                             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                            Spacer(Modifier.height(12.dp))
+                            // 测试连接成功后：备份显示通道入口 —— 详细查看每条视频/图片的同步状态
+                            AssistChip(
+                                onClick = onOpenMediaBackup,
+                                label = { Text("详细查看同步情况", fontWeight = FontWeight.Medium) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Outlined.Cloud,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(999.dp),
+                            )
                             Spacer(Modifier.height(12.dp))
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Column(modifier = Modifier.weight(1f)) {
@@ -701,10 +765,10 @@ fun SettingsScreen(
                                         cloudSyncPreferences.autoBackupEnabled = it
                                         if (it) {
                                             WebDavAutoBackupScheduler.schedule(context, autoBackupDays)
-                                            scope.launch { snackbarHostState.showSnackbar("已开启自动备份（每 ${autoBackupDays} 天）") }
+                                            scope.launch { inlineFeedback = ("已开启自动备份（每 ${autoBackupDays} 天）") }
                                         } else {
                                             WebDavAutoBackupScheduler.cancel(context)
-                                            scope.launch { snackbarHostState.showSnackbar("已关闭自动备份") }
+                                            scope.launch { inlineFeedback = ("已关闭自动备份") }
                                         }
                                     }
                                 )
@@ -727,7 +791,110 @@ fun SettingsScreen(
                                 }
                             }
                         }
+                    InlineFeedbackBar(
+                        message = inlineFeedback,
+                        onDismiss = { inlineFeedback = null }
+                    )
                     }
+                }
+            }
+            }
+
+            if (section == null || section == DlSection.PREDOWNLOAD) {
+            item {
+                SectionCard(title = "预下载", subtitle = "保存攒批自动下载与网盘联动", icon = Icons.Outlined.Download) {
+                    var autoPreDownload by remember { mutableStateOf(preDownloadPrefs.autoPreDownload) }
+                    var autoStart by remember { mutableStateOf(preDownloadPrefs.autoStartDownload) }
+                    var syncCloud by remember { mutableStateOf(preDownloadPrefs.syncToCloud) }
+                    var batchSizeText by remember { mutableStateOf(preDownloadPrefs.batchSize.toString()) }
+
+                    // 预下载总开关
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("预下载功能", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                            Text("保存链接后攒批自动后台下载，防止视频下架", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        DynamicSwitch(
+                            checked = autoPreDownload,
+                            onCheckedChange = {
+                                autoPreDownload = it
+                                preDownloadPrefs.autoPreDownload = it
+                            }
+                        )
+                    }
+
+                    if (autoPreDownload) {
+                        Spacer(Modifier.height(12.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                        Spacer(Modifier.height(12.dp))
+
+                        // 攒批条数
+                        Text("攒到多少条开始", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(5, 10, 20).forEach { n ->
+                                FilterChip(
+                                    selected = batchSizeText == n.toString(),
+                                    onClick = {
+                                        batchSizeText = n.toString()
+                                        preDownloadPrefs.batchSize = n
+                                    },
+                                    label = { Text("$n 条") }
+                                )
+                            }
+                            OutlinedTextField(
+                                value = batchSizeText,
+                                onValueChange = { value ->
+                                    batchSizeText = value.filter(Char::isDigit).take(2)
+                                    batchSizeText.toIntOrNull()?.let { preDownloadPrefs.batchSize = it }
+                                },
+                                modifier = Modifier.width(96.dp),
+                                label = { Text("自定义") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                shape = RoundedCornerShape(14.dp)
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+
+                        // 自动开始下载
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("自动开始下载", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                                Text("攒满后立即开始；关闭则等待手动批量下载", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            DynamicSwitch(
+                                checked = autoStart,
+                                onCheckedChange = {
+                                    autoStart = it
+                                    preDownloadPrefs.autoStartDownload = it
+                                }
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+
+                        // 预下载上传网盘
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("预下载上传到网盘", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                                Text("完成后自动同步到备份中心选中网盘", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            DynamicSwitch(
+                                checked = syncCloud,
+                                onCheckedChange = {
+                                    syncCloud = it
+                                    preDownloadPrefs.syncToCloud = it
+                                }
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "关闭预下载后，手动下载完成仍会自动联动网盘同步",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
             }

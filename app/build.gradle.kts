@@ -41,8 +41,8 @@ android {
         applicationId = "com.ed.Edqiu"
         minSdk = 24
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.4.0"
+        versionCode = 7
+        versionName = "1.4.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // 网盘直连备份：应用资质占位（百度/阿里/123 client_id、client_secret）
@@ -141,6 +141,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1")
 
     implementation("io.coil-kt:coil-compose:2.7.0")
+    // 视频帧解码：AsyncImage 直接加载本地视频文件时显示首帧缩略图（同步情况页预览用）
+    implementation("io.coil-kt:coil-video:2.7.0")
 
     // ---- 网盘直连备份（T01）：百度/阿里 HTTP 与凭证加密 ----
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

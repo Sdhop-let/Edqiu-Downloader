@@ -254,8 +254,19 @@ object HttpClient {
 /** 将底层异常转换为面向用户的中文消息（供各层复用，如 `exceptionOrNull()?.toUserMessage()`）。 */
 fun Throwable.toUserMessage(): String = when (this) {
     is BackupException -> message ?: "操作失败，请重试"
-    is SocketTimeoutException -> "网络请求超时，请检查网络后重试"
     is UnknownHostException -> "无法连接服务器，请检查网络后重试"
-    is IOException -> "网络错误：${message ?: "未知错误"}"
+    is SocketTimeoutException -> "网络请求超时，请检查网络后重试"
+    // 2026-08-31 adb 实测：断网时 OkHttp 对 123pan WebDAV 表现为 SSLHandshakeException/EOFException
+    //（TLS 握手阶段连接被断），原始 message 是英文（如 "connection closed"），对用户无意义——统一转成中文提示
+    is java.net.ConnectException -> "无法连接服务器，请检查网络后重试"
+    is javax.net.ssl.SSLException -> "安全连接失败，请检查网络后重试"
+    is java.io.EOFException -> "网络连接被中断，请检查网络后重试"
+    is java.io.IOException -> if (message?.contains("closed", ignoreCase = true) == true ||
+        message?.contains("reset", ignoreCase = true) == true
+    ) {
+        "网络连接中断，请检查网络后重试"
+    } else {
+        "网络错误：${message ?: "未知错误"}"
+    }
     else -> message ?: "操作失败，请重试"
 }

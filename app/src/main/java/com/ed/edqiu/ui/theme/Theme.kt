@@ -84,5 +84,7 @@ fun statusColor(status: com.ed.edqiu.data.model.LinkStatus): Color {
             if (dark) StatusDownloadedDark else StatusDownloaded
         com.ed.edqiu.data.model.LinkStatus.FAILED ->
             if (dark) StatusFailedDark else StatusFailed
+        com.ed.edqiu.data.model.LinkStatus.DELETED ->
+            if (dark) StatusGoneDark else StatusGone
     }
 }

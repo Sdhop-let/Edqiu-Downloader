@@ -3,8 +3,8 @@ package com.ed.edqiu.ui.list
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -34,12 +35,17 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LibraryAddCheck
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -59,6 +65,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +74,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -82,6 +91,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.data.model.SavedLink
 import com.ed.edqiu.ui.components.GlassSurface
@@ -105,12 +115,20 @@ fun ListScreen(
     val autoCapture by vm.autoCapture.collectAsStateWithLifecycle()
     val captureFeedback by vm.captureFeedback.collectAsStateWithLifecycle()
     val actionFeedback by vm.actionFeedback.collectAsStateWithLifecycle()
+    val downloading by vm.downloading.collectAsStateWithLifecycle()
     val searchQuery by vm.searchQuery.collectAsStateWithLifecycle()
     val sortOrder by vm.sortOrder.collectAsStateWithLifecycle()
     val selectedIds by vm.selectedIds.collectAsStateWithLifecycle()
     val selectionMode by vm.selectionMode.collectAsStateWithLifecycle()
+    val batchDownloadState by vm.batchDownloadState.collectAsStateWithLifecycle()
 
-    var filter by remember { mutableStateOf(Filter.ALL) }
+    // 筛选 tab 用 rememberSaveable：详情页/二级页往返后保留进入前的筛选，
+    // 避免返回时被重置回「全部」（曾出现：失败 tab 进详情，返回后跳回全部列表）
+    var filter by rememberSaveable(stateSaver = FilterSaver) { mutableStateOf(Filter.ALL) }
+    var showPreDownloadPrompt by remember { mutableStateOf(false) }
+    var showBatchPreview by remember { mutableStateOf(false) }
+    // 下载结果弹窗：消息 + 成功/失败标志（true=成功 false=失败 null=中性）
+    var downloadResultDialog by remember { mutableStateOf<Pair<String, Boolean?>?>(null) }
     var showPasteDialog by remember { mutableStateOf(false) }
     var pasteText by remember { mutableStateOf("") }
     var sortExpanded by remember { mutableStateOf(false) }
@@ -149,17 +167,35 @@ fun ListScreen(
             }
             snackbar.show(msg)
             vm.clearFeedback()
+            // 新保存后待处理达到 5 条及以上：提示批量预下载
+            if (it == ListViewModel.CaptureFeedback.Added &&
+                links.count { link -> link.status == LinkStatus.PENDING } >= PRE_DOWNLOAD_PROMPT_THRESHOLD
+            ) {
+                showPreDownloadPrompt = true
+            }
         }
     }
 
     LaunchedEffect(actionFeedback) {
         actionFeedback?.let { feedback ->
-            snackbar.show(
-                message = feedback.message,
-                actionLabel = feedback.actionLabel,
-                onAction = feedback.onAction
-            )
+            if (feedback.asDialog) {
+                // 下载结果用弹窗展示成功/失败详情
+                downloadResultDialog = feedback.message to feedback.success
+            } else {
+                snackbar.show(
+                    message = feedback.message,
+                    actionLabel = feedback.actionLabel,
+                    onAction = feedback.onAction
+                )
+            }
             vm.clearActionFeedback()
+        }
+    }
+
+    // 下载进行中即时反馈：点击下载后立刻提示，避免下载耗时期间（10-60s）误以为没反应
+    LaunchedEffect(downloading) {
+        if (downloading) {
+            snackbar.show("正在下载，请稍候…")
         }
     }
 
@@ -168,9 +204,15 @@ fun ListScreen(
             Filter.ALL -> links
             Filter.PENDING -> links.filter { it.status == LinkStatus.PENDING }
             Filter.DOWNLOADED -> links.filter { it.status == LinkStatus.DOWNLOADED }
-            Filter.FAILED -> links.filter { it.status == LinkStatus.FAILED }
+            // 「失败」tab 同时收纳推文不存在（DELETED）的死链，方便用户统一清理
+            Filter.FAILED -> links.filter {
+                it.status == LinkStatus.FAILED || it.status == LinkStatus.DELETED
+            }
         }
     }
+
+    // 是否已全选当前列表（全选后批量下载 → 确认即退出批量模式）
+    val allSelected = shown.isNotEmpty() && selectedIds.containsAll(shown.map { it.tweetId })
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -188,7 +230,9 @@ fun ListScreen(
                 InboxHeader(
                     pendingCount = links.count { it.status == LinkStatus.PENDING },
                     downloadedCount = links.count { it.status == LinkStatus.DOWNLOADED },
-                    failedCount = links.count { it.status == LinkStatus.FAILED },
+                    failedCount = links.count {
+                        it.status == LinkStatus.FAILED || it.status == LinkStatus.DELETED
+                    },
                     searchQuery = searchQuery,
                     onSearchChange = vm::setSearchQuery,
                     selectedFilter = filter,
@@ -196,12 +240,26 @@ fun ListScreen(
                     onPaste = { showPasteDialog = true },
                     onToggleSelection = vm::toggleSelectionMode,
                     selectionMode = selectionMode,
+                    selectedCount = selectedIds.size,
+                    onSelectAll = { vm.toggleSelectAll(shown.map { it.tweetId }) },
+                    allSelected = allSelected,
                     sortExpanded = sortExpanded,
                     onSortExpandedChange = { sortExpanded = it },
                     onSortSelected = {
                         vm.setSortOrder(it)
                         sortExpanded = false
-                    }
+                    },
+                    batchEnabled = selectedIds.isNotEmpty(),
+                    onBatchCopy = {
+                        val text = links
+                            .filter { it.tweetId in selectedIds }
+                            .joinToString("\n") { it.rawUrl }
+                        copyToClipboard(context, "Edqiu 批量链接", text)
+                        snackbar.show("已复制 ${selectedIds.size} 条链接")
+                    },
+                    onBatchDownload = { showBatchPreview = true },
+                    onBatchDownloadAll = vm::downloadAllPending,
+                    onBatchDelete = vm::deleteSelected
                 )
 
                 LazyColumn(
@@ -235,8 +293,11 @@ fun ListScreen(
                                 selectionMode = selectionMode,
                                 selected = link.tweetId in selectedIds,
                                 onSelectionToggle = { vm.toggleSelected(link.tweetId) },
-                                onQuickDelete = if (link.status == LinkStatus.FAILED) {
+                                onQuickDelete = if (link.status == LinkStatus.FAILED || link.status == LinkStatus.DELETED) {
                                     { vm.delete(link.tweetId) }
+                                } else null,
+                                onDownload = if (link.status == LinkStatus.PENDING || link.status == LinkStatus.FAILED) {
+                                    { vm.requestDownload(link.tweetId) }
                                 } else null
                             )
                         }
@@ -263,32 +324,6 @@ fun ListScreen(
                     )
                 }
             }
-
-            AnimatedVisibility(
-                visible = selectionMode,
-                enter = slideInVertically { -it },
-                exit = slideOutVertically { -it },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .zIndex(10f)
-                    .padding(top = 180.dp)
-            ) {
-                SelectionBar(
-                    selectedCount = selectedIds.size,
-                    onSelectAll = { vm.selectAll(shown.map { it.tweetId }) },
-                    onCopy = {
-                        val text = links
-                            .filter { it.tweetId in selectedIds }
-                            .joinToString("\n") { it.rawUrl }
-                        copyToClipboard(context, "Edqiu 批量链接", text)
-                        snackbar.show("已复制 ${selectedIds.size} 条链接")
-                    },
-                    onDownload = vm::downloadSelected,
-                    onDelete = vm::deleteSelected,
-                    onExit = { vm.toggleSelectionMode() },
-                    enabled = selectedIds.isNotEmpty()
-                )
-            }
         }
     }
 
@@ -308,6 +343,68 @@ fun ListScreen(
             onDelete = {
                 vm.delete(link.tweetId)
                 longPressedLink = null
+            }
+        )
+    }
+
+    // 下载结果弹窗：明确告知成功/失败及原因
+    downloadResultDialog?.let { (message, success) ->
+        AlertDialog(
+            onDismissRequest = { downloadResultDialog = null },
+            title = {
+                Text(
+                    when (success) {
+                        true -> "下载成功"
+                        false -> "下载失败"
+                        else -> "下载结果"
+                    }
+                )
+            },
+            text = { Text(message) },
+            confirmButton = {
+                Button(onClick = { downloadResultDialog = null }) { Text("知道了") }
+            }
+        )
+    }
+
+    // 批量下载预览弹窗：展示所选条目缩略图，确认后再发起下载
+    if (showBatchPreview) {
+        val selectedLinks = links.filter { it.tweetId in selectedIds }
+        BatchDownloadPreviewDialog(
+            selected = selectedLinks,
+            onDismiss = { showBatchPreview = false },
+            onConfirm = {
+                showBatchPreview = false
+                // 全选后下载：视为整批操作，确认后直接退出批量模式回到主界面；
+                // 手动多选下载则停留在批量界面继续管理
+                if (allSelected) vm.toggleSelectionMode()
+                vm.downloadSelected()
+            }
+        )
+    }
+
+    // 批量下载状态弹窗：转圈进行中 → 打勾成功 / 打叉失败
+    batchDownloadState?.let { state ->
+        BatchDownloadStatusDialog(
+            state = state,
+            onDismiss = vm::dismissBatchDownloadState
+        )
+    }
+
+    if (showPreDownloadPrompt) {
+        val pendingIds = links.filter { it.status == LinkStatus.PENDING }.map { it.tweetId }
+        AlertDialog(
+            onDismissRequest = { showPreDownloadPrompt = false },
+            title = { Text("批量预下载") },
+            text = { Text("收件箱已有 ${pendingIds.size} 条待处理链接，是否立即批量预下载？") },
+            confirmButton = {
+                Button(onClick = {
+                    showPreDownloadPrompt = false
+                    vm.downloadPending(pendingIds)
+                }) { Text("立即下载") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPreDownloadPrompt = false }) { Text("稍后") }
             }
         )
     }
@@ -351,9 +448,18 @@ private fun InboxHeader(
     onPaste: () -> Unit,
     onToggleSelection: () -> Unit,
     selectionMode: Boolean,
+    selectedCount: Int,
+    allSelected: Boolean,
+    onSelectAll: () -> Unit,
     sortExpanded: Boolean,
     onSortExpandedChange: (Boolean) -> Unit,
-    onSortSelected: (LinkSortOrder) -> Unit
+    onSortSelected: (LinkSortOrder) -> Unit,
+    batchEnabled: Boolean,
+    onBatchCopy: () -> Unit,
+    onBatchDownload: () -> Unit,
+    // 右上角「下载」= 直接下载全部待处理（不再是"进入批量选择"，避免误以为点了没反应）
+    onBatchDownloadAll: () -> Unit,
+    onBatchDelete: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -362,81 +468,164 @@ private fun InboxHeader(
             .padding(horizontal = 12.dp, vertical = 12.dp)
             .animateContentSize()
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "收件箱",
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 28.sp
-                    ),
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    text = "捕获链接、下载进度与历史记录",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                HeaderIconButton(onClick = onPaste, contentDescription = "粘贴链接") {
-                    Icon(
-                        Icons.Default.ContentPaste,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
+        // 顶部区域在「浏览态 ↔ 批量态」之间平滑变形：
+        // 浏览态 = 标题 + 粘贴/批量入口；批量态 = 退出 + 已选计数 + 全选胶囊
+        Crossfade(
+            targetState = selectionMode,
+            animationSpec = androidx.compose.animation.core.tween(220),
+            label = "inbox_header_mode"
+        ) { isSelecting ->
+            if (isSelecting) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    HeaderIconButton(
+                        onClick = onToggleSelection,
+                        contentDescription = "退出批量选择"
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 12.dp)
+                    ) {
+                        Text(
+                            text = "批量管理",
+                            style = MaterialTheme.typography.headlineMedium.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 24.sp
+                            ),
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = if (selectedCount > 0) "已选 $selectedCount 项，点卡片可增减" else "点击卡片选择要处理的链接",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    SelectAllCapsule(
+                        allSelected = allSelected,
+                        onClick = onSelectAll
                     )
                 }
-                HeaderIconButton(
-                    onClick = onToggleSelection,
-                    contentDescription = if (selectionMode) "完成批量选择" else "进入批量选择"
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Crossfade(
-                        targetState = selectionMode,
-                        label = "batch_button_text"
-                    ) { isSelection ->
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            if (isSelection) "完成" else "批量",
-                            color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.labelMedium.copy(
+                            text = "收件箱",
+                            style = MaterialTheme.typography.headlineMedium.copy(
                                 fontWeight = FontWeight.ExtraBold,
-                                lineHeightStyle = LineHeightStyle(
-                                    alignment = LineHeightStyle.Alignment.Center,
-                                    trim = LineHeightStyle.Trim.Both
-                                )
+                                fontSize = 28.sp
                             ),
-                            modifier = Modifier.offset(y = (-1).dp)
+                            color = MaterialTheme.colorScheme.onBackground
                         )
+                        Text(
+                            text = "捕获链接、下载进度与历史记录",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        HeaderIconButton(onClick = onPaste, contentDescription = "粘贴链接") {
+                            Icon(
+                                Icons.Default.ContentPaste,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        // 右上角「下载」：直接批量下载全部待处理，结果走弹窗反馈
+                        HeaderIconButton(
+                            onClick = onBatchDownloadAll,
+                            contentDescription = "下载全部待处理"
+                        ) {
+                            Text(
+                                "下载",
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    lineHeightStyle = LineHeightStyle(
+                                        alignment = LineHeightStyle.Alignment.Center,
+                                        trim = LineHeightStyle.Trim.Both
+                                    )
+                                ),
+                                modifier = Modifier.offset(y = (-1).dp)
+                            )
+                        }
+                        // 批量选择入口独立成「多选」，不再占用「下载」语义
+                        HeaderIconButton(
+                            onClick = onToggleSelection,
+                            contentDescription = "进入批量选择"
+                        ) {
+                            Text(
+                                "多选",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    lineHeightStyle = LineHeightStyle(
+                                        alignment = LineHeightStyle.Alignment.Center,
+                                        trim = LineHeightStyle.Trim.Both
+                                    )
+                                ),
+                                modifier = Modifier.offset(y = (-1).dp)
+                            )
+                        }
                     }
                 }
             }
         }
 
-        GlassSurface(
-            tier = GlassTier.L1,
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 14.dp)
+        // 批量模式下在「待处理」统计版块上方展开操作栏（尺寸与搜索栏统一）
+        AnimatedVisibility(
+            visible = selectionMode,
+            enter = fadeIn() + androidx.compose.animation.expandVertically(),
+            exit = fadeOut() + androidx.compose.animation.shrinkVertically()
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                MetricItem("待处理", pendingCount.toString())
-                MetricDivider()
-                MetricItem("已完成", downloadedCount.toString())
-                MetricDivider()
-                MetricItem("失败", failedCount.toString())
-            }
+            BatchActionBar(
+                selectedCount = selectedCount,
+                enabled = batchEnabled,
+                onCopy = onBatchCopy,
+                onDownload = onBatchDownload,
+                onDelete = onBatchDelete
+            )
         }
+
+        Column {
+            GlassSurface(
+                    tier = GlassTier.L1,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        MetricItem("待处理", pendingCount.toString())
+                        MetricDivider()
+                        MetricItem("已完成", downloadedCount.toString())
+                        MetricDivider()
+                        MetricItem("失败", failedCount.toString())
+                    }
+                }
 
         GlassSurface(
             tier = GlassTier.L1,
@@ -563,6 +752,7 @@ private fun InboxHeader(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+                }
             }
         }
     }
@@ -680,68 +870,158 @@ private fun EmptyStateCard(searching: Boolean, onPaste: () -> Unit) {
     }
 }
 
+/**
+ * 批量下载状态弹窗：派发期间转圈，结束后打勾（成功）或打叉（失败）。
+ */
 @Composable
-private fun SelectionBar(
-    selectedCount: Int,
-    onSelectAll: () -> Unit,
-    onCopy: () -> Unit,
-    onDownload: () -> Unit,
-    onDelete: () -> Unit,
-    onExit: () -> Unit,
-    enabled: Boolean
+private fun BatchDownloadStatusDialog(
+    state: ListViewModel.BatchDownloadUiState,
+    onDismiss: () -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .zIndex(10f)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-    ) {
-        GlassSurface(
-            tier = GlassTier.L3,
-            shape = RoundedCornerShape(26.dp),
-            modifier = Modifier.zIndex(10f)
-        ) {
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.72f)
-                            )
-                        )
-                    )
+    val finished = !state.running
+    AlertDialog(
+        onDismissRequest = { if (finished) onDismiss() },
+        title = {
+            Text(
+                when {
+                    state.running -> "批量下载中"
+                    state.success == true -> "下载成功"
+                    else -> "下载失败"
+                }
             )
-            val buttonColors = ButtonDefaults.textButtonColors(
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                disabledContentColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.34f)
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+        },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                TextButton(onClick = onExit, colors = buttonColors) {
-                    Icon(Icons.Default.Close, contentDescription = "退出批量选择", modifier = Modifier.size(18.dp))
+                if (state.running) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(52.dp),
+                        strokeWidth = 4.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (state.success == true) Icons.Default.CheckCircle else Icons.Default.Cancel,
+                        contentDescription = if (state.success == true) "成功" else "失败",
+                        tint = if (state.success == true) Color(0xFF22A45D) else MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(64.dp)
+                    )
                 }
-                Icon(Icons.Default.LibraryAddCheck, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary)
+                Spacer(modifier = Modifier.height(14.dp))
                 Text(
-                    "已选 $selectedCount",
-                    modifier = Modifier.weight(1f),
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.onPrimary
+                    text = state.message.ifBlank { "正在把所选链接派发给下载器…" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                TextButton(onClick = onSelectAll, colors = buttonColors) { Text("全选") }
-                TextButton(enabled = enabled, onClick = onCopy, colors = buttonColors) { Text("复制") }
-                TextButton(enabled = enabled, onClick = onDownload, colors = buttonColors) {
-                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("下载")
-                }
-                TextButton(enabled = enabled, onClick = onDelete, colors = buttonColors) { Text("删除") }
+            }
+        },
+        confirmButton = {
+            if (finished) {
+                Button(onClick = onDismiss) { Text("知道了") }
             }
         }
+    )
+}
+
+/** 批量模式头部右侧的「全选」胶囊（L2 玻璃 + 主色，与筛选胶囊同语言）。 */
+@Composable
+private fun SelectAllCapsule(
+    allSelected: Boolean,
+    onClick: () -> Unit
+) {
+    GlassSurface(
+        tier = GlassTier.L2,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.clickable { onClick() }
+    ) {
+        Text(
+            text = if (allSelected) "取消全选" else "全选",
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
+}
+
+/**
+ * 批量操作栏：批量模式下展开在「待处理」统计版块上方，
+ * 尺寸与搜索栏统一（46dp 高、16dp 圆角、L1 玻璃）。
+ * 左侧为已选计数胶囊，右侧为复制 / 下载 / 删除三个操作位；删除使用错误色区分。
+ */
+@Composable
+private fun BatchActionBar(
+    selectedCount: Int,
+    enabled: Boolean,
+    onCopy: () -> Unit,
+    onDownload: () -> Unit,
+    onDelete: () -> Unit
+) {
+    GlassSurface(
+        tier = GlassTier.L1,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 14.dp)
+            .height(46.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                modifier = Modifier.padding(start = 8.dp)
+            ) {
+                Text(
+                    text = "已选 $selectedCount",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontSize = 13.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            BatchAction(Icons.Default.ContentCopy, "复制", enabled, onClick = onCopy)
+            BatchAction(Icons.Default.Download, "下载", enabled, onClick = onDownload)
+            BatchAction(Icons.Default.Delete, "删除", enabled, onClick = onDelete, destructive = true)
+        }
+    }
+}
+
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.BatchAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean,
+    destructive: Boolean = false,
+    onClick: () -> Unit
+) {
+    val tint = when {
+        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+        destructive -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp)
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = tint
+        )
     }
 }
 
@@ -757,6 +1037,7 @@ private fun LinkActionDialog(
         LinkStatus.PENDING -> "未下载"
         LinkStatus.DOWNLOADED -> "已下载"
         LinkStatus.FAILED -> "失败${link.lastError?.let { "：$it" } ?: ""}"
+        LinkStatus.DELETED -> "推文不存在"
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -770,7 +1051,10 @@ private fun LinkActionDialog(
         confirmButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = onCopy) { Text("复制") }
-                TextButton(onClick = onDownload) { Text(if (link.status == LinkStatus.FAILED) "重试" else "下载") }
+                // 推文已不存在：无意义再下载，隐藏下载按钮，只留复制/删除
+                if (link.status != LinkStatus.DELETED) {
+                    TextButton(onClick = onDownload) { Text(if (link.status == LinkStatus.FAILED) "重试" else "下载") }
+                }
                 TextButton(onClick = onDelete) { Text("删除") }
             }
         },
@@ -784,3 +1068,93 @@ enum class Filter(val label: String) {
     DOWNLOADED("已完成"),
     FAILED("失败")
 }
+
+/** [Filter] 的 rememberSaveable Saver：按 name 字符串存取，进程重建后也能恢复。 */
+private val FilterSaver = listSaver<Filter, String>(
+    save = { listOf(it.name) },
+    restore = { Filter.valueOf(it[0]) }
+)
+
+/**
+ * 批量下载预览弹窗：横向滚动展示所选条目的缩略图（无图时显示占位），
+ * 确认后才发起批量下载。
+ */
+@Composable
+private fun BatchDownloadPreviewDialog(
+    selected: List<SavedLink>,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("批量下载预览（${selected.size} 条）") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (selected.isEmpty()) {
+                    Text("没有已选中的条目")
+                } else {
+                    Text(
+                        "即将下载以下 ${selected.size} 条内容：",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(selected, key = { it.tweetId }) { link ->
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.width(88.dp)
+                            ) {
+                                if (link.thumbnailUrl.isNullOrBlank()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(88.dp, 66.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Download,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                } else {
+                                    AsyncImage(
+                                        model = link.thumbnailUrl,
+                                        contentDescription = link.caption ?: link.tweetId,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .size(88.dp, 66.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    )
+                                }
+                                Text(
+                                    text = link.authorName ?: link.authorId ?: link.tweetId,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                enabled = selected.isNotEmpty()
+            ) { Text("开始下载") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+/** 待处理链接达到该数量时，在新增保存后提示批量预下载。 */
+private const val PRE_DOWNLOAD_PROMPT_THRESHOLD = 5

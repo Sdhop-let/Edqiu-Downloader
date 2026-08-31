@@ -23,6 +23,7 @@ fun StatusBadge(status: LinkStatus, modifier: Modifier = Modifier) {
         LinkStatus.PENDING -> "未下载"
         LinkStatus.DOWNLOADED -> "已下载"
         LinkStatus.FAILED -> "失败"
+        LinkStatus.DELETED -> "推文不存在"
     }
     Row(
         modifier = modifier,

@@ -15,7 +15,11 @@ import com.ed.edqiu.data.preferences.ProxyPreferences
 import com.ed.edqiu.service.DirectDownloader
 import com.ed.edqiu.service.FXTwitterResolver
 import com.ed.edqiu.service.YoutubeDLService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
 
@@ -33,6 +37,9 @@ class DownloadRepository(private val context: Context) {
 
     val outputDir: String
         get() = pathPreferences.resolveDownloadDir(context)
+
+    private val taskRepo = DownloadTaskRepo(context)
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * Resolve Twitter/X metadata using dual strategy:
@@ -88,6 +95,7 @@ class DownloadRepository(private val context: Context) {
         proxyUrl: String? = null
     ): Result<String> {
         val taskThumbnail = format.thumbnail?.takeIf { it.isNotBlank() } ?: videoInfo.thumbnail
+        val downloaderType = if (format.directUrl != null) "DIRECT" else "YOUTUBEDL"
         val task = DownloadTask(
             url = url,
             title = videoInfo.title,
@@ -102,6 +110,7 @@ class DownloadRepository(private val context: Context) {
         )
 
         DownloadTaskBus.add(task)
+        taskRepo.addTask(task, downloaderType)
 
         // Choose download method based on whether we have a direct URL
         val result = if (format.directUrl != null) {
@@ -184,6 +193,21 @@ class DownloadRepository(private val context: Context) {
             }
         }
 
+        val finalTask = if (finalizedResult.isSuccess) {
+            task.copy(
+                status = DownloadStatus.COMPLETED,
+                outputPath = finalizedResult.getOrNull().orEmpty(),
+                progress = 100f,
+                completedAt = System.currentTimeMillis()
+            )
+        } else {
+            task.copy(
+                status = DownloadStatus.FAILED,
+                errorMessage = finalizedResult.exceptionOrNull()?.message ?: "Unknown error"
+            )
+        }
+        taskRepo.addTask(finalTask, downloaderType)
+
         return finalizedResult
     }
 
@@ -233,14 +257,19 @@ class DownloadRepository(private val context: Context) {
 
     fun cancelDownload(taskId: String) {
         DownloadTaskBus.cancel(taskId)
+        ioScope.launch {
+            taskRepo.updateTask(taskId) { it.copy(status = DownloadStatus.CANCELLED) }
+        }
     }
 
     fun removeTask(taskId: String) {
         DownloadTaskBus.remove(taskId)
+        ioScope.launch { taskRepo.removeTask(taskId) }
     }
 
     fun clearCompleted() {
         DownloadTaskBus.clearCompleted()
+        ioScope.launch { taskRepo.removeCompleted() }
     }
 
     /** Sanitize filename to remove characters not allowed in file names. */

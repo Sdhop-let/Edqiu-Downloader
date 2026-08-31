@@ -10,5 +10,6 @@ data class TweetMeta(
     val authorName: String? = null,
     val caption: String? = null,
     val avatarUrl: String? = null,
-    val thumbnailUrl: String? = null
+    val thumbnailUrl: String? = null,
+    val authorBio: String? = null
 )

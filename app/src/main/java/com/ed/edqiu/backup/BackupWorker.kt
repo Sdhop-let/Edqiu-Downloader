@@ -49,8 +49,18 @@ enum class BackupScope {
 object BackupSettings {
 
     private const val PREFS = "backup_settings"
+    private const val KEY_SELECTED = "selected_provider"
     private fun scopeKey(providerId: String) = "scope_$providerId"
     private fun autoKey(providerId: String) = "auto_$providerId"
+
+    /** 备份中心当前选中的网盘 id（预下载联动 / 备份状态页共用；null = 从未选中）。 */
+    fun selectedProvider(context: Context): String? =
+        prefs(context).getString(KEY_SELECTED, null)
+
+    /** 持久化备份中心当前选中的网盘 id。 */
+    fun setSelectedProvider(context: Context, providerId: String) {
+        prefs(context).edit().putString(KEY_SELECTED, providerId).apply()
+    }
 
     fun scope(context: Context, providerId: String): BackupScope {
         val name = prefs(context).getString(scopeKey(providerId), null) ?: return BackupScope.ALL
@@ -133,6 +143,13 @@ object BackupFiles {
     fun isBackupMedia(name: String): Boolean =
         name.substringAfterLast('.', "").lowercase() in ALL_EXTS
 
+    /**
+     * 扫描监控目录下全部受支持媒体文件（视频 + 图片），供备份状态页展示。
+     * 不做任何去重/账本过滤 —— 展示页需要完整列表来标识「已上传 / 未上传」。
+     */
+    fun scanMediaFiles(context: Context, monitorUri: String?): List<File> =
+        resolveFiles(context, monitorUri)
+
     fun filterByScope(files: List<File>, scope: BackupScope): List<File> = when (scope) {
         BackupScope.ALL -> files
         BackupScope.VIDEO -> files.filter { it.extension.lowercase() in VIDEO_EXTS }
@@ -152,6 +169,7 @@ object BackupFiles {
         scope: BackupScope,
         providerId: String,
         doneTaskIds: Set<String>,
+        failedTaskIds: Set<String> = emptySet(),
         ledger: BackupLedgerRepository? = null,
     ): List<File> = withContext(Dispatchers.IO) {
         val raw = resolveFiles(context, monitorUri)
@@ -159,6 +177,8 @@ object BackupFiles {
             .filter { file ->
                 val taskId = BackupTask.computeId(providerId, file.name)
                 if (taskId in doneTaskIds) return@filter false
+                // 已 FAILED 的历史任务不自动重传（避免每个周期把失败大文件整盘重传），由用户手动重试
+                if (taskId in failedTaskIds) return@filter false
                 // 账本增量：文件相对账本未变化（size + mtime 一致）→ 跳过
                 ledger?.isUnchanged(providerId, file.name, file) != true
             }
@@ -250,12 +270,11 @@ class BackupWorker(
 
         val monitorUri = container.settingsRepository.monitorDirUriFlow.first()
         val scope = BackupSettings.scope(applicationContext, targetId)
-        val doneTaskIds = container.backupTaskStore.load()
-            .filter { it.targetId == targetId && it.status == BackupTaskStatus.DONE }
-            .map { it.taskId }
-            .toSet()
+        val tasks = container.backupTaskStore.load().filter { it.targetId == targetId }
+        val doneTaskIds = tasks.filter { it.status == BackupTaskStatus.DONE }.map { it.taskId }.toSet()
+        val failedTaskIds = tasks.filter { it.status == BackupTaskStatus.FAILED }.map { it.taskId }.toSet()
         val files = BackupFiles.collect(
-            applicationContext, monitorUri, scope, targetId, doneTaskIds,
+            applicationContext, monitorUri, scope, targetId, doneTaskIds, failedTaskIds,
             container.backupLedgerRepository,
         )
         if (files.isNotEmpty()) {

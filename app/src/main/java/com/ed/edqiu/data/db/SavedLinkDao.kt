@@ -91,7 +91,8 @@ interface SavedLinkDao {
             author_name = COALESCE(:authorName, author_name),
             caption = COALESCE(:caption, caption),
             thumbnail_url = COALESCE(:thumbnailUrl, thumbnail_url),
-            avatar_url = COALESCE(:avatarUrl, avatar_url)
+            avatar_url = COALESCE(:avatarUrl, avatar_url),
+            author_bio = COALESCE(:authorBio, author_bio)
         WHERE tweetId = :tweetId
         """
     )
@@ -101,7 +102,8 @@ interface SavedLinkDao {
         authorName: String?,
         caption: String?,
         thumbnailUrl: String?,
-        avatarUrl: String?
+        avatarUrl: String?,
+        authorBio: String?
     )
 
     @Query(
@@ -149,6 +151,47 @@ interface SavedLinkDao {
     )
     suspend fun resetFailures(tweetIds: List<String>)
 
+    /**
+     * 推文已不存在（被删除/私密/未公开）：标记为终态 DELETED。
+     * 不累计 attempt_count、不设 next_retry_at —— 永久失败，不再自动重试；
+     * last_error 存面向用户的文案「推文不存在」。
+     */
+    @Query(
+        """
+        UPDATE saved_links
+        SET status = 'DELETED',
+            last_attempt_at = :attemptedAt,
+            last_error = '推文不存在',
+            next_retry_at = NULL
+        WHERE tweetId = :tweetId
+        """
+    )
+    suspend fun markTweetGone(tweetId: String, attemptedAt: Long)
+
+    /**
+     * 批量重置匹配 last_error 模式的历史失败记录。
+     *
+     * 用于清理**已修复 bug 期间**残留的错误数据：旧版本下载器曾通过
+     * startActivity(自身 MainActivity) 触发下载，旧逻辑会抛
+     * `Unable to find explicit activity class {com.ed.edqiu/com.ed.edqiu.MainActivity}`
+     * 并写入 last_error；该 bug 已修复，但错误记录会持续显示在详情页。
+     * 启动时调用一次即可把这些记录重置回 PENDING，让用户重新下载。
+     *
+     * @return 受影响的行数（用于日志确认）
+     */
+    @Query(
+        """
+        UPDATE saved_links
+        SET status = 'PENDING',
+            attempt_count = 0,
+            last_attempt_at = NULL,
+            last_error = NULL,
+            next_retry_at = NULL
+        WHERE last_error LIKE :pattern
+        """
+    )
+    suspend fun resetFailuresByErrorPattern(pattern: String): Int
+
     @Query("DELETE FROM saved_links WHERE tweetId = :tweetId")
     suspend fun delete(tweetId: String)
 
@@ -160,4 +203,8 @@ interface SavedLinkDao {
 
     @Query("SELECT COUNT(*) FROM saved_links WHERE status = :status")
     fun countByStatus(status: LinkStatus): Flow<Int>
+
+    /** 按状态取 tweetId 列表（自动预下载攒批用）。 */
+    @Query("SELECT tweetId FROM saved_links WHERE status = :status ORDER BY saved_at DESC")
+    suspend fun getTweetIdsByStatus(status: LinkStatus): List<String>
 }

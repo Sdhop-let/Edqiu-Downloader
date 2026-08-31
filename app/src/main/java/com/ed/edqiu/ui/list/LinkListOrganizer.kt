@@ -50,6 +50,7 @@ object LinkListOrganizer {
 
     private fun statusOrder(status: LinkStatus): Int = when (status) {
         LinkStatus.FAILED -> 0
+        LinkStatus.DELETED -> 0
         LinkStatus.PENDING -> 1
         LinkStatus.DOWNLOADED -> 2
     }

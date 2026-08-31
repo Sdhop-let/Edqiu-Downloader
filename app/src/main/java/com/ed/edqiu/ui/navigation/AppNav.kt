@@ -40,8 +40,12 @@ import com.ed.edqiu.ui.history.HistoryScreen
 import com.ed.edqiu.ui.history.HistoryViewModel
 import com.ed.edqiu.ui.list.ListScreen
 import com.ed.edqiu.ui.list.ListViewModel
+import com.ed.edqiu.ui.authors.AuthorsScreen
+import com.ed.edqiu.ui.authors.AuthorsViewModel
 import com.ed.edqiu.ui.backup.CloudBackupScreen
 import com.ed.edqiu.ui.backup.CloudBackupViewModel
+import com.ed.edqiu.ui.backup.MediaBackupScreen
+import com.ed.edqiu.ui.backup.MediaBackupViewModel
 import com.ed.edqiu.ui.screens.MineScreen
 import com.ed.edqiu.ui.settings.BackupViewModel
 import com.ed.edqiu.ui.settings.SettingsScreen as EdqiuSettingsScreen
@@ -65,6 +69,7 @@ private object Routes {
     const val DOWNLOAD_SHELL = "download_shell"
     const val DETAIL = "detail/{tweetId}"
     const val BACKUP = "backup_center"
+    const val MEDIA_BACKUP = "media_backup"
     fun detail(tweetId: String) = "detail/$tweetId"
 }
 
@@ -133,6 +138,7 @@ fun EdqiuApp(container: AppContainer) {
                     backupEngine = container.backupEngine,
                     backupCredentialStore = container.backupCredentialStore,
                     backupLedgerRepository = container.backupLedgerRepository,
+                    preDownloadManager = container.preDownloadManager,
                     application = application
                 )
             }
@@ -195,6 +201,14 @@ fun EdqiuApp(container: AppContainer) {
                                         )
                                     },
                                     openCloudBackup = { nav.navigate(Routes.BACKUP) },
+                                    onOpenMediaBackup = { nav.navigate(Routes.MEDIA_BACKUP) },
+                                    authorsContent = { onBack ->
+                                        val vm = viewModel<AuthorsViewModel>(factory = factory)
+                                        AuthorsScreen(
+                                            vm = vm,
+                                            onBack = onBack
+                                        )
+                                    },
                                     floatingTabBarEnabled = floatingTabBar,
                                     liquidGlassEnabled = liquidGlass,
                                     predictiveBackEnabled = predictiveBack
@@ -215,6 +229,13 @@ fun EdqiuApp(container: AppContainer) {
                             composable(Routes.BACKUP) {
                                 val vm = viewModel<CloudBackupViewModel>(factory = factory)
                                 CloudBackupScreen(
+                                    vm = vm,
+                                    onBack = { nav.popBackStack() }
+                                )
+                            }
+                            composable(Routes.MEDIA_BACKUP) {
+                                val vm = viewModel<MediaBackupViewModel>(factory = factory)
+                                MediaBackupScreen(
                                     vm = vm,
                                     onBack = { nav.popBackStack() }
                                 )

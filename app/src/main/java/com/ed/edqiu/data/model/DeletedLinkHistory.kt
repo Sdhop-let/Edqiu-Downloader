@@ -39,6 +39,9 @@ data class DeletedLinkHistory(
     @ColumnInfo(name = "avatar_url")
     val avatarUrl: String? = null,
 
+    @ColumnInfo(name = "author_bio")
+    val authorBio: String? = null,
+
     @ColumnInfo(name = "saved_at")
     val savedAt: Long,
 
@@ -76,6 +79,7 @@ data class DeletedLinkHistory(
         caption = caption,
         thumbnailUrl = thumbnailUrl,
         avatarUrl = avatarUrl,
+        authorBio = authorBio,
         savedAt = savedAt,
         status = status,
         filePath = filePath,
@@ -101,6 +105,7 @@ data class DeletedLinkHistory(
             caption = link.caption,
             thumbnailUrl = link.thumbnailUrl,
             avatarUrl = link.avatarUrl,
+            authorBio = link.authorBio,
             savedAt = link.savedAt,
             status = link.status,
             filePath = link.filePath,

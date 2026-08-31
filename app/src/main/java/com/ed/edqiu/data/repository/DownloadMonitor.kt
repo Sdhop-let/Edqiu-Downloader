@@ -7,6 +7,7 @@ import android.provider.OpenableColumns
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.ed.edqiu.data.metadata.MetadataFetcher
+import com.ed.edqiu.data.preferences.DownloadPathPreferences
 import com.ed.edqiu.domain.TweetIdExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -62,6 +63,24 @@ class DownloadMonitor(private val context: Context) {
                 ScanResult.Failure(error.message ?: "Scan failed")
             }
         }
+
+    /**
+     * 合并扫描监控目录（用户在设置中指定的 SAF 目录，或内置下载目录）
+     * 与下载器设置的自定义下载目录，按 tweetId 汇总，监控目录结果优先。
+     */
+    suspend fun scanMonitorAndDownloadDirs(monitorUri: String?): Map<String, DownloadedItem> {
+        val merged = LinkedHashMap<String, DownloadedItem>()
+        (scan(monitorUri) as? ScanResult.Success)?.let { merged.putAll(it.items) }
+        runCatching {
+            val downloadDir = DownloadPathPreferences(context).resolveDownloadDir(context)
+            if (downloadDir.isNotBlank()) {
+                (scan(Uri.fromFile(File(downloadDir)).toString()) as? ScanResult.Success)
+                    ?.items
+                    ?.forEach { (tweetId, item) -> merged.putIfAbsent(tweetId, item) }
+            }
+        }
+        return merged
+    }
 
     private fun queryInternalFiles(): List<FileEntry> {
         val root = File(

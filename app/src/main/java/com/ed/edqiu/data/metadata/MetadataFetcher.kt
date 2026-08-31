@@ -63,7 +63,8 @@ class MetadataFetcher {
                     authorName = t.author?.name,
                     caption = t.text,
                     avatarUrl = t.author?.avatarUrl,
-                    thumbnailUrl = firstMediaThumbnail(t.media)
+                    thumbnailUrl = firstMediaThumbnail(t.media),
+                    authorBio = t.author?.description?.takeIf { it.isNotBlank() }
                 )
             } else {
                 null
@@ -127,7 +128,8 @@ class MetadataFetcher {
         @SerialName("screen_name")
         val screenName: String? = null,
         @SerialName("avatar_url")
-        val avatarUrl: String? = null
+        val avatarUrl: String? = null,
+        val description: String? = null
     )
 
     @Serializable

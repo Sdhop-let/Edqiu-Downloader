@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -56,7 +57,9 @@ fun LinkCard(
     selectionMode: Boolean = false,
     selected: Boolean = false,
     onSelectionToggle: () -> Unit = {},
-    onQuickDelete: (() -> Unit)? = null
+    onQuickDelete: (() -> Unit)? = null,
+    // 卡片直接下载（待处理/失败时显示，免进详情页即可下载）
+    onDownload: (() -> Unit)? = null
 ) {
     val accent = statusColor(link.status)
     val author = link.authorName?.takeIf { it.isNotBlank() }
@@ -97,9 +100,9 @@ fun LinkCard(
                     checked = selected,
                     onCheckedChange = { onSelectionToggle() }
                 )
-            } else {
-                LinkPreviewImage(link = link, accent = accent)
             }
+            // 批量模式下也保留视频/图片预览缩略图（勾选框与缩略图并排）
+            LinkPreviewImage(link = link, accent = accent)
 
             Column(
                 modifier = Modifier.weight(1f),
@@ -120,19 +123,45 @@ fun LinkCard(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     StatusPill(status = link.status)
-                    // 失败记录快速删除键：仅 FAILED 且非批量选择模式时显示
-                    if (link.status == LinkStatus.FAILED && !selectionMode && onQuickDelete != null) {
+                    // 待处理/失败记录直接下载：免进详情页，点卡片旁下载键即触发（推文不存在则无意义）
+                    if ((link.status == LinkStatus.PENDING || link.status == LinkStatus.FAILED) &&
+                        !selectionMode && onDownload != null
+                    ) {
                         Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            onClick = onDownload,
+                            shape = CircleShape,
+                            color = accent.copy(alpha = 0.10f),
+                            border = BorderStroke(1.dp, accent.copy(alpha = 0.30f))
+                        ) {
+                            Icon(
+                                Icons.Default.Download,
+                                contentDescription = "下载",
+                                tint = accent,
+                                modifier = Modifier.padding(4.dp).size(16.dp)
+                            )
+                        }
+                    }
+                    // 失败/推文不存在记录快速删除键：非批量选择模式时显示（死链最需要一键清理）
+                    if ((link.status == LinkStatus.FAILED || link.status == LinkStatus.DELETED) &&
+                        !selectionMode && onQuickDelete != null
+                    ) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        val deleteTint = if (link.status == LinkStatus.DELETED) {
+                            statusColor(LinkStatus.DELETED)
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        }
                         Surface(
                             onClick = onQuickDelete,
                             shape = CircleShape,
-                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.10f),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.25f))
+                            color = deleteTint.copy(alpha = 0.10f),
+                            border = BorderStroke(1.dp, deleteTint.copy(alpha = 0.25f))
                         ) {
                             Icon(
                                 Icons.Default.Delete,
                                 contentDescription = "删除失败记录",
-                                tint = MaterialTheme.colorScheme.error,
+                                tint = deleteTint,
                                 modifier = Modifier.padding(4.dp).size(16.dp)
                             )
                         }
@@ -265,6 +294,7 @@ private fun StatusPill(status: LinkStatus) {
         LinkStatus.PENDING -> "未下载"
         LinkStatus.DOWNLOADED -> "已下载"
         LinkStatus.FAILED -> "失败"
+        LinkStatus.DELETED -> "推文不存在"
     }
     Text(
         text = label,

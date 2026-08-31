@@ -40,6 +40,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
+/** 清理已完成/已取消备份历史任务时的年龄阈值（30 天）。 */
+private const val CLEANUP_OLDER_THAN_MS = 30L * 24 * 60 * 60 * 1000
+
 /** 网盘在列表中的展示状态。 */
 data class ProviderUiState(
     val id: String,
@@ -146,6 +149,8 @@ class CloudBackupViewModel(
     init {
         viewModelScope.launch {
             taskStore.load()
+            // 恢复上次选中的网盘（预下载联动 / 备份状态页依赖同一持久化值）
+            BackupSettings.selectedProvider(context)?.let { selectProvider(it) }
             refreshProviders()
         }
     }
@@ -297,7 +302,7 @@ class CloudBackupViewModel(
             }
             val name = target.displayName
             target.testConnection().fold(
-                onSuccess = { postMessage("$name 连接正常，登录状态已校验") },
+                onSuccess = { postMessage("$name 连接正常，授权有效") },
                 onFailure = { postMessage("$name 连接失败：${it.message}") },
             )
             refreshProviders()
@@ -326,8 +331,9 @@ class CloudBackupViewModel(
 
     // ================= 备份设置 =================
 
-    /** 选中某网盘（加载其备份范围 / 自动备份开关）。 */
+    /** 选中某网盘（加载其备份范围 / 自动备份开关，并持久化供预下载联动与备份状态页读取）。 */
     fun selectProvider(providerId: String) {
+        BackupSettings.setSelectedProvider(context, providerId)
         _settings.update {
             it.copy(
                 selectedProviderId = providerId,
@@ -369,12 +375,11 @@ class CloudBackupViewModel(
                 return@launch
             }
             val scope = BackupSettings.scope(context, providerId)
-            val doneTaskIds = taskStore.load()
-                .filter { it.targetId == providerId && it.status == BackupTaskStatus.DONE }
-                .map { it.taskId }
-                .toSet()
+            val tasks = taskStore.load().filter { it.targetId == providerId }
+            val doneTaskIds = tasks.filter { it.status == BackupTaskStatus.DONE }.map { it.taskId }.toSet()
+            val failedTaskIds = tasks.filter { it.status == BackupTaskStatus.FAILED }.map { it.taskId }.toSet()
             val monitorUri = settingsRepository.monitorDirUriFlow.first()
-            val files = BackupFiles.collect(context, monitorUri, scope, providerId, doneTaskIds, ledgerRepository)
+            val files = BackupFiles.collect(context, monitorUri, scope, providerId, doneTaskIds, failedTaskIds, ledgerRepository)
             if (files.isEmpty()) {
                 postMessage("没有需要备份的新文件")
                 return@launch
@@ -410,6 +415,15 @@ class CloudBackupViewModel(
     /** 取消单个任务（仅 PENDING / UPLOADING 可取消）。 */
     fun cancelTask(taskId: String) {
         viewModelScope.launch { engine.cancel(taskId) }
+    }
+
+    /** 清理当前选中网盘的已完成/已取消历史任务（保留可执行与可重试任务）。 */
+    fun cleanupFinishedTasks(providerId: String) {
+        viewModelScope.launch {
+            val removed = taskStore.deleteFinished(providerId, CLEANUP_OLDER_THAN_MS)
+            refreshProviders()
+            postMessage(if (removed > 0) "已清理 $removed 条已完成历史记录" else "没有可清理的历史任务")
+        }
     }
 
     // ================= 内部 =================

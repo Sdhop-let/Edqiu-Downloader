@@ -94,6 +94,7 @@ import com.ed.edqiu.system.DeviceCapabilityReader
 import com.ed.edqiu.ui.components.DynamicSwitch
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
+import com.ed.edqiu.ui.components.InlineFeedbackBar
 import com.ed.edqiu.ui.navigation.LocalSnackbarController
 import com.ed.edqiu.ui.navigation.SnackbarController
 import com.ed.edqiu.ui.theme.Monet
@@ -158,17 +159,22 @@ fun SettingsScreen(
         manualBackupPath = backupDirUri.orEmpty().removePrefix("file://")
     }
 
+    // 内联反馈：操作结果固定显示在触发按钮所属卡片内，5s 后动画消失（替代全局顶部 Snackbar）
+    var backupFeedback by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(feedback) {
         feedback?.let {
-            snackbar.show(it)
+            backupFeedback = it
             backupVm.clearFeedback()
         }
     }
 
+    var monitorFeedback by remember { mutableStateOf<String?>(null) }
+
     val monitorPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null && context.persistTreePermission(uri)) {
             scope.launch { settings.setMonitorDirUri(uri.toString()) }
-            snackbar.show("监控目录已更新")
+            monitorFeedback = "监控目录已更新"
         }
     }
     val backupDirectoryPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -303,11 +309,16 @@ fun SettingsScreen(
                 onClick = {
                     val normalized = normalizeMonitorPath(manualMonitorPath)
                     scope.launch { settings.setMonitorDirUri(normalized) }
-                    snackbar.show("监控目录已更新")
+                    monitorFeedback = "监控目录已更新"
                 },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp)
             ) { Text("保存监控路径") }
+            // 反馈固定显示在「保存监控路径」按钮下方，5s 后动画消失
+            InlineFeedbackBar(
+                message = monitorFeedback,
+                onDismiss = { monitorFeedback = null }
+            )
             TextButton(onClick = { scope.launch { settings.setMonitorDirUri(null) } }) {
                 Text("恢复默认监控目录")
             }
@@ -365,6 +376,11 @@ fun SettingsScreen(
             lastBackupError?.let {
                 Text("最近错误：$it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
+            // 备份/导入/导出反馈固定显示在卡片按钮下方，5s 后动画消失
+            InlineFeedbackBar(
+                message = backupFeedback,
+                onDismiss = { backupFeedback = null }
+            )
         }
         }
 

@@ -11,14 +11,16 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.ed.edqiu.data.model.MediaType
 
 @Database(
-    entities = [DownloadHistoryEntity::class],
-    version = 4,
+    entities = [DownloadHistoryEntity::class, DownloadTaskEntity::class],
+    version = 6,
     exportSchema = false
 )
 @TypeConverters(AppDatabase.Converters::class)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun downloadHistoryDao(): DownloadHistoryDao
+
+    abstract fun downloadTaskDao(): DownloadTaskDao
 
     class Converters {
         @TypeConverter
@@ -52,6 +54,104 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `download_tasks` (
+                        `id` TEXT NOT NULL,
+                        `url` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `thumbnail` TEXT NOT NULL,
+                        `uploader` TEXT NOT NULL,
+                        `formatId` TEXT NOT NULL,
+                        `quality` TEXT NOT NULL,
+                        `ext` TEXT NOT NULL,
+                        `mediaType` TEXT NOT NULL,
+                        `mediaIndex` INTEGER,
+                        `progress` REAL NOT NULL,
+                        `etaSeconds` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `outputPath` TEXT NOT NULL,
+                        `errorMessage` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `completedAt` INTEGER,
+                        `downloaderType` TEXT NOT NULL,
+                        `isCancelled` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                
+            }
+        }
+
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // 旧版 download_history 混入了作者残留列（authorName/authorAvatar），
+                // 与当前实体列集不符，Room 会因 schema 不一致直接崩溃。
+                // 重建为标准列集并保留原有数据，同时补建 download_tasks 表。
+                database.execSQL("ALTER TABLE `download_history` RENAME TO `download_history_old`")
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `download_history` (
+                        `id` TEXT NOT NULL,
+                        `url` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `thumbnail` TEXT NOT NULL,
+                        `uploader` TEXT NOT NULL,
+                        `quality` TEXT NOT NULL,
+                        `mediaIndex` INTEGER,
+                        `mediaType` TEXT NOT NULL,
+                        `filePath` TEXT NOT NULL,
+                        `fileSize` INTEGER NOT NULL,
+                        `duration` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `completedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    INSERT INTO `download_history`
+                        (`id`,`url`,`title`,`thumbnail`,`uploader`,`quality`,`mediaIndex`,`mediaType`,`filePath`,`fileSize`,`duration`,`createdAt`,`completedAt`)
+                    SELECT
+                        `id`,`url`,`title`,`thumbnail`,`uploader`,`quality`,`mediaIndex`,`mediaType`,`filePath`,`fileSize`,`duration`,`createdAt`,`completedAt`
+                    FROM `download_history_old`
+                    """.trimIndent()
+                )
+                database.execSQL("DROP TABLE `download_history_old`")
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `download_tasks` (
+                        `id` TEXT NOT NULL,
+                        `url` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `thumbnail` TEXT NOT NULL,
+                        `uploader` TEXT NOT NULL,
+                        `formatId` TEXT NOT NULL,
+                        `quality` TEXT NOT NULL,
+                        `ext` TEXT NOT NULL,
+                        `mediaType` TEXT NOT NULL,
+                        `mediaIndex` INTEGER,
+                        `progress` REAL NOT NULL,
+                        `etaSeconds` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `outputPath` TEXT NOT NULL,
+                        `errorMessage` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `completedAt` INTEGER,
+                        `downloaderType` TEXT NOT NULL,
+                        `isCancelled` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -59,7 +159,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "twitter_downloader.db"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .fallbackToDestructiveMigration()
                 .build().also { INSTANCE = it }
             }

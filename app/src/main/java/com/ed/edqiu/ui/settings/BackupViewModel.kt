@@ -65,7 +65,11 @@ class BackupViewModel(
     fun setBackupDirectory(uri: Uri?) {
         viewModelScope.launch(Dispatchers.IO) {
             settingsRepository.setBackupDirUri(uri?.toString())
-            feedbackMutable.value = if (uri == null) "已清除自动备份目录" else "已设置自动备份目录"
+            if (uri == null) {
+                feedbackMutable.value = "已清除自动备份目录"
+            } else {
+                scanImportAndPrune(uri)
+            }
         }
     }
 
@@ -73,7 +77,36 @@ class BackupViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             val normalized = path?.trim()?.takeIf { it.isNotBlank() }
             settingsRepository.setBackupDirUri(normalized)
-            feedbackMutable.value = if (normalized == null) "已清除自动备份目录" else "已设置自动备份目录"
+            when (normalized) {
+                null -> feedbackMutable.value = "已清除自动备份目录"
+                else -> scanImportAndPrune(Uri.parse(normalized))
+            }
+        }
+    }
+
+    /**
+     * 设置备份目录后先行扫描：目录中已有备份则导入最新一份，
+     * 并清理超过 7 天的过期备份文件。
+     */
+    private suspend fun scanImportAndPrune(treeUri: Uri) {
+        runCatching {
+            var message = "已设置自动备份目录"
+            val latest = backupRepository.latestBackupUri(treeUri)
+            if (latest != null) {
+                val backup = backupRepository.readAndValidate(latest)
+                val result = backupRepository.restore(backup, RestoreMode.MERGE)
+                message += "，已导入最新备份：" +
+                    "${result.activeImported} 条收件箱、${result.historyImported} 条回收站记录" +
+                    "（跳过 ${result.activeSkipped + result.historySkipped} 条）"
+                val monitorUri = settingsRepository.monitorDirUriFlow.first()
+                savedLinkRepository.refreshStatuses(monitorUri)
+                savedLinkRepository.importScannedDownloads(monitorUri)
+            }
+            val pruned = backupRepository.pruneBackupsOlderThan(treeUri)
+            if (pruned > 0) message += "，已清理 $pruned 份超过 7 天的过期备份"
+            feedbackMutable.value = message
+        }.onFailure { error ->
+            feedbackMutable.value = error.message ?: "扫描备份目录失败"
         }
     }
 
@@ -106,6 +139,7 @@ class BackupViewModel(
         pendingImportMutable.value = null
         val monitorUri = settingsRepository.monitorDirUriFlow.first()
         savedLinkRepository.refreshStatuses(monitorUri)
+        savedLinkRepository.importScannedDownloads(monitorUri)
         feedbackMutable.value =
             "已导入 ${result.activeImported} 条收件箱记录、${result.historyImported} 条回收站记录；" +
                 "跳过 ${result.activeSkipped + result.historySkipped} 条"
@@ -114,9 +148,12 @@ class BackupViewModel(
     fun backupNow() = runBusy {
         val uri = backupDirUri.value?.let(Uri::parse)
             ?: error("请先选择自动备份目录")
-        backupRepository.backupToDirectory(uri)
-        settingsRepository.recordBackupSuccess(System.currentTimeMillis())
-        feedbackMutable.value = "自动备份目录已写入新备份"
+        if (backupRepository.backupToDirectory(uri) == null) {
+            feedbackMutable.value = "没有需要备份的记录"
+        } else {
+            settingsRepository.recordBackupSuccess(System.currentTimeMillis())
+            feedbackMutable.value = "自动备份目录已写入新备份"
+        }
     }
 
     fun clearFeedback() {

@@ -14,7 +14,7 @@ import com.ed.edqiu.data.model.SavedLink
 
 @Database(
     entities = [SavedLink::class, DeletedLinkHistory::class, BackupLedgerEntity::class],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -114,13 +114,24 @@ abstract class EdqiuDatabase : RoomDatabase() {
             "CREATE INDEX IF NOT EXISTS index_backup_ledger_state ON backup_ledger(state)"
         )
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_5_6_SQL.forEach(db::execSQL)
+            }
+        }
+
+        val MIGRATION_5_6_SQL = listOf(
+            "ALTER TABLE saved_links ADD COLUMN author_bio TEXT DEFAULT NULL",
+            "ALTER TABLE deleted_link_history ADD COLUMN author_bio TEXT DEFAULT NULL"
+        )
+
         fun getDatabase(context: Context): EdqiuDatabase {
             return INSTANCE ?: synchronized(lock) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     EdqiuDatabase::class.java,
                     DB_NAME
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
                     .also { INSTANCE = it }

@@ -70,6 +70,8 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector)
     data object DownloaderSettings : Screen("downloader_settings", "下载器设置", Icons.Outlined.Tune)
     /** 二级页：收件箱设置（分组过滤） */
     data object EdqiuSettings : Screen("edqiu_settings", "收件箱设置", Icons.Outlined.Settings)
+    /** 二级页：作者作品 */
+    data object Authors : Screen("edqiu_authors", "作者作品", EdqiuIcons.Profile)
 }
 
 /**
@@ -80,7 +82,8 @@ class MineNav(
     val openTrash: () -> Unit,
     val openDownloaderSection: (String) -> Unit,
     val openEdqiuSection: (String) -> Unit,
-    val openBackupCenter: () -> Unit
+    val openBackupCenter: () -> Unit,
+    val openAuthors: () -> Unit
 )
 
 @Composable
@@ -92,6 +95,8 @@ fun AppNavigation(
     settingsContent: (@Composable (downloaderSettings: @Composable () -> Unit, mineNav: MineNav) -> Unit)? = null,
     edqiuSettingsContent: (@Composable (section: String?, onBack: () -> Unit) -> Unit)? = null,
     openCloudBackup: (() -> Unit)? = null,
+    onOpenMediaBackup: (() -> Unit)? = null,
+    authorsContent: (@Composable (onBack: () -> Unit) -> Unit)? = null,
     floatingTabBarEnabled: Boolean = true,
     liquidGlassEnabled: Boolean = true,
     predictiveBackEnabled: Boolean = true
@@ -202,9 +207,17 @@ fun AppNavigation(
                         trashContent()
                     }
                 }
+                if (authorsContent != null) {
+                    composable(Screen.Authors.route) {
+                        authorsContent({ navController.popBackStack() })
+                    }
+                }
                 composable(Screen.Settings.route) {
                     val downloaderSettings: @Composable () -> Unit = {
-                        SettingsScreen(onBack = { navController.navigate(Screen.Home.route) })
+                        SettingsScreen(
+                            onBack = { navController.navigate(Screen.Home.route) },
+                            onOpenMediaBackup = onOpenMediaBackup ?: {}
+                        )
                     }
                     if (settingsContent != null) {
                         val mineNav = MineNav(
@@ -226,7 +239,12 @@ fun AppNavigation(
                                     launchSingleTop = true
                                 }
                             },
-                            openBackupCenter = openCloudBackup ?: {}
+                            openBackupCenter = openCloudBackup ?: {},
+                            openAuthors = {
+                                if (authorsContent != null) {
+                                    navController.navigate(Screen.Authors.route) { launchSingleTop = true }
+                                }
+                            }
                         )
                         settingsContent(downloaderSettings, mineNav)
                     } else {
@@ -243,7 +261,8 @@ fun AppNavigation(
                     SettingsScreen(
                         onBack = { navController.popBackStack() },
                         showBack = true,
-                        section = section
+                        section = section,
+                        onOpenMediaBackup = onOpenMediaBackup ?: {}
                     )
                 }
 

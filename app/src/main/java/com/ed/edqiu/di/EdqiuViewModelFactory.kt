@@ -13,7 +13,10 @@ import com.ed.edqiu.data.backup.HistoryBackupRepository
 import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.data.repository.LinkHistoryRepository
 import com.ed.edqiu.data.repository.SavedLinkRepository
+import com.ed.edqiu.predownload.PreDownloadManager
 import com.ed.edqiu.ui.backup.CloudBackupViewModel
+import com.ed.edqiu.ui.backup.MediaBackupViewModel
+import com.ed.edqiu.ui.authors.AuthorsViewModel
 import com.ed.edqiu.ui.detail.DetailViewModel
 import com.ed.edqiu.ui.downloads.DownloadCenterViewModel
 import com.ed.edqiu.ui.history.HistoryViewModel
@@ -32,6 +35,7 @@ class EdqiuViewModelFactory(
     private val backupEngine: BackupEngine,
     private val backupCredentialStore: CredentialStore,
     private val backupLedgerRepository: BackupLedgerRepository,
+    private val preDownloadManager: PreDownloadManager,
     private val application: Application
 ) : ViewModelProvider.Factory {
 
@@ -43,7 +47,8 @@ class EdqiuViewModelFactory(
                     application,
                     savedLinkRepository,
                     settingsRepository,
-                    linkCaptureCoordinator
+                    linkCaptureCoordinator,
+                    preDownloadManager
                 ) as T
             modelClass.isAssignableFrom(DetailViewModel::class.java) ->
                 DetailViewModel(application, savedLinkRepository, settingsRepository) as T
@@ -68,6 +73,17 @@ class EdqiuViewModelFactory(
                     ledgerRepository = backupLedgerRepository,
                     settingsRepository = settingsRepository
                 ) as T
+            modelClass.isAssignableFrom(MediaBackupViewModel::class.java) ->
+                MediaBackupViewModel(
+                    application = application,
+                    registry = backupProviderRegistry,
+                    engine = backupEngine,
+                    taskStore = backupTaskStore,
+                    ledgerRepository = backupLedgerRepository,
+                    settingsRepository = settingsRepository
+                ) as T
+            modelClass.isAssignableFrom(AuthorsViewModel::class.java) ->
+                AuthorsViewModel(savedLinkRepository, settingsRepository) as T
             else -> throw IllegalArgumentException("未知的 ViewModel: $modelClass")
         }
     }

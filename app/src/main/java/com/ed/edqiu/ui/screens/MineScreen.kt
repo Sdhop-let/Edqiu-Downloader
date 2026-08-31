@@ -31,7 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Backup
-import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -85,10 +85,12 @@ fun MineScreen(mineNav: MineNav) {
         onNavigateToTheme = { mineNav.openEdqiuSection(XSection.APPEARANCE) },
         onDownloadCenter = mineNav.openDownloadCenter,
         onTrash = mineNav.openTrash,
+        onAuthors = mineNav.openAuthors,
         onBackup = mineNav.openBackupCenter,
         onPath = { mineNav.openDownloaderSection(DlSection.PATH) },
         onNetwork = { mineNav.openDownloaderSection(DlSection.NETWORK) },
         onWebdav = { mineNav.openDownloaderSection(DlSection.WEBDAV) },
+        onPreDownload = { mineNav.openDownloaderSection(DlSection.PREDOWNLOAD) },
         onUpdate = { mineNav.openDownloaderSection(DlSection.UPDATE) },
         onAppearance = { mineNav.openEdqiuSection(XSection.APPEARANCE) },
         onStorageBackup = { mineNav.openEdqiuSection(XSection.BACKUP) },
@@ -104,10 +106,12 @@ private fun MineMainView(
     onNavigateToTheme: () -> Unit,
     onDownloadCenter: () -> Unit,
     onTrash: () -> Unit,
+    onAuthors: () -> Unit,
     onBackup: () -> Unit,
     onPath: () -> Unit,
     onNetwork: () -> Unit,
     onWebdav: () -> Unit,
+    onPreDownload: () -> Unit,
     onUpdate: () -> Unit,
     onAppearance: () -> Unit,
     onStorageBackup: () -> Unit,
@@ -157,27 +161,31 @@ private fun MineMainView(
                 ExpandableMenuSection(
                     icon = Icons.Default.Download,
                     title = "内容管理",
-                    subtitle = "下载中心、回收站",
-                    count = 2,
+                    subtitle = "下载中心、回收站、作者作品",
+                    count = 3,
                     isExpanded = expandedSection == SubMenu.CONTENT,
                     onToggle = { onToggleSection(SubMenu.CONTENT) }
                 ) {
                     SubMenuItemRow(Icons.Default.Download, "下载中心", "查看正在下载与已完成的内容", onDownloadCenter)
                     SubMenuDivider()
                     SubMenuItemRow(Icons.Default.Delete, "回收站", "30 天内可恢复已删除项目", onTrash)
+                    SubMenuDivider()
+                    SubMenuItemRow(Icons.Default.Person, "作者作品", "按作者查看已下载与已捕获内容", onAuthors)
                 }
 
                 ExpandableMenuSection(
                     icon = Icons.Default.Settings,
                     title = "下载器设置",
-                    subtitle = "下载保存、网络认证、WebDAV、更新",
-                    count = 4,
+                    subtitle = "下载保存、网络认证、预下载、WebDAV、更新",
+                    count = 5,
                     isExpanded = expandedSection == SubMenu.DOWNLOADER,
                     onToggle = { onToggleSection(SubMenu.DOWNLOADER) }
                 ) {
                     SubMenuItemRow(Icons.Default.Save, "下载保存", "存储目录、命名规则与文件格式", onPath)
                     SubMenuDivider()
                     SubMenuItemRow(Icons.Default.Lock, "网络与认证", "代理、Cookie、账号登录", onNetwork)
+                    SubMenuDivider()
+                    SubMenuItemRow(Icons.Default.Download, "预下载", "攒批自动下载、代理通路与网盘联动", onPreDownload)
                     SubMenuDivider()
                     SubMenuItemRow(Icons.Default.Sync, "WebDAV 同步", "远程服务器配置与自动同步", onWebdav)
                     SubMenuDivider()

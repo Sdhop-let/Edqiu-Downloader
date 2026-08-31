@@ -22,8 +22,16 @@ class HistoryBackupWorker(
             return Result.failure()
         }
 
+        val repository = application.container.historyBackupRepository
+
+        // 收件箱/回收站没有任何记录时无需备份，直接跳过，
+        // 避免开发调试反复安装时在备份目录堆积空备份文件
+        if (!repository.hasBackupContent()) {
+            return Result.success()
+        }
+
         return runCatching {
-            application.container.historyBackupRepository.backupToDirectory(Uri.parse(directory))
+            repository.backupToDirectory(Uri.parse(directory))
             settings.recordBackupSuccess(System.currentTimeMillis())
             Result.success()
         }.getOrElse { error ->

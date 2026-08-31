@@ -59,7 +59,7 @@ class EdqiuAccessibilityService : AccessibilityService() {
             return true
         }
         return when (coordinator.capture(canonicalUrl)) {
-            SavedLinkRepository.CaptureResult.Added,
+            is SavedLinkRepository.CaptureResult.Added,
             SavedLinkRepository.CaptureResult.Duplicate -> {
                 lastCapturedTweetId = tweetId
                 lastCapturedAt = now

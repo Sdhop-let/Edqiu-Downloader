@@ -1,5 +1,6 @@
 ﻿package com.ed.edqiu
 
+import com.ed.edqiu.domain.BatchTweetUrlExtractor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

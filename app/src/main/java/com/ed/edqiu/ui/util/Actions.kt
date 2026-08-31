@@ -1,4 +1,4 @@
-﻿package com.ed.edqiu.ui.util
+package com.ed.edqiu.ui.util
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -55,6 +55,29 @@ fun copyToClipboard(context: Context, label: String, text: String) {
 }
 
 fun twitterStatusWebUri(tweetId: String): String = "https://x.com/i/status/$tweetId"
+
+/** 作者主页地址（handle 需去掉 @ 前缀）。 */
+fun twitterProfileWebUri(authorId: String): String =
+    "https://x.com/" + authorId.trim().trimStart('@')
+
+/** 打开作者 X/Twitter 主页（优先 X App，回退浏览器）。 */
+fun openTwitterProfile(context: Context, authorId: String): Boolean {
+    val handle = authorId.trim().trimStart('@')
+    if (handle.isBlank()) return false
+    val webUri = Uri.parse(twitterProfileWebUri(handle))
+    val flags = Intent.FLAG_ACTIVITY_NEW_TASK
+    for (pkg in X_APP_PACKAGES) {
+        val appIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
+            setPackage(pkg)
+            addFlags(flags)
+        }
+        if (appIntent.resolveActivity(context.packageManager) != null) {
+            return runCatching { context.startActivity(appIntent); true }.getOrDefault(false)
+        }
+    }
+    val generalIntent = Intent(Intent.ACTION_VIEW, webUri).apply { addFlags(flags) }
+    return runCatching { context.startActivity(generalIntent); true }.getOrDefault(false)
+}
 
 private val X_APP_PACKAGES = listOf("com.twitter.android", "com.x.android")
 

@@ -32,6 +32,8 @@ import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material.icons.outlined.ViewAgenda
+import androidx.compose.material.icons.outlined.ViewStream
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -115,6 +117,7 @@ fun MediaLibraryScreen(
     var syncMessage by remember { mutableStateOf<String?>(null) }
     var syncToken by remember { mutableStateOf(0) }
     var filter by remember { mutableStateOf(LibraryFilter.ALL) }
+    var grouped by remember { mutableStateOf(false) }
     val scanCoordinator = remember { MediaLibraryAutoScanCoordinator() }
     val startLibraryScan: (LibraryScanTrigger) -> Unit = { trigger ->
         val token = syncToken + 1
@@ -192,6 +195,7 @@ fun MediaLibraryScreen(
     val authorTotal: Map<String, Int> = remember(items) {
         items.groupingBy { mediaAuthorOf(it) }.eachCount()
     }
+    val groups = remember(items, grouped) { if (grouped) groupLibraryByTweet(items) else emptyList() }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(Color.Transparent),  // 透出 GlassBackground
@@ -207,14 +211,16 @@ fun MediaLibraryScreen(
                 totalBytes = totalBytes,
                 onFilterChange = { filter = it },
                 syncMessage = syncMessage,
-                onScan = syncLibrary
+                onScan = syncLibrary,
+                grouped = grouped,
+                onGroupToggle = { grouped = !grouped },
             )
         }
 
         if (items.isEmpty()) {
             item { EmptyLibraryState(onScan = syncLibrary) }
         } else {
-            items(items, key = { it.id }) { entity ->
+            val cardFor: @Composable (DownloadHistoryEntity) -> Unit = { entity ->
                 val author = mediaAuthorOf(entity)
                 MediaCard(
                     entity = entity,
@@ -239,7 +245,32 @@ fun MediaLibraryScreen(
                     onDelete = { deleteLocal -> historyViewModel.deleteHistory(entity, deleteLocal) }
                 )
             }
+            if (grouped) {
+                groups.forEach { group ->
+                    val headerKey = group.tweetId ?: ("other_" + (group.items.firstOrNull()?.id.orEmpty()))
+                    item(key = "group_header_$headerKey") { LibraryGroupHeader(group = group) }
+                    items(group.items, key = { it.id }) { entity -> cardFor(entity) }
+                }
+            } else {
+                items(items, key = { it.id }) { entity -> cardFor(entity) }
+            }
         }
+    }
+}
+
+@Composable
+private fun LibraryGroupHeader(group: LibraryGroup) {
+    Row(Modifier.padding(top = 4.dp)) {
+        Text(
+            text = if (group.tweetId != null) {
+                "推文分组 · ${group.items.size} 个媒体"
+            } else {
+                "其他 · ${group.items.size} 个媒体"
+            },
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+        )
     }
 }
 
@@ -252,7 +283,9 @@ private fun LibraryHeader(
     totalBytes: Long,
     onFilterChange: (LibraryFilter) -> Unit,
     syncMessage: String?,
-    onScan: () -> Unit
+    onScan: () -> Unit,
+    grouped: Boolean,
+    onGroupToggle: () -> Unit,
 ) {
     // L2 玻璃头部（方案 A 单行头）：E 徽章 + 媒体库 | 占用 · 刷新，下接筛选胶囊
     // 顶部加 statusBarsPadding 让玻璃卡从状态栏底部开始（对齐收件箱）
@@ -316,6 +349,18 @@ private fun LibraryHeader(
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(Modifier.width(8.dp))
+                LibraryHeaderIconButton(
+                    onClick = onGroupToggle,
+                    contentDescription = if (grouped) "平铺视图" else "按推文分组"
+                ) {
+                    Icon(
+                        if (grouped) Icons.Outlined.ViewStream else Icons.Outlined.ViewAgenda,
+                        contentDescription = null,
+                        tint = if (grouped) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(21.dp)
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
                 LibraryHeaderIconButton(onClick = onScan, contentDescription = "刷新媒体库") {
                     Icon(Icons.Outlined.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
                 }

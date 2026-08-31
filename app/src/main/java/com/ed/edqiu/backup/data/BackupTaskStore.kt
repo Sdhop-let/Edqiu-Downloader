@@ -2,6 +2,7 @@ package com.ed.edqiu.backup.data
 
 import android.content.Context
 import com.ed.edqiu.backup.model.BackupTask
+import com.ed.edqiu.backup.model.BackupTaskStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +30,13 @@ interface BackupTaskStore {
 
     /** 按 taskId 删除任务。 */
     suspend fun delete(taskId: String)
+
+    /**
+     * 清理指定目标下、已终态（[BackupTaskStatus.DONE]/[BackupTaskStatus.CANCELLED]）且
+     * 早于给定时间窗的历史任务；保留可执行（PENDING/UPLOADING）与可重试（FAILED）状态。
+     * 返回实际删除条数。
+     */
+    suspend fun deleteFinished(targetId: String, olderThanMillis: Long): Int
 
     /** 任务列表流（UI 只读）。 */
     fun observe(): Flow<List<BackupTask>>
@@ -96,6 +104,24 @@ class JsonBackupTaskStore(private val context: Context) : BackupTaskStore {
             }
         }
     }
+
+    override suspend fun deleteFinished(targetId: String, olderThanMillis: Long): Int =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                ensureLoadedLocked()
+                val cutoff = System.currentTimeMillis() - olderThanMillis
+                fun removable(task: BackupTask): Boolean = task.targetId == targetId &&
+                    (task.status == BackupTaskStatus.DONE || task.status == BackupTaskStatus.CANCELLED) &&
+                    task.updatedAt < cutoff
+                val keep = cache.filterNot(::removable)
+                val removed = cache.count(::removable)
+                if (removed > 0) {
+                    cache = keep
+                    persistLocked()
+                }
+                removed
+            }
+        }
 
     private suspend fun ensureLoadedLocked() {
         if (loaded) return

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.ed.edqiu.EdqiuApplication
+import com.ed.edqiu.data.repository.DownloadTaskBus
 import kotlinx.coroutines.flow.first
 
 class DownloadSyncWorker(
@@ -26,7 +27,11 @@ class DownloadSyncWorker(
                 container.savedLinkRepository.retryDueDownloads()
             }
             container.savedLinkRepository.refreshStatuses(monitorUri)
+            container.savedLinkRepository.importScannedDownloads(monitorUri)
             container.savedLinkRepository.retryMissingMetadata()
+            // 后台同步顺带恢复上次进程结束后遗留的中断下载任务
+            val recovered = container.downloadTaskRepo.recoverInterruptedTasks()
+            recovered.forEach { DownloadTaskBus.add(it) }
             Result.success()
         }.getOrElse {
             Result.retry()

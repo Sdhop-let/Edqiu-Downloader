@@ -15,11 +15,15 @@ import com.ed.edqiu.capture.LinkCaptureCoordinator
 import com.ed.edqiu.data.backup.HistoryBackupRepository
 import com.ed.edqiu.data.db.EdqiuDatabase
 import com.ed.edqiu.data.metadata.MetadataFetcher
+import com.ed.edqiu.data.preferences.PreDownloadPreferences
+import com.ed.edqiu.data.preferences.ProxyPreferences
 import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.data.repository.DownloadMonitor
+import com.ed.edqiu.data.repository.DownloadTaskRepo
 import com.ed.edqiu.data.repository.DownloaderClient
 import com.ed.edqiu.data.repository.LinkHistoryRepository
 import com.ed.edqiu.data.repository.SavedLinkRepository
+import com.ed.edqiu.predownload.PreDownloadManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -57,7 +61,8 @@ class AppContainer(context: Context) {
             downloadMonitor = downloadMonitor,
             metadataFetcher = metadataFetcher,
             downloaderClient = downloaderClient,
-            linkHistoryRepository = linkHistoryRepository
+            linkHistoryRepository = linkHistoryRepository,
+            metadataScope = globalIoScope
         )
 
     val historyBackupRepository: HistoryBackupRepository =
@@ -72,6 +77,9 @@ class AppContainer(context: Context) {
         LinkCaptureCoordinator(savedLinkRepository)
 
     val settingsRepository: SettingsRepository = SettingsRepository(context)
+
+    /** 独立下载器（Direct/yt-dlp）活跃任务的持久化仓库，供启动恢复与后台 Worker 使用。 */
+    val downloadTaskRepo: DownloadTaskRepo = DownloadTaskRepo(context.applicationContext)
 
     // ================= 网盘直连备份（T05 UI 集成） =================
     // 凭证加密存储 / 任务持久化 / 适配器注册表 / 队列引擎：
@@ -92,4 +100,29 @@ class AppContainer(context: Context) {
         ledgerRepository = backupLedgerRepository,
         ioScope = globalIoScope,
     )
+
+    // ================= 预下载（自动攒批 + 代理通路检测 + 网盘联动） =================
+    // 2026-08-31 18:22 恢复：此前误判为干扰收件箱下载而停用，真凶是 InternalMediaDownloader
+    // openConnection(null) 抛 "proxy can not be null"（已修）。手动批量下载保持直接链路，
+    // 自动预下载（onCaptured 攒批）独立走本协调器，互不阻塞。
+    val preDownloadPreferences: PreDownloadPreferences =
+        PreDownloadPreferences(context.applicationContext)
+    val proxyPreferences: ProxyPreferences =
+        ProxyPreferences(context.applicationContext)
+    val preDownloadManager: PreDownloadManager = PreDownloadManager(
+        context = context.applicationContext,
+        savedLinkRepository = savedLinkRepository,
+        preDownloadPreferences = preDownloadPreferences,
+        proxyPreferences = proxyPreferences,
+        backupEngine = backupEngine,
+        backupProviderRegistry = backupProviderRegistry,
+        backupTaskStore = backupTaskStore,
+        backupLedgerRepository = backupLedgerRepository,
+        settingsRepository = settingsRepository,
+        ioScope = globalIoScope,
+    )
+    init {
+        // 捕获挂载：收件箱保存链接成功后 → 攒批自动预下载（受开关控制）
+        savedLinkRepository.onCaptured = preDownloadManager::onLinkCaptured
+    }
 }

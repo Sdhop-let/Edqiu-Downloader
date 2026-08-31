@@ -6,6 +6,7 @@ import android.util.Log
 import com.ed.edqiu.data.model.DownloadStatus
 import com.ed.edqiu.data.model.DownloadTask
 import com.ed.edqiu.data.model.MediaType
+import com.ed.edqiu.data.model.ProxySettings
 import com.ed.edqiu.data.repository.DownloadTaskBus
 import com.ed.edqiu.domain.TweetIdExtractor
 import kotlinx.coroutines.Dispatchers
@@ -14,8 +15,17 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.URL
 import java.util.Locale
+
+/**
+ * 推文已不存在（被作者删除/私密/未公开/链接失效）。
+ * 永久性失败：下载层收到该异常后不再尝试 yt-dlp 回退，
+ * 收件箱将其标记为 DELETED（UI 显示「推文不存在」），不再自动重试。
+ */
+class TweetGoneException(message: String) : Exception(message)
 
 class InternalMediaDownloader(private val context: Context) {
 
@@ -29,13 +39,15 @@ class InternalMediaDownloader(private val context: Context) {
         val thumbnailUrl: String?
     )
 
-    suspend fun downloadTweet(rawUrl: String): Result<List<DownloadedFile>> = withContext(Dispatchers.IO) {
+    suspend fun downloadTweet(rawUrl: String, proxy: ProxySettings? = null): Result<List<DownloadedFile>> = withContext(Dispatchers.IO) {
         runCatching {
             val tweetId = TweetIdExtractor.fromUrl(rawUrl)
                 ?: error("链接中没有有效的推文 ID")
             val normalizedUrl = "https://x.com/i/status/$tweetId"
-            val root = JSONObject(fetchText("$API_BASE$tweetId"))
+            val root = JSONObject(fetchText("$API_BASE$tweetId", proxy))
             val code = root.optInt("code", -1)
+            // FXTwitter 对已删除/私密推文返回 code=404：永久失败，直接抛专用异常
+            if (code == 404) throw TweetGoneException("推文不存在或已被删除")
             if (code != 200) error(root.optString("message", "FXTwitter API 返回 $code"))
 
             val tweet = root.getJSONObject("tweet")
@@ -72,7 +84,7 @@ class InternalMediaDownloader(private val context: Context) {
                 DownloadTaskBus.add(task)
 
                 runCatching {
-                    downloadFile(item.url, target)
+                    downloadFile(item.url, target, proxy)
                     writeSidecar(
                         mediaFile = target,
                         sourceUrl = normalizedUrl,
@@ -172,12 +184,18 @@ class InternalMediaDownloader(private val context: Context) {
         }
     }
 
-    private fun downloadFile(url: String, target: File) {
-        val connection = URL(url).openConnection() as HttpURLConnection
+    private fun downloadFile(url: String, target: File, proxy: ProxySettings?) {
+        val proxyObj = proxy?.toJavaProxy()
+        val connection = if (proxyObj != null) {
+            URL(url).openConnection(proxyObj) as HttpURLConnection
+        } else {
+            // 无代理时必须用无参 openConnection()，传 null 在部分 Android 版本会抛 "proxy can not be null"
+            URL(url).openConnection() as HttpURLConnection
+        }
         connection.requestMethod = "GET"
         connection.setRequestProperty("User-Agent", "Edqiu/1.0")
-        connection.connectTimeout = 20_000
-        connection.readTimeout = 60_000
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 30_000
         try {
             if (connection.responseCode != HttpURLConnection.HTTP_OK) {
                 error("HTTP ${connection.responseCode} 下载失败")
@@ -190,21 +208,37 @@ class InternalMediaDownloader(private val context: Context) {
         }
     }
 
-    private fun fetchText(url: String): String {
-        val connection = URL(url).openConnection() as HttpURLConnection
+    private fun fetchText(url: String, proxy: ProxySettings?): String {
+        val proxyObj = proxy?.toJavaProxy()
+        val connection = if (proxyObj != null) {
+            URL(url).openConnection(proxyObj) as HttpURLConnection
+        } else {
+            // 无代理时必须用无参 openConnection()，传 null 在部分 Android 版本会抛 "proxy can not be null"
+            URL(url).openConnection() as HttpURLConnection
+        }
         connection.requestMethod = "GET"
         connection.setRequestProperty("Accept", "application/json")
         connection.setRequestProperty("User-Agent", "Edqiu/1.0")
-        connection.connectTimeout = 15_000
-        connection.readTimeout = 15_000
+        connection.connectTimeout = 5_000
+        connection.readTimeout = 8_000
         try {
             if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                // HTTP 404 = fxtwitter 明确找不到该推文（被删/私密/不存在）
+                if (connection.responseCode == 404) {
+                    throw TweetGoneException("推文不存在或已被删除")
+                }
                 error("HTTP ${connection.responseCode} from FXTwitter")
             }
             return connection.inputStream.bufferedReader().use { it.readText() }
         } finally {
             connection.disconnect()
         }
+    }
+
+    /** [ProxySettings] 转 [java.net.Proxy]；未启用时返回 null（直连）。 */
+    private fun ProxySettings?.toJavaProxy(): Proxy? {
+        if (this == null || !enabled) return null
+        return Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port))
     }
 
     private fun writeSidecar(

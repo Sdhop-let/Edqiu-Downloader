@@ -49,6 +49,9 @@ data class SavedLink(
     @ColumnInfo(name = "avatar_url")
     val avatarUrl: String? = null,
 
+    @ColumnInfo(name = "author_bio")
+    val authorBio: String? = null,
+
     @ColumnInfo(name = "saved_at")
     val savedAt: Long,
 

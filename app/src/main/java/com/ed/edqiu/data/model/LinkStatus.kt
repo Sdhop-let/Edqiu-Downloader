@@ -10,5 +10,7 @@ enum class LinkStatus {
     /** 已发现对应下载文件。 */
     DOWNLOADED,
     /** 曾被标记失败（预留，第二期自动模式使用）。 */
-    FAILED
+    FAILED,
+    /** 推文已不存在（被作者删除/私密/未公开）——永久终态，不再自动重试。 */
+    DELETED
 }

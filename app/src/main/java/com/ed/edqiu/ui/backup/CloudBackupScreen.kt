@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Upload
@@ -64,8 +65,8 @@ import com.ed.edqiu.backup.model.BackupTaskStatus
 import com.ed.edqiu.backup.model.ProviderId
 import com.ed.edqiu.ui.components.DynamicSwitch
 import com.ed.edqiu.ui.components.GlassSurface
+import com.ed.edqiu.ui.components.InlineFeedbackBar
 import com.ed.edqiu.ui.components.GlassTier
-import com.ed.edqiu.ui.navigation.LocalSnackbarController
 import kotlinx.coroutines.launch
 
 /**
@@ -85,11 +86,13 @@ fun CloudBackupScreen(
     onBack: () -> Unit,
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
-    val snackbar = LocalSnackbarController.current
+
+    // 内联反馈：消息固定显示在备份设置卡片下方，5s 后动画消失（替代全局顶部 Snackbar）
+    var inlineFeedback by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(uiState.message) {
         uiState.message?.let {
-            snackbar.show(it)
+            inlineFeedback = it
             vm.consumeMessage()
         }
     }
@@ -131,6 +134,12 @@ fun CloudBackupScreen(
             }
         }
 
+        // 操作反馈：固定在备份设置卡片（含立即备份等按钮）下方，5s 后动画消失
+        InlineFeedbackBar(
+            message = inlineFeedback,
+            onDismiss = { inlineFeedback = null }
+        )
+
         // 备份状态区
         BackupStatusCard(
             tasks = uiState.tasks,
@@ -138,6 +147,7 @@ fun CloudBackupScreen(
             lastSummary = uiState.lastSummary,
             onRetry = vm::retryFailed,
             onCancel = vm::cancelTask,
+            onCleanup = { uiState.selectedProviderId?.let(vm::cleanupFinishedTasks) },
         )
     }
 
@@ -533,6 +543,7 @@ private fun BackupStatusCard(
     lastSummary: com.ed.edqiu.backup.model.BackupSummary?,
     onRetry: () -> Unit,
     onCancel: (String) -> Unit,
+    onCleanup: () -> Unit,
 ) {
     SectionGlass(title = "备份状态") {
         Column(
@@ -615,6 +626,15 @@ private fun BackupStatusCard(
                     Spacer(Modifier.width(8.dp))
                     Text("重试全部失败任务")
                 }
+            }
+
+            TextButton(
+                onClick = onCleanup,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Filled.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("清理已完成历史任务（30 天前）")
             }
         }
     }

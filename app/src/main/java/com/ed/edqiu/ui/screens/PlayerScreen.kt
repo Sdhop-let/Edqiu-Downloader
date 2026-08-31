@@ -384,11 +384,19 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 
 private fun Activity.setPlayerFullscreen(fullscreen: Boolean) {
     val controller = WindowCompat.getInsetsController(window, window.decorView)
+    // 横竖屏切换由窗口自行处理（清单声明了 configChanges），用系统交叉淡入动画过渡，
+    // 避免画面瞬间跳变
+    window.attributes = window.attributes.apply {
+        rotationAnimation = android.view.WindowManager.LayoutParams.ROTATION_ANIMATION_CROSSFADE
+    }
     if (fullscreen) {
-        // 仅处理系统栏：隐藏状态栏+导航栏（下滑召唤），不强制横屏
+        // 横屏观看：锁定传感器横屏 + 隐藏状态栏/导航栏（下滑召唤）
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         controller.hide(WindowInsetsCompat.Type.systemBars())
     } else {
+        // 退出横屏：带动画恢复并锁定竖屏
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         controller.show(WindowInsetsCompat.Type.systemBars())
     }
 }

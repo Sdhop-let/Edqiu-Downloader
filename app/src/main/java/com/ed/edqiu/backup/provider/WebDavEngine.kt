@@ -70,7 +70,11 @@ class WebDavEngine {
      * @param path    相对路径（如 `Edqiu/foo.mp4`，允许带空格/中文）
      */
     fun buildUrl(baseUrl: String, path: String): String {
-        val base = baseUrl.trim().trimEnd('/')
+        val trimmedBase = baseUrl.trim().trimEnd('/')
+        // 用户常漏写协议前缀：无 scheme 时默认按 HTTPS 处理，避免 OkHttp 报 "Expected URL scheme"
+        val base = if (trimmedBase.startsWith("http://", ignoreCase = true) ||
+            trimmedBase.startsWith("https://", ignoreCase = true)
+        ) trimmedBase else "https://$trimmedBase"
         val cleanPath = path.trim('/').split('/').joinToString("/") { encodePathSegment(it) }
         return if (cleanPath.isBlank()) base else "$base/$cleanPath"
     }
@@ -145,27 +149,57 @@ class WebDavEngine {
         client.newCall(request).execute().use { response ->
             val code = response.code
             if (code in MKCOL_OK_CODES) {
-                Log.i(TAG, "MKCOL OK $code for ${safeUrlForLog(url)}")
-            } else {
-                // 非宽容状态码：4xx/5xx 通常意味着认证失败 / quota 满 / 路径无效
-                Log.w(TAG, "MKCOL non-standard HTTP $code for ${safeUrlForLog(url)}")
+                if (code == 405) {
+                    Log.i(TAG, "MKCOL 405（目录已存在）for ${safeUrlForLog(url)}")
+                } else {
+                    Log.i(TAG, "MKCOL OK $code for ${safeUrlForLog(url)}")
+                }
+                return
+            }
+            val body = runCatching { response.body?.string()?.take(300) }.getOrNull()
+            when {
+                code == 401 || code == 403 -> {
+                    Log.w(TAG, "MKCOL 鉴权失败 HTTP $code for ${safeUrlForLog(url)}")
+                    throw BackupException("WebDAV 认证失败（HTTP $code），请检查账号与密码/应用密码")
+                }
+                code == 409 -> {
+                    // 父目录缺失：按路径逐级创建时不应出现，出现说明服务器路径语义异常
+                    Log.w(TAG, "MKCOL 父目录缺失 HTTP 409 for ${safeUrlForLog(url)}")
+                    throw BackupException("WebDAV 创建目录失败：父目录不存在（HTTP 409），请检查远程目录设置")
+                }
+                code == 507 -> {
+                    Log.w(TAG, "MKCOL 存储空间不足 HTTP 507 for ${safeUrlForLog(url)}")
+                    throw BackupException("WebDAV 存储空间不足（HTTP 507）")
+                }
+                code in 500..599 -> {
+                    Log.w(TAG, "MKCOL 服务端错误 HTTP $code for ${safeUrlForLog(url)} body=$body")
+                    throw BackupException("WebDAV 服务端错误（HTTP $code），请稍后重试")
+                }
+                else -> {
+                    // 其余非标准状态码：部分服务器对已存在目录返回 301 等变体，宽容放行但留痕
+                    Log.w(TAG, "MKCOL 非标准 HTTP $code for ${safeUrlForLog(url)} body=$body（放行，由后续 PUT 兜底）")
+                }
             }
         }
     }
 
-    /** HEAD 判断远程文件是否存在（2xx 视为存在；网络异常按失败返回）。 */
+    /** HEAD 判断远程文件是否存在（2xx 视为存在；404 等视为不存在；401/403 抛认证错误）。 */
     suspend fun exists(url: String, credential: WebDavCredential): Result<Boolean> = withContext(Dispatchers.IO) {
         runCatching {
             val request = buildRequest(url, "HEAD", credential)
             client.newCall(request).execute().use { response ->
                 val code = response.code
-                if (code in 200..299) {
-                    true
-                } else {
-                    // 404 → 文件不存在；3xx 跟随重定向暂未处理但归 false；4xx/5xx 按不存在处理
-                    // 但 401/403 不算"不存在"——上层若需精确语义应单独处理
-                    Log.i(TAG, "HEAD non-2xx HTTP $code for ${safeUrlForLog(url)}（按不存在处理）")
-                    false
+                when {
+                    code in 200..299 -> true
+                    code == 401 || code == 403 -> {
+                        Log.w(TAG, "HEAD 鉴权失败 HTTP $code for ${safeUrlForLog(url)}")
+                        throw BackupException("WebDAV 认证失败（HTTP $code），请检查账号与密码")
+                    }
+                    else -> {
+                        // 404 → 文件不存在；3xx 跟随重定向后仍非 2xx 归不存在；其余 4xx/5xx 按不存在处理
+                        Log.i(TAG, "HEAD non-2xx HTTP $code for ${safeUrlForLog(url)}（按不存在处理）")
+                        false
+                    }
                 }
             }
         }.toUserFriendly()
@@ -195,8 +229,16 @@ class WebDavEngine {
                 val code = response.code
                 val elapsed = System.currentTimeMillis() - startedAt
                 if (code !in 200..299) {
-                    Log.w(TAG, "PUT failed HTTP $code (size=$size B, ${elapsed}ms) for ${safeUrlForLog(url)}")
-                    throw BackupException("WebDAV 上传失败 HTTP $code：${file.name}")
+                    val body = runCatching { response.body?.string()?.take(300) }.getOrNull()
+                    Log.w(TAG, "PUT failed HTTP $code (size=$size B, ${elapsed}ms) for ${safeUrlForLog(url)} body=$body")
+                    val reason = when (code) {
+                        401, 403 -> "认证失败，请检查账号与密码"
+                        404, 409 -> "远程目录不存在，请检查远程目录设置"
+                        507 -> "存储空间不足"
+                        in 500..599 -> "服务端错误，请稍后重试"
+                        else -> "服务器返回 $code"
+                    }
+                    throw BackupException("WebDAV 上传失败（$reason）：${file.name}")
                 }
                 val speedKbps = if (elapsed > 0) (size * 8 / elapsed) else 0L
                 Log.i(TAG, "PUT OK $code (size=$size B, ${elapsed}ms, ~${speedKbps} kbps) for ${safeUrlForLog(url)}")
@@ -220,6 +262,11 @@ class WebDavEngine {
                 when {
                     code in 200..399 -> {
                         Log.i(TAG, "PROBE OK $code for ${safeUrlForLog(url)}")
+                        true
+                    }
+                    code == 405 -> {
+                        // 部分服务器不允许 OPTIONS，但能响应说明服务可达；认证留给后续 MKCOL/PUT 校验
+                        Log.i(TAG, "PROBE 405（服务器不支持 OPTIONS，视为可达）for ${safeUrlForLog(url)}")
                         true
                     }
                     code == 401 || code == 403 -> {
