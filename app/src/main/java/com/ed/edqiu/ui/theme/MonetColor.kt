@@ -9,8 +9,20 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import com.materialkolor.dynamiccolor.ColorSpec
+import com.materialkolor.dynamiccolor.ColorSpec2021
+import com.materialkolor.dynamiccolor.ColorSpec2025
+import com.materialkolor.dynamiccolor.DynamicColor
+import com.materialkolor.hct.Hct
+import com.materialkolor.scheme.DynamicScheme
+import com.materialkolor.scheme.SchemeContent
+import com.materialkolor.scheme.SchemeExpressive
+import com.materialkolor.scheme.SchemeFidelity
+import com.materialkolor.scheme.SchemeFruitSalad
+import com.materialkolor.scheme.SchemeTonalSpot
+import com.materialkolor.scheme.SchemeVibrant
 
 /**
  * 主题模式（2026-08-15 主题设置页扩展）
@@ -26,11 +38,11 @@ enum class ThemeMode(internal val storageValue: String, val label: String) {
 }
 
 /**
- * Monet 色彩风格（Material 3 1.2+ 多风格）。
+ * Monet 色彩风格（Material 3 多风格）。
  *
- * 注：Edqiu 用简化 blend 算法而非真 Material You HCT 引擎，
- * 不同风格通过调整 primaryContainer 等色位的 alpha / 混合比例实现近似效果。
- * 动态取色（dynamicColor=true）路径走系统引擎，风格不可控。
+ * 2026-09-14：接入真 HCT 引擎（com.materialkolor:material-color-utilities，
+ * 与用户的 mcu-pipeline 取色管道同源），每个风格映射为对应的 DynamicScheme，
+ * 不再是简化 tone 偏移。
  */
 enum class TonalStyle(internal val storageValue: String, val label: String) {
     TONAL_SPOT("tonal_spot", "TonalSpot"),
@@ -46,14 +58,14 @@ enum class TonalStyle(internal val storageValue: String, val label: String) {
 }
 
 /**
- * Monet 色彩标准。
+ * Monet 色彩标准（引擎 ColorSpec 版本）。
  *
- * 注：Edqiu 简化方案下 SPEC_2021 / CAM16 渲染差异极小（无 HCT 色空间计算），
- * 此处主要用于持久化用户偏好，待未来接入真引擎时生效。
+ * 2026-09-14：SPEC_2021 = 经典 Monet 规范；CAM16 档位升级为
+ * Material 3 Expressive（ColorSpec 2025）——mcu-pipeline 支持的两档规范。
  */
 enum class MonetSpec(internal val storageValue: String, val label: String) {
     SPEC_2021("spec_2021", "SPEC_2021"),
-    CAM16("cam16", "CAM16");
+    CAM16("cam16", "M3E_2025");
 
     companion object {
         fun fromStorage(v: String?): MonetSpec = entries.firstOrNull { it.storageValue == v } ?: SPEC_2021
@@ -85,14 +97,15 @@ data class SeedPreset(
 )
 
 /**
- * 根据种子色生成一套完整的 M3 ColorScheme（降级方案）。
+ * 根据种子色生成一套完整的 M3 ColorScheme。
  *
- * 与早期「blend alpha」近似不同，此处实现真正的**色调板（tonal palette）**生成：
- * - 主/次/第三色由种子色及其色相偏移版本，映射到 Material 3 标准 tone 色位；
- * - [monetSpec] 控制色度（chroma）随明度的分布，使 SPEC_2021 / CAM16 产生真实差异；
- * - [tonalStyle] 微调 primary / container 的 tone 色位，模拟 M3 多风格色板。
- *
- * 根据 seed 亮度自动判断 dark/light——曜石黑等深色 seed 自动走暗色主题。
+ * 2026-09-14 **真引擎替换**：此前的 HSL 线性近似（色相恒定 + 明度线性 + 简化色度）
+ * 与 Material You 实际渲染存在明显色偏（特别是高饱和种子色偏艳、低饱和偏灰）。
+ * 现改用 mcu-pipeline 同源的 Material Color Utilities：
+ * - [Hct.fromInt] 把种子色转 CAM16/HCT 感知空间；
+ * - [TonalStyle] 一一映射到 DynamicScheme（TonalSpot/Vibrant/Expressive/FruitSalad/Fidelity/Content）；
+ * - [MonetSpec] 映射 ColorSpec 2021 / 2025 两档规范；
+ * - 角色色由 [ColorSpec] 求值（引擎内置对比度约束，onPrimary 不再需要手动保险逻辑）。
  */
 fun colorSchemeFromSeed(
     seed: Color,
@@ -100,174 +113,113 @@ fun colorSchemeFromSeed(
     tonalStyle: TonalStyle = TonalStyle.TONAL_SPOT,
     monetSpec: MonetSpec = MonetSpec.SPEC_2021
 ): ColorScheme {
-    // 注意：明暗完全由调用方传入的 [dark] 参数（即 themeMode）决定——
-    // 不再因强调色 seed 的 luminance 翻转主题。这避免了用户选墨蓝/曜石黑等深色
-    // 强调色时被强制切成暗色主题、进而导致 ListScreen 黑底 sort chip / 设置页
-    // 白底卡片等硬编码容器与暗色 scheme 的 onPrimary/onSurface 错配（黑底黑字/白底浅字）。
-    val dark = dark
-
-    val primary = tonalPalette(seed, monetSpec)
-    val secondary = tonalPalette(shiftHue(seed, 30f), monetSpec)
-    val tertiary = tonalPalette(shiftHue(seed, 60f), monetSpec)
-
-    // 各风格的 primary / container tone 色位偏移（映射到 0..100 明度 tone）
-    val (pOff, cOff) = when (tonalStyle) {
-        TonalStyle.TONAL_SPOT -> 0 to 0
-        TonalStyle.VIBRANT -> -5 to 0
-        TonalStyle.EXPRESSIVE -> 5 to -2
-        TonalStyle.FRUIT_SALAD -> 0 to 2
-        TonalStyle.FIDELITY -> 0 to 5
-        TonalStyle.CONTENT -> -2 to 4
+    val hct = Hct.fromInt(seed.toArgb())
+    val specVersion = when (monetSpec) {
+        MonetSpec.SPEC_2021 -> ColorSpec.SpecVersion.SPEC_2021
+        MonetSpec.CAM16 -> ColorSpec.SpecVersion.SPEC_2025
     }
+    val scheme: DynamicScheme = when (tonalStyle) {
+        TonalStyle.TONAL_SPOT -> SchemeTonalSpot(hct, dark, 0.0, specVersion)
+        TonalStyle.VIBRANT -> SchemeVibrant(hct, dark, 0.0, specVersion)
+        TonalStyle.EXPRESSIVE -> SchemeExpressive(hct, dark, 0.0, specVersion)
+        TonalStyle.FRUIT_SALAD -> SchemeFruitSalad(hct, dark, 0.0, specVersion)
+        TonalStyle.FIDELITY -> SchemeFidelity(hct, dark, 0.0, specVersion)
+        TonalStyle.CONTENT -> SchemeContent(hct, dark, 0.0, specVersion)
+    }
+    return scheme.toComposeColorScheme()
+}
 
-    fun tone(t: Int, off: Int): Color = primary(((t + off).coerceIn(0, 100)).toFloat())
+/**
+ * DynamicScheme → Compose M3 ColorScheme 全角色映射。
+ * 角色清单与 mcu-pipeline SchemeMapper.mapRoles 对齐（2021/2025 规范通用）。
+ */
+private fun DynamicScheme.toComposeColorScheme(): ColorScheme {
+    val spec = when (specVersion) {
+        ColorSpec.SpecVersion.SPEC_2021 -> ColorSpec2021()
+        ColorSpec.SpecVersion.SPEC_2025 -> ColorSpec2025()
+    }
+    fun argbOf(dc: DynamicColor?): Color =
+        dc?.getArgb(this)?.let { Color(it) } ?: Color.Unspecified
 
-    if (dark) {
-        val p = tone(80, pOff)
-        val c = tone(30, cOff)
-        val s = secondary(80f)
-        val t = tertiary(80f)
-        return darkColorScheme(
-            primary = p,
-            // 2026-08-17 对比度保险：onPrimary 不再固定 tone(20)，而按 primary 亮度动态选择——
-            // 浅色 primary（luminance>0.55）→ 用 primary 的深色反色（保留色相，HSL 降亮度到 15%）
-            // 深色 primary → 白。这样浅色强调色（如亮粉/亮黄）下弹窗 Button 白字也能看清。
-            onPrimary = dynamicOn(p, primary),
-            primaryContainer = c,
-            onPrimaryContainer = primary(90f),
-            secondary = s,
-            onSecondary = dynamicOn(s, secondary),
-            secondaryContainer = secondary(30f),
-            onSecondaryContainer = secondary(90f),
-            tertiary = t,
-            onTertiary = dynamicOn(t, tertiary),
-            tertiaryContainer = tertiary(30f),
-            onTertiaryContainer = tertiary(90f),
-            background = Color(0xFF121417),
-            surface = Color(0xFF1A1D21),
-            surfaceVariant = Color(0xFF23272C),
-            onSurface = Color(0xFFE6E8EB),
-            onSurfaceVariant = Color(0xFFA8AEB6),
-            outline = Color(0xFF33383E),
-            outlineVariant = Color(0xFF2A2F35),
-            surfaceContainerLow = Color(0xFF171A1E),
-            surfaceContainer = Color(0xFF1E2226),
-            surfaceContainerHigh = Color(0xFF262B30)
+    return if (isDark) {
+        darkColorScheme(
+            primary = argbOf(spec.primary()),
+            onPrimary = argbOf(spec.onPrimary()),
+            primaryContainer = argbOf(spec.primaryContainer()),
+            onPrimaryContainer = argbOf(spec.onPrimaryContainer()),
+            inversePrimary = argbOf(spec.inversePrimary()),
+            secondary = argbOf(spec.secondary()),
+            onSecondary = argbOf(spec.onSecondary()),
+            secondaryContainer = argbOf(spec.secondaryContainer()),
+            onSecondaryContainer = argbOf(spec.onSecondaryContainer()),
+            tertiary = argbOf(spec.tertiary()),
+            onTertiary = argbOf(spec.onTertiary()),
+            tertiaryContainer = argbOf(spec.tertiaryContainer()),
+            onTertiaryContainer = argbOf(spec.onTertiaryContainer()),
+            background = argbOf(spec.background()),
+            onBackground = argbOf(spec.onBackground()),
+            surface = argbOf(spec.surface()),
+            onSurface = argbOf(spec.onSurface()),
+            surfaceVariant = argbOf(spec.surfaceVariant()),
+            onSurfaceVariant = argbOf(spec.onSurfaceVariant()),
+            surfaceTint = argbOf(spec.primary()),
+            outline = argbOf(spec.outline()),
+            outlineVariant = argbOf(spec.outlineVariant()),
+            error = argbOf(spec.error()),
+            onError = argbOf(spec.onError()),
+            errorContainer = argbOf(spec.errorContainer()),
+            onErrorContainer = argbOf(spec.onErrorContainer()),
+            inverseSurface = argbOf(spec.inverseSurface()),
+            inverseOnSurface = argbOf(spec.inverseOnSurface()),
+            scrim = Color.Black,
+            surfaceDim = argbOf(spec.surfaceDim()),
+            surfaceBright = argbOf(spec.surfaceBright()),
+            surfaceContainerLowest = argbOf(spec.surfaceContainerLowest()),
+            surfaceContainerLow = argbOf(spec.surfaceContainerLow()),
+            surfaceContainer = argbOf(spec.surfaceContainer()),
+            surfaceContainerHigh = argbOf(spec.surfaceContainerHigh()),
+            surfaceContainerHighest = argbOf(spec.surfaceContainerHighest())
+        )
+    } else {
+        lightColorScheme(
+            primary = argbOf(spec.primary()),
+            onPrimary = argbOf(spec.onPrimary()),
+            primaryContainer = argbOf(spec.primaryContainer()),
+            onPrimaryContainer = argbOf(spec.onPrimaryContainer()),
+            inversePrimary = argbOf(spec.inversePrimary()),
+            secondary = argbOf(spec.secondary()),
+            onSecondary = argbOf(spec.onSecondary()),
+            secondaryContainer = argbOf(spec.secondaryContainer()),
+            onSecondaryContainer = argbOf(spec.onSecondaryContainer()),
+            tertiary = argbOf(spec.tertiary()),
+            onTertiary = argbOf(spec.onTertiary()),
+            tertiaryContainer = argbOf(spec.tertiaryContainer()),
+            onTertiaryContainer = argbOf(spec.onTertiaryContainer()),
+            background = argbOf(spec.background()),
+            onBackground = argbOf(spec.onBackground()),
+            surface = argbOf(spec.surface()),
+            onSurface = argbOf(spec.onSurface()),
+            surfaceVariant = argbOf(spec.surfaceVariant()),
+            onSurfaceVariant = argbOf(spec.onSurfaceVariant()),
+            surfaceTint = argbOf(spec.primary()),
+            outline = argbOf(spec.outline()),
+            outlineVariant = argbOf(spec.outlineVariant()),
+            error = argbOf(spec.error()),
+            onError = argbOf(spec.onError()),
+            errorContainer = argbOf(spec.errorContainer()),
+            onErrorContainer = argbOf(spec.onErrorContainer()),
+            inverseSurface = argbOf(spec.inverseSurface()),
+            inverseOnSurface = argbOf(spec.inverseOnSurface()),
+            scrim = Color.Black,
+            surfaceDim = argbOf(spec.surfaceDim()),
+            surfaceBright = argbOf(spec.surfaceBright()),
+            surfaceContainerLowest = argbOf(spec.surfaceContainerLowest()),
+            surfaceContainerLow = argbOf(spec.surfaceContainerLow()),
+            surfaceContainer = argbOf(spec.surfaceContainer()),
+            surfaceContainerHigh = argbOf(spec.surfaceContainerHigh()),
+            surfaceContainerHighest = argbOf(spec.surfaceContainerHighest())
         )
     }
-    val p = tone(40, pOff)
-    val c = tone(90, cOff)
-    val s = secondary(40f)
-    val t = tertiary(40f)
-    return lightColorScheme(
-        primary = p,
-        onPrimary = dynamicOn(p, primary),
-        primaryContainer = c,
-        onPrimaryContainer = primary(10f),
-        secondary = s,
-        onSecondary = dynamicOn(s, secondary),
-        secondaryContainer = secondary(90f),
-        onSecondaryContainer = secondary(10f),
-        tertiary = t,
-        onTertiary = dynamicOn(t, tertiary),
-        tertiaryContainer = tertiary(90f),
-        onTertiaryContainer = tertiary(10f),
-        // surface 改用 #F3F6FB 替代 #FFFFFF（避免 M3 Scaffold fallback 当背景遮挡 GlassBackground）
-        background = Color(0xFFF1F5F9),
-        surface = Color(0xFFF3F6FB),
-        surfaceVariant = Color(0xFFEFF4F7),
-        onSurface = Color(0xFF101417),
-        onSurfaceVariant = Color(0xFF64748B),
-        outline = Color(0xFFD9E3EA),
-        outlineVariant = Color(0xFFE5EBF0),
-        surfaceContainerLow = Color(0xFFF6F9FB),
-        surfaceContainer = Color(0xFFEDF2F6),
-        surfaceContainerHigh = Color(0xFFE6ECF2)
-    )
-}
-
-/**
- * 生成一张色调板函数 `tone(0..100) -> Color`。
- *
- * 采用 HSL 色域近似 Material You 的 tonal palette：
- * - 色相恒定（保持种子色相）；
- * - 明度随 tone 线性变化；
- * - **色度（饱和度）**按 [spec] 分布：
- *   - [MonetSpec.SPEC_2021]：恒定色度（2021 光谱式，饱和度不随明度衰减）；
- *   - [MonetSpec.CAM16]：色度在中间明度最高、两端衰减（贴近 CAM16 的色度-明度耦合）。
- */
-private fun tonalPalette(seed: Color, spec: MonetSpec): (Float) -> Color {
-    val (h, s, _) = seed.hsl()
-    return { tone ->
-        val l = (tone.coerceIn(0f, 100f)) / 100f
-        val chroma = when (spec) {
-            MonetSpec.SPEC_2021 -> s
-            MonetSpec.CAM16 -> (s * (1.35f - 0.7f * kotlin.math.abs(l - 0.5f) * 2f)).coerceIn(0f, 1f)
-        }
-        hslToColor(h, chroma, l)
-    }
-}
-
-/** 色相偏移（保持饱和度/明度不变，用于派生 secondary/tertiary 色）。 */
-private fun shiftHue(seed: Color, degree: Float): Color {
-    val (h, s, l) = seed.hsl()
-    return hslToColor((h + degree / 360f) % 1f, s, l)
-}
-
-/** RGB → HSL（h ∈ [0,1), s/l ∈ [0,1]）。 */
-private fun Color.hsl(): FloatArray {
-    val r = red
-    val g = green
-    val b = blue
-    val max = maxOf(r, g, b)
-    val min = minOf(r, g, b)
-    val l = (max + min) / 2f
-    var h = 0f
-    var s = 0f
-    val d = max - min
-    if (d > 0f) {
-        s = if (l > 0.5f) d / (2f - max - min) else d / (max + min)
-        h = when (max) {
-            r -> ((g - b) / d + if (g < b) 6f else 0f)
-            g -> (b - r) / d + 2f
-            else -> (r - g) / d + 4f
-        } / 6f
-    }
-    return floatArrayOf(h, s, l)
-}
-
-/**
- * 「onX」对比度安全色（2026-08-17 用户反馈思考题落地）：
- * 用户在 AccentColorPickerDialog 中可选极高明度的浅色强调色（如亮粉、亮黄），
- * 此时 `primary = tone(40)` 会变成浅色，M3 默认 `onPrimary = 白` 会导致
- * 弹窗 filled Button 上白字与浅 primary 背景对比度 < 4.5:1，不可读。
- *
- * 解决：当 [c] 偏亮（luminance > 0.55）时，把 onX 强制降到同色相、HSL 明度 15% 的深色版本；
- * 当 [c] 偏深时，沿用白色。两种情况对比度均 ≥ 4.5:1（即便种子色极浅也安全）。
- *
- * @param c 当前 primary/secondary/tertiary 颜色
- * @param tonal 该色对应的 tonal palette 函数（用于精确推导同色相深色版本）
- */
-private fun dynamicOn(c: Color, tonal: (Float) -> Color): Color =
-    if (c.luminance() > 0.55f) tonal(15f) else Color.White
-
-/** HSL → RGB。 */
-private fun hslToColor(h: Float, s: Float, l: Float): Color {
-    val ss = s.coerceIn(0f, 1f)
-    val ll = l.coerceIn(0f, 1f)
-    if (ss == 0f) return Color(ll, ll, ll)
-    val q = if (ll < 0.5f) ll * (1f + ss) else ll + ss - ll * ss
-    val p = 2f * ll - q
-    fun hue(t0: Float): Float {
-        var t = t0
-        if (t < 0f) t += 1f
-        if (t > 1f) t -= 1f
-        if (t < 1f / 6f) return p + (q - p) * 6f * t
-        if (t < 1f / 2f) return q
-        if (t < 2f / 3f) return p + (q - p) * (2f / 3f - t) * 6f
-        return p
-    }
-    return Color(hue(h + 1f / 3f), hue(h), hue(h - 1f / 3f))
 }
 
 /**

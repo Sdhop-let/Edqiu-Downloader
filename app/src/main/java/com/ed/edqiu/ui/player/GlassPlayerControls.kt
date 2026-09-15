@@ -1,5 +1,6 @@
 ﻿package com.ed.edqiu.ui.player
 
+import com.ed.edqiu.ui.util.pressableNoRipple
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -166,11 +167,7 @@ fun GlassIconButton(
             .size(size.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(Color(0xFFFFFFFF).copy(alpha = 0.14f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            ),
+            .pressableNoRipple { onClick() },
         contentAlignment = Alignment.Center
     ) {
         Icon(
@@ -282,11 +279,7 @@ fun GlassPlayerControls(
                             .clip(CircleShape)
                             .background(Color.White.copy(alpha = 0.18f))
                             .border(1.5.dp, Color.White.copy(alpha = 0.45f), CircleShape)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = onPlayPause
-                            ),
+                            .pressableNoRipple { onPlayPause() },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
@@ -345,11 +338,7 @@ fun GlassChipButton(
             .clip(RoundedCornerShape(12.dp))
             .background(bg)
             .border(1.dp, borderColor, RoundedCornerShape(12.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
+            .pressableNoRipple { onClick() }
             .padding(horizontal = 11.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -472,11 +461,7 @@ private fun GlassActionItem(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
             .background(bg)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
+            .pressableNoRipple { onClick() }
             .padding(horizontal = 6.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -506,11 +491,7 @@ private fun GlassPlaylistThumb(
             .size(width = 84.dp, height = 42.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(Color.White.copy(alpha = 0.10f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
+            .pressableNoRipple { onClick() }
     ) {
         ThumbnailWithFallback(
             thumbnailUrl = item.thumbnail,
@@ -552,11 +533,7 @@ fun MiniPlayerBar(
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onClick
-                    )
+                    .pressableNoRipple { onClick() }
                     .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -582,11 +559,7 @@ fun MiniPlayerBar(
                         .size(40.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primary)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onTogglePlay
-                        ),
+                        .pressableNoRipple { onTogglePlay() },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(

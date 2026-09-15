@@ -1,5 +1,6 @@
 ﻿package com.ed.edqiu.ui.settings
 
+import com.ed.edqiu.ui.util.pressableNoRipple
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
@@ -12,6 +13,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -50,16 +53,19 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Style
 import androidx.compose.material.icons.outlined.SwipeRight
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Vibration
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -67,7 +73,9 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -86,12 +94,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.ed.edqiu.data.backup.HistoryBackupRepository
 import com.ed.edqiu.data.backup.RestoreMode
 import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.system.DeviceCapabilityReader
+import com.ed.edqiu.BuildConfig
 import com.ed.edqiu.ui.components.DynamicSwitch
+import com.ed.edqiu.ui.components.FeedbackKind
+import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.InlineFeedbackBar
@@ -160,7 +174,7 @@ fun SettingsScreen(
     }
 
     // 内联反馈：操作结果固定显示在触发按钮所属卡片内，5s 后动画消失（替代全局顶部 Snackbar）
-    var backupFeedback by remember { mutableStateOf<String?>(null) }
+    var backupFeedback by remember { mutableStateOf<FeedbackMessage?>(null) }
 
     LaunchedEffect(feedback) {
         feedback?.let {
@@ -169,12 +183,13 @@ fun SettingsScreen(
         }
     }
 
-    var monitorFeedback by remember { mutableStateOf<String?>(null) }
+    var monitorFeedback by remember { mutableStateOf<FeedbackMessage?>(null) }
+    var backupPathFeedback by remember { mutableStateOf<FeedbackMessage?>(null) }
 
     val monitorPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null && context.persistTreePermission(uri)) {
             scope.launch { settings.setMonitorDirUri(uri.toString()) }
-            monitorFeedback = "监控目录已更新"
+            monitorFeedback = FeedbackMessage("监控目录已更新", FeedbackKind.SUCCESS)
         }
     }
     val backupDirectoryPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -198,7 +213,13 @@ fun SettingsScreen(
             confirmButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(onClick = { backupVm.restorePending(RestoreMode.MERGE) }) { Text("合并导入") }
-                    TextButton(onClick = { confirmReplace = true }) { Text("替换全部") }
+                    // 破坏性操作视觉分级：替换全部不可逆，用 error 色与「合并导入」区分
+                    TextButton(
+                        onClick = { confirmReplace = true },
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) { Text("替换全部") }
                 }
             },
             dismissButton = { TextButton(onClick = backupVm::cancelImport) { Text("取消") } }
@@ -211,10 +232,15 @@ fun SettingsScreen(
             title = { Text("确认替换全部数据？") },
             text = { Text("当前数据会先生成安全快照，然后由备份内容替换。") },
             confirmButton = {
-                TextButton(onClick = {
-                    confirmReplace = false
-                    backupVm.restorePending(RestoreMode.REPLACE)
-                }) { Text("确认替换") }
+                TextButton(
+                    onClick = {
+                        confirmReplace = false
+                        backupVm.restorePending(RestoreMode.REPLACE)
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("确认替换") }
             },
             dismissButton = { TextButton(onClick = { confirmReplace = false }) { Text("取消") } }
         )
@@ -253,14 +279,27 @@ fun SettingsScreen(
                 }
                 Spacer(Modifier.width(12.dp))
                 Column {
+                    // 二级页标题按分区映射（2026-09-15）：不再一律「收件箱设置」
                     Text(
-                        text = if (section == XSection.APPEARANCE) "主题设置" else "收件箱设置",
+                        text = when (section) {
+                            XSection.APPEARANCE -> "主题设置"
+                            XSection.BACKUP -> "存储与备份"
+                            XSection.CAPTURE -> "下载与捕获"
+                            XSection.ABOUT -> "关于与诊断"
+                            else -> "收件箱设置"
+                        },
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Black,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = if (section == XSection.APPEARANCE) "外观、莫奈取色与界面缩放" else "外观、存储备份、捕获与同步",
+                        text = when (section) {
+                            XSection.APPEARANCE -> "外观、莫奈取色与界面缩放"
+                            XSection.BACKUP -> "自动备份和导入恢复集中管理"
+                            XSection.CAPTURE -> "下载行为、下载器目录与剪贴板捕获"
+                            XSection.ABOUT -> "版本、输入法和当前运行状态"
+                            else -> "外观、存储备份、下载与捕获"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -280,51 +319,9 @@ fun SettingsScreen(
         if (section == null || section == XSection.BACKUP) {
         SectionCard(
             title = "存储与备份",
-            subtitle = "Android/data 监控、自动备份和导入恢复集中管理",
+            subtitle = "自动备份和导入恢复集中管理",
             icon = Icons.Default.FolderOpen
         ) {
-            SettingRow(
-                icon = Icons.Default.FolderOpen,
-                title = "下载监控目录",
-                subtitle = displayMonitorUri(monitorUri),
-                trailing = { Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted) },
-                onClick = { monitorPicker.launch(null) }
-            )
-            Text(
-                text = "默认扫描 com.ed.Edqiu，并兼容 com.ed.edqiu、com.ed.twitterdownload 旧目录。Android/data 可通过默认路径或手动路径保存。",
-                style = MaterialTheme.typography.bodySmall,
-                color = Muted,
-                modifier = Modifier.padding(top = 8.dp)
-            )
-            Spacer(Modifier.height(10.dp))
-            OutlinedTextField(
-                value = manualMonitorPath,
-                onValueChange = { manualMonitorPath = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("手动监控路径") },
-                singleLine = true,
-                shape = RoundedCornerShape(16.dp)
-            )
-            FilledTonalButton(
-                onClick = {
-                    val normalized = normalizeMonitorPath(manualMonitorPath)
-                    scope.launch { settings.setMonitorDirUri(normalized) }
-                    monitorFeedback = "监控目录已更新"
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp)
-            ) { Text("保存监控路径") }
-            // 反馈固定显示在「保存监控路径」按钮下方，5s 后动画消失
-            InlineFeedbackBar(
-                message = monitorFeedback,
-                onDismiss = { monitorFeedback = null }
-            )
-            TextButton(onClick = { scope.launch { settings.setMonitorDirUri(null) } }) {
-                Text("恢复默认监控目录")
-            }
-
-            HorizontalDivider(Modifier.padding(vertical = 10.dp), color = Color(0xFFE2E8F0))
-
             SettingRow(
                 icon = Icons.Default.Backup,
                 title = "自动备份目录",
@@ -341,11 +338,19 @@ fun SettingsScreen(
                 shape = RoundedCornerShape(16.dp)
             )
             FilledTonalButton(
-                onClick = { backupVm.setBackupDirectoryPath(normalizeMonitorPath(manualBackupPath)) },
+                onClick = {
+                    backupVm.setBackupDirectoryPath(normalizeMonitorPath(manualBackupPath))
+                    // 就近反馈（2026-09-15）：反馈条移到按钮正下方，不再沿用卡片底部远端反馈
+                    backupPathFeedback = FeedbackMessage("备份路径已更新", FeedbackKind.SUCCESS)
+                },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp)
             ) { Text("保存备份路径") }
-            SwitchRow("每日自动备份", "每天保留最近 7 份备份", automaticBackup, backupVm::setAutomaticBackup)
+            InlineFeedbackBar(
+                message = backupPathFeedback,
+                onDismiss = { backupPathFeedback = null }
+            )
+            SwitchRow("每日自动备份", "每天自动备份，并清理超过 7 天的旧备份", automaticBackup, backupVm::setAutomaticBackup)
             Button(
                 onClick = backupVm::backupNow,
                 enabled = !busy && backupDirUri != null,
@@ -386,20 +391,87 @@ fun SettingsScreen(
 
         if (section == null || section == XSection.CAPTURE) {
         SectionCard(
-            title = "捕获与同步",
-            subtitle = "剪贴板捕获、失败重试和后台状态刷新",
+            title = "下载与捕获",
+            subtitle = "下载行为、下载器目录与剪贴板捕获（2026-09-14 分类重排）",
             icon = Icons.Default.Sync
         ) {
-            SwitchRow("回到前台检查剪贴板", "App 回到前台时读取一次当前剪贴板", autoCapture) {
-                scope.launch { settings.setAutoCapture(it) }
-            }
+            // ── 下载：下载行为相关开关 ──
+            GroupLabel("下载")
             SwitchRow("下载失败后自动重试", "按退避间隔自动重试失败链接", autoRetry) {
                 scope.launch { settings.setAutoRetry(it) }
             }
             SwitchRow("后台更新下载状态", "系统允许时定期扫描监控目录", backgroundSync) {
                 scope.launch { settings.setBackgroundSync(it) }
             }
-            val accessibilityEnabled = remember { DeviceCapabilityReader.isAccessibilityCaptureEnabled(context) }
+            HorizontalDivider(Modifier.padding(vertical = 10.dp), color = Color(0xFFE2E8F0))
+
+            // ── 下载器：下载目录与监控 ──
+            GroupLabel("下载器")
+            SettingRow(
+                icon = Icons.Default.FolderOpen,
+                title = "下载监控目录",
+                subtitle = displayMonitorUri(monitorUri),
+                trailing = { Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted) },
+                onClick = { monitorPicker.launch(null) }
+            )
+            Text(
+                text = "默认扫描 App 自有下载目录，并兼容历史版本目录。受系统限制的共享目录可通过默认路径或下方手动路径保存。",
+                style = MaterialTheme.typography.bodySmall,
+                color = Muted,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = manualMonitorPath,
+                onValueChange = { manualMonitorPath = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("手动监控路径") },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp)
+            )
+            FilledTonalButton(
+                onClick = {
+                    val normalized = normalizeMonitorPath(manualMonitorPath)
+                    scope.launch { settings.setMonitorDirUri(normalized) }
+                    monitorFeedback = FeedbackMessage("监控目录已更新", FeedbackKind.SUCCESS)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            ) { Text("保存监控路径") }
+            // 反馈固定显示在「保存监控路径」按钮下方，5s 后动画消失
+            InlineFeedbackBar(
+                message = monitorFeedback,
+                onDismiss = { monitorFeedback = null }
+            )
+            TextButton(onClick = {
+                scope.launch { settings.setMonitorDirUri(null) }
+                // 2026-09-15：重置操作补即时反馈（原点击后无任何回显）
+                monitorFeedback = FeedbackMessage("已恢复默认监控目录", FeedbackKind.SUCCESS)
+            }) {
+                Text("恢复默认监控目录")
+            }
+            HorizontalDivider(Modifier.padding(vertical = 10.dp), color = Color(0xFFE2E8F0))
+
+            // ── 捕获：剪贴板与无障碍 ──
+            GroupLabel("捕获")
+            SwitchRow("回到前台检查剪贴板", "App 回到前台时读取一次当前剪贴板", autoCapture) {
+                scope.launch { settings.setAutoCapture(it) }
+            }
+            // 无障碍状态随 ON_RESUME 刷新（2026-09-15 修复）：原先 remember 缓存首次结果，
+            // 从系统无障碍设置返回后界面仍显示旧状态
+            var accessibilityEnabled by remember {
+                mutableStateOf(DeviceCapabilityReader.isAccessibilityCaptureEnabled(context))
+            }
+            val accessibilityLifecycleOwner = LocalLifecycleOwner.current
+            DisposableEffect(accessibilityLifecycleOwner) {
+                val observer = LifecycleEventObserver { _, event ->
+                    if (event == Lifecycle.Event.ON_RESUME) {
+                        accessibilityEnabled = DeviceCapabilityReader.isAccessibilityCaptureEnabled(context)
+                    }
+                }
+                accessibilityLifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { accessibilityLifecycleOwner.lifecycle.removeObserver(observer) }
+            }
             StatusLine(
                 icon = Icons.Default.Verified,
                 text = "无障碍捕获：${if (accessibilityEnabled) "已开启" else "未开启"}",
@@ -428,65 +500,10 @@ fun SettingsScreen(
             inputMethod?.componentName?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            StatusLine(Icons.Default.Info, "Edqiu 1.2.0 (build 3)")
+            StatusLine(Icons.Default.Info, "Edqiu ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
             StatusLine(Icons.Default.Restore, "导入恢复会保留已下载状态、文件路径和下载时间")
         }
         }
-    }
-}
-
-@Composable
-private fun SeedColorSelector(
-    selectedIndex: Int,
-    enabled: Boolean = true,
-    onSelect: (Int) -> Unit
-) {
-    val presets = Monet.seedPresets
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            presets.forEachIndexed { index, preset ->
-                val selected = index == selectedIndex
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(preset.seed.copy(alpha = if (enabled) 1f else 0.32f))
-                        .then(
-                            if (!enabled) Modifier.border(1.dp, Color.White, CircleShape)
-                            else if (selected) Modifier.border(2.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
-                            else Modifier.border(1.dp, Color.White, CircleShape)
-                        )
-                        .clickable(enabled = enabled) { onSelect(index) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (selected && enabled) {
-                        Icon(
-                            Icons.Default.Check,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    } else if (!enabled) {
-                        Icon(
-                            Icons.Default.Lock,
-                            contentDescription = null,
-                            tint = Color.White.copy(alpha = 0.7f),
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                }
-            }
-        }
-        Text(
-            text = presets.getOrNull(selectedIndex)?.name ?: "墨蓝",
-            style = MaterialTheme.typography.bodySmall,
-            color = if (enabled) Muted else Muted.copy(alpha = 0.5f),
-            fontWeight = FontWeight.SemiBold
-        )
     }
 }
 
@@ -526,7 +543,7 @@ private fun SettingRow(
     trailing: @Composable (() -> Unit)? = null,
     onClick: (() -> Unit)? = null
 ) {
-    val modifier = if (onClick == null) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().clickable(onClick = onClick)
+    val modifier = if (onClick == null) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().pressableNoRipple { onClick() }
     Row(
         modifier = modifier.padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -539,6 +556,19 @@ private fun SettingRow(
         }
         trailing?.invoke()
     }
+}
+
+/** 卡片内功能分组小标题（2026-09-14 分类重排：下载 / 下载器 / 捕获）。 */
+@Composable
+private fun GroupLabel(text: String) {
+    Text(
+        text = text,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.ExtraBold,
+        color = MaterialTheme.colorScheme.primary,
+        letterSpacing = 0.06.sp,
+        modifier = Modifier.padding(top = 2.dp, bottom = 2.dp)
+    )
 }
 
 @Composable
@@ -635,13 +665,13 @@ private fun ThemeSettingsSection(
     val blurIntensity by settings.blurIntensityFlow.collectAsStateWithLifecycle(initialValue = 0.6f)
     val floatingTabBar by settings.floatingTabBarFlow.collectAsStateWithLifecycle(initialValue = true)
     val liquidGlass by settings.liquidGlassEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
+    val highRefreshRate by settings.highRefreshRateFlow.collectAsStateWithLifecycle(initialValue = true)
+    val hapticStrength by settings.hapticStrengthFlow.collectAsStateWithLifecycle(initialValue = 2)
     val predictiveBack by settings.predictiveBackFlow.collectAsStateWithLifecycle(initialValue = true)
     val displayScale by settings.displayScaleFlow.collectAsStateWithLifecycle(initialValue = 0.8f)
     val accent = Color(accentColor)
 
     var accentPickerOpen by remember { mutableStateOf(false) }
-    var tonalExpanded by remember { mutableStateOf(false) }
-    var specExpanded by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         // 顶部预览卡
@@ -678,47 +708,31 @@ private fun ThemeSettingsSection(
                 }
             )
             ThinDivider()
-            Box {
-                SettingItemRow(
-                    icon = StyleIcon,
-                    title = "色彩风格",
-                    subtitle = "Material 3 多风格色板（TonalSpot/Vibrant/Expressive…）",
-                    onClick = { tonalExpanded = true },
-                    trailing = { ValueDropdown(tonalStyle.label) }
-                )
-                DropdownMenu(expanded = tonalExpanded, onDismissRequest = { tonalExpanded = false }) {
-                    TonalStyle.entries.forEach { style ->
-                        DropdownMenuItem(
-                            text = { Text(style.label) },
-                            onClick = {
-                                scope.launch { settings.setTonalStyle(style) }
-                                tonalExpanded = false
-                            }
-                        )
-                    }
-                }
-            }
+            // 色彩风格（2026-09-15）：DropdownMenu → 行下分段 chips。
+            // v1.4.12 已知 DropdownMenu 空间不足时向上展开会遮挡卡片，统一改零遮挡分段
+            SettingItemRow(
+                icon = StyleIcon,
+                title = "色彩风格",
+                subtitle = "Material 3 多风格色板，点选即时生效"
+            )
+            OptionChips(
+                options = TonalStyle.entries,
+                label = { it.label },
+                isSelected = { it == tonalStyle },
+                onSelect = { style -> scope.launch { settings.setTonalStyle(style) } }
+            )
             ThinDivider()
-            Box {
-                SettingItemRow(
-                    icon = ScienceIcon,
-                    title = "色彩标准",
-                    subtitle = "色度计算标准，切换后配色即时更新",
-                    onClick = { specExpanded = true },
-                    trailing = { ValueDropdown(monetSpec.label) }
-                )
-                DropdownMenu(expanded = specExpanded, onDismissRequest = { specExpanded = false }) {
-                    MonetSpec.entries.forEach { spec ->
-                        DropdownMenuItem(
-                            text = { Text(spec.label) },
-                            onClick = {
-                                scope.launch { settings.setMonetSpec(spec) }
-                                specExpanded = false
-                            }
-                        )
-                    }
-                }
-            }
+            SettingItemRow(
+                icon = ScienceIcon,
+                title = "色彩标准",
+                subtitle = "色度计算标准，切换后配色即时更新"
+            )
+            OptionChips(
+                options = MonetSpec.entries,
+                label = { it.label },
+                isSelected = { it == monetSpec },
+                onSelect = { spec -> scope.launch { settings.setMonetSpec(spec) } }
+            )
         }
 
         // ===== 效果卡组 =====
@@ -726,7 +740,7 @@ private fun ThemeSettingsSection(
             SettingItemRow(
                 icon = Icons.Outlined.BlurOn,
                 title = "模糊",
-                subtitle = "背景莫奈色域与玻璃磨砂层的模糊",
+                subtitle = "背景莫奈色域的弥散程度，强度越高色域越柔和",
                 trailing = {
                     DynamicSwitch(
                         checked = blurEnabled,
@@ -734,20 +748,21 @@ private fun ThemeSettingsSection(
                     )
                 }
             )
-            if (blurEnabled) {
-                Text(
-                    text = "模糊强度 ${(blurIntensity * 100).toInt()}%",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 16.dp)
-                )
-                Slider(
-                    value = blurIntensity,
-                    onValueChange = { scope.launch { settings.setBlurIntensity(it) } },
-                    valueRange = 0f..1f,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
-                )
-            }
+            // 模糊强度旋钮：关闭模糊时保持可见（禁用态），让「有这个旋钮」可被感知
+            Text(
+                text = if (blurEnabled) "模糊强度 ${(blurIntensity * 100).toInt()}%"
+                else "模糊强度 ${(blurIntensity * 100).toInt()}%（开启模糊后可调）",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 16.dp)
+            )
+            Slider(
+                value = blurIntensity,
+                onValueChange = { scope.launch { settings.setBlurIntensity(it) } },
+                valueRange = 0f..1f,
+                enabled = blurEnabled,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+            )
             ThinDivider()
             SettingItemRow(
                 icon = Icons.Outlined.Visibility,
@@ -772,6 +787,31 @@ private fun ThemeSettingsSection(
                     )
                 }
             )
+            ThinDivider()
+            // 强制高刷新率（2026-09-14 v1.4.15）：锁定设备最高刷新率（PLK110=120Hz）
+            SettingItemRow(
+                icon = Icons.Outlined.Speed,
+                title = "强制高刷新率",
+                subtitle = "锁定设备最高刷新率（120Hz），动画更顺滑，耗电略增",
+                trailing = {
+                    DynamicSwitch(
+                        checked = highRefreshRate,
+                        onCheckedChange = { scope.launch { settings.setHighRefreshRate(it) } }
+                    )
+                }
+            )
+            ThinDivider()
+            // 按压震动档位（2026-09-14）：无感按压的震动强度可调
+            // v1.4.12：DropdownMenu 改行内分段控件 —— 下拉菜单空间不足时向上展开会
+            // 遮挡上方卡片（用户反馈"出现位置不合理"）；分段 chip 零遮挡、点选即生效
+            SettingItemRow(
+                icon = Icons.Outlined.Vibration,
+                title = "按压震动",
+                subtitle = "点击行级元素时的触感反馈强度"
+            )
+            HapticSegmented(selected = hapticStrength) { level ->
+                scope.launch { settings.setHapticStrength(level) }
+            }
         }
 
         // ===== 手势卡组 =====
@@ -790,22 +830,15 @@ private fun ThemeSettingsSection(
             SettingItemRow(
                 icon = Icons.Outlined.AspectRatio,
                 title = "界面缩放",
-                subtitle = "调整全局显示比例",
+                subtitle = "调整全局显示比例，拖动下方滑杆实时生效",
                 trailing = {
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            "${(displayScale * 100).toInt()}%",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Icon(
-                            Icons.Default.ChevronRight,
-                            contentDescription = null,
-                            tint = Muted,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
+                    // 2026-09-15：去掉 ChevronRight 假 affordance——本行不可点，交互在下方滑杆
+                    Text(
+                        "${(displayScale * 100).toInt()}%",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                 }
             )
             Slider(
@@ -862,6 +895,7 @@ private val AccentPresets: List<Pair<String, Int>> = listOf(
  * 强调色完整选择器：预设色板 + HSV 三滑块（色相/饱和度/明度）+ 实时预览。
  * 满足「完整的颜色选择」——可选取任意色，选中即写入强调色并全局生效。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AccentColorPickerDialog(
     initial: Color,
@@ -874,10 +908,26 @@ private fun AccentColorPickerDialog(
     var value by remember { mutableStateOf(initHsv[2]) }
     val current = Color.hsv(hue, sat, value)
 
-    AlertDialog(
+    // 2026-09-15：居中 AlertDialog → 底部 ModalBottomSheet（iOS 底部面板语言）。
+    // 色板 + 3 个滑杆内容较高，居中弹窗遮挡感强；底部弹出更贴合全局导航手势习惯
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = { Text("选择强调色", fontWeight = FontWeight.Black) },
-        text = {
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceContainer
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 22.dp)
+                .padding(bottom = 18.dp)
+        ) {
+            Text(
+                "选择强调色",
+                fontWeight = FontWeight.Black,
+                fontSize = 18.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(16.dp))
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 // 预设色板
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -981,14 +1031,25 @@ private fun AccentColorPickerDialog(
                     )
                 )
             }
-        },
-        confirmButton = {
-            Button(onClick = { onConfirm(current.toArgb()) }) { Text("确定") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            Spacer(Modifier.height(18.dp))
+            // 底部操作行：取消靠左、确定靠右（iOS sheet 按钮语言）
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(14.dp)
+                ) { Text("取消") }
+                Button(
+                    onClick = { onConfirm(current.toArgb()) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(14.dp)
+                ) { Text("确定") }
+            }
         }
-    )
+    }
 }
 
 /** 通用 HSV 滑杆（带渐变轨道） */
@@ -1124,6 +1185,39 @@ private fun ThemeSegmented(selected: ThemeMode, onSelect: (ThemeMode) -> Unit) {
     }
 }
 
+/** 按压震动 segmented：关闭 / 轻 / 中 / 明确（与主题模式分段同语言） */
+@Composable
+private fun HapticSegmented(selected: Int, onSelect: (Int) -> Unit) {
+    val labels = listOf("关闭", "轻", "中", "明确")
+    GlassSurface(
+        modifier = Modifier.fillMaxWidth(),
+        tier = GlassTier.L1,
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(modifier = Modifier.padding(4.dp)) {
+            labels.forEachIndexed { index, label ->
+                val isSelected = index == selected
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (isSelected) MaterialTheme.colorScheme.surface.copy(alpha = 0.92f) else Color.Transparent)
+                        .clickable { onSelect(index) }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        label,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                        fontSize = 14.sp,
+                        color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
 /** 玻璃卡组容器 */
 @Composable
 private fun GroupCard(content: @Composable ColumnScope.() -> Unit) {
@@ -1147,7 +1241,7 @@ private fun SettingItemRow(
     trailing: @Composable (() -> Unit)? = null,
     onClick: (() -> Unit)? = null
 ) {
-    val rowMod = if (onClick != null) Modifier.fillMaxWidth().clickable(onClick = onClick) else Modifier.fillMaxWidth()
+    val rowMod = if (onClick != null) Modifier.fillMaxWidth().pressableNoRipple { onClick() } else Modifier.fillMaxWidth()
     Row(
         modifier = rowMod.padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1168,12 +1262,52 @@ private fun SettingItemRow(
     }
 }
 
-/** 右侧值 + 下拉箭头（按钮样式） */
+/**
+ * 分段选项 chips（2026-09-15）：替代行内 DropdownMenu。
+ * 零遮挡、点选即生效；选项过多时 FlowRow 自动换行，选中年份主色高亮。
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ValueDropdown(value: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(value, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Medium)
-        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted, modifier = Modifier.size(18.dp))
+private fun <T> OptionChips(
+    options: List<T>,
+    label: (T) -> String,
+    isSelected: (T) -> Boolean,
+    onSelect: (T) -> Unit
+) {
+    FlowRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        options.forEach { option ->
+            val selected = isSelected(option)
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                        else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                        else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .clickable { onSelect(option) }
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    label(option),
+                    fontSize = 12.5.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (selected) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 

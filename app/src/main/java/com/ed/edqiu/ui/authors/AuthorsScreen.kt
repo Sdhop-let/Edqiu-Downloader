@@ -1,5 +1,6 @@
 package com.ed.edqiu.ui.authors
 
+import com.ed.edqiu.ui.util.pressableNoRipple
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
@@ -392,7 +393,7 @@ private fun AuthorActionButton(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f))
-            .clickable(onClick = onClick)
+            .pressableNoRipple { onClick() }
             .padding(vertical = 9.dp, horizontal = 12.dp)
     ) {
         Icon(

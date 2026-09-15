@@ -2,9 +2,12 @@
 
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -141,7 +144,7 @@ fun AppNavigation(
 
     LaunchedEffect(playerVisible, playerFilePath) {
         if (!playerVisible && playerFilePath != null) {
-            delay(180L)
+            delay(280L) // ≥ 退场动画 240ms，动画播完再清路径，避免组合被硬移除
             playerFilePath = null
         }
     }
@@ -167,7 +170,21 @@ fun AppNavigation(
                 startDestination = startDestination,
                 modifier = Modifier
                     // 仅保留系统 inset（状态栏/导航栏），不再为 Tab 额外占位
-                    .padding(paddingValues)
+                    .padding(paddingValues),
+                // Tab 切换转场（2026-09-14 v1.4.10）：纯淡入淡出 —— tab 间内容结构不同，
+                // 缩放动画会让页面"忽大忽小"；fade 保持大小稳定，只做明度过渡
+                enterTransition = {
+                    fadeIn(tween(260, easing = FastOutSlowInEasing))
+                },
+                exitTransition = {
+                    fadeOut(tween(180, easing = FastOutSlowInEasing))
+                },
+                popEnterTransition = {
+                    fadeIn(tween(260, easing = FastOutSlowInEasing))
+                },
+                popExitTransition = {
+                    fadeOut(tween(180, easing = FastOutSlowInEasing))
+                }
             ) {
                 composable(Screen.Home.route) {
                     HomeScreen(
@@ -183,6 +200,10 @@ fun AppNavigation(
                         historyViewModel = historyViewModel,
                         onBack = { navController.popBackStack() },
                         onNavigateToPlayer = { filePath ->
+                            // 2026-09-14 修复"立即返回后再点无法播放"：快速往返时 PlayerScreen
+                            // 组合未销毁、LaunchedEffect(autoPlayFilePath) 不会重启，
+                            // 必须在此显式触发 playVideo（幂等：播放中→早退，IDLE→重新 prepare）
+                            playerViewModel.playVideo(filePath)
                             playerFilePath = filePath
                             playerVisible = true
                         }
@@ -192,6 +213,10 @@ fun AppNavigation(
                     MediaLibraryScreen(
                         historyViewModel = historyViewModel,
                         onNavigateToPlayer = { filePath ->
+                            // 2026-09-14 修复"立即返回后再点无法播放"：快速往返时 PlayerScreen
+                            // 组合未销毁、LaunchedEffect(autoPlayFilePath) 不会重启，
+                            // 必须在此显式触发 playVideo（幂等：播放中→早退，IDLE→重新 prepare）
+                            playerViewModel.playVideo(filePath)
                             playerFilePath = filePath
                             playerVisible = true
                         }
@@ -304,8 +329,11 @@ fun AppNavigation(
         if (activePlayerPath != null) {
             AnimatedVisibility(
                 visible = playerVisible,
-                enter = fadeIn(animationSpec = tween(durationMillis = 90)),
-                exit = fadeOut(animationSpec = tween(durationMillis = 180)),
+                // 播放器进出场（2026-09-14 v1.4.12 调优）：进场"沉入"保留（视频未加载，无 Surface 代价）；
+                // 退场改纯透明度快速淡出 —— SurfaceView 是硬件合成层，scale/长 alpha 动画会撕裂掉帧，
+                // 且 onBack 已 pause 冻结画面，短淡出配合冻结帧最顺滑
+                enter = fadeIn(tween(200)) + scaleIn(initialScale = 1.06f, animationSpec = tween(200)),
+                exit = fadeOut(tween(160)),
                 modifier = Modifier.fillMaxSize()
             ) {
                 PlayerScreen(
@@ -328,6 +356,7 @@ fun AppNavigation(
                 playerViewModel = playerViewModel,
                 visible = !playerVisible,
                 onExpand = {
+                    playerViewModel.playVideo(activePlayerPath)
                     playerFilePath = activePlayerPath
                     playerVisible = true
                 },

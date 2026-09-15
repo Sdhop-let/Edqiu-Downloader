@@ -18,7 +18,8 @@ class ProxyPreferences(context: Context) {
         return ProxySettings(
             enabled = prefs.getBoolean("proxy_enabled", false),
             host = prefs.getString("proxy_host", "127.0.0.1") ?: "127.0.0.1",
-            port = prefs.getInt("proxy_port", 7890)
+            port = prefs.getInt("proxy_port", 7890),
+            type = prefs.getString("proxy_type", ProxySettings.TYPE_HTTP) ?: ProxySettings.TYPE_HTTP
         )
     }
 
@@ -27,6 +28,7 @@ class ProxyPreferences(context: Context) {
             .putBoolean("proxy_enabled", settings.enabled)
             .putString("proxy_host", settings.host)
             .putInt("proxy_port", settings.port)
+            .putString("proxy_type", settings.type)
             .apply()
     }
 

@@ -74,5 +74,9 @@ data class SavedLink(
     val lastError: String? = null,
 
     @ColumnInfo(name = "next_retry_at")
-    val nextRetryAt: Long? = null
+    val nextRetryAt: Long? = null,
+
+    /** 推文发布时间（epoch ms，来自下载 sidecar；2026-09-15 作者页按发布时间排序）。 */
+    @ColumnInfo(name = "published_at")
+    val publishedAt: Long? = null
 )

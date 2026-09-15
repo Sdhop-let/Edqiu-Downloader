@@ -1,5 +1,6 @@
 ﻿package com.ed.edqiu.ui.screens
 
+import com.ed.edqiu.ui.util.pressableNoRipple
 import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -24,18 +25,26 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.FileCopy
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.ViewAgenda
 import androidx.compose.material.icons.outlined.ViewStream
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -103,6 +112,7 @@ private enum class LibraryFilter(val label: String) {
     IMAGE("图片")
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MediaLibraryScreen(
     historyViewModel: HistoryViewModel,
@@ -118,6 +128,11 @@ fun MediaLibraryScreen(
     var syncToken by remember { mutableStateOf(0) }
     var filter by remember { mutableStateOf(LibraryFilter.ALL) }
     var grouped by remember { mutableStateOf(false) }
+    // 2026-09-15 v2 批次5（P1-4 文本语义搜索）：文案/作者/文件名模糊搜索
+    var searchActive by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    // 2026-09-15 v2 批次3（P1-4① pHash 查重）
+    var showDuplicates by remember { mutableStateOf(false) }
     val scanCoordinator = remember { MediaLibraryAutoScanCoordinator() }
     val startLibraryScan: (LibraryScanTrigger) -> Unit = { trigger ->
         val token = syncToken + 1
@@ -151,6 +166,12 @@ fun MediaLibraryScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                // 发布时间补拉（内部 10 分钟节流）：旧记录联网补齐排序键
+                historyViewModel.backfillPublishedTimes()
+                // 画质升级检测（内部档位节流；慢网自动暂停）：换更高码率/分辨率版本
+                historyViewModel.upgradeMediaQuality()
+                // pHash 补算（内部 10 分钟节流，纯 CPU）：重复媒体检测底料（2026-09-15 批次3）
+                historyViewModel.backfillPhashes()
                 val lastScanDate = scanPrefs.getString(KEY_LAST_SCAN_DATE, null)
                 val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
                 if (lastScanDate != today) {
@@ -174,11 +195,51 @@ fun MediaLibraryScreen(
     }
     val syncLibrary = { startLibraryScan(LibraryScanTrigger.Manual) }
 
-    val items = when (filter) {
+    // 发布时间补拉 / 画质升级实时状态（2026-09-15）：升级 pill 实时显示
+    // 「补齐 done/total · 网络档位」/「升级 done/total · 网络档位」，完成消息进消息条
+    val backfillState by com.ed.edqiu.service.PublishedAtBackfiller.uiState.collectAsState()
+    val upgradeState by com.ed.edqiu.service.MediaQualityUpgrader.uiState.collectAsState()
+    val upgradingNow = backfillState?.running == true || upgradeState?.running == true
+    val upgradePillText = when {
+        backfillState?.running == true ->
+            "补齐 ${backfillState!!.done}/${backfillState!!.total} · ${backfillState!!.tier.label}"
+        upgradeState?.running == true ->
+            "升级 ${upgradeState!!.done}/${upgradeState!!.total} · ${upgradeState!!.tier.label}"
+        else -> "升级"
+    }
+    androidx.compose.runtime.LaunchedEffect(backfillState?.at) {
+        val state = backfillState
+        if (state != null && !state.running && state.message != null) {
+            syncMessage = state.message
+            delay(4000)
+            if (syncMessage == state.message) syncMessage = null
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(upgradeState?.at) {
+        val state = upgradeState
+        if (state != null && !state.running && state.message != null) {
+            syncMessage = state.message
+            delay(4000)
+            if (syncMessage == state.message) syncMessage = null
+        }
+    }
+
+    val filteredByType = when (filter) {
         LibraryFilter.ALL -> allItems
         LibraryFilter.VIDEO -> allItems.filter { it.mediaType == MediaType.VIDEO }
         LibraryFilter.IMAGE -> allItems.filter { it.mediaType == MediaType.IMAGE }
     }
+    val items = if (searchQuery.isBlank()) filteredByType else {
+        val q = searchQuery.trim()
+        filteredByType.filter { entity ->
+            entity.title.contains(q, ignoreCase = true) ||
+                entity.uploader.contains(q, ignoreCase = true) ||
+                entity.filePath.substringAfterLast('/').contains(q, ignoreCase = true)
+        }
+    }
+
+    // P1-4① 重复检测（2026-09-15 批次3）：pHash 汉明距离 ≤4 聚组（纯内存计算）
+    val duplicateGroupsList = remember(allItems) { duplicateGroups(allItems) }
 
     // 同作者序号：为每条媒体分配它在作者内的递增序号；作者总数 ≥2 时显示徽章（区分重复视频）
     val authorSeq: Map<String, Int> = remember(items) {
@@ -214,6 +275,21 @@ fun MediaLibraryScreen(
                 onScan = syncLibrary,
                 grouped = grouped,
                 onGroupToggle = { grouped = !grouped },
+                searchActive = searchActive,
+                searchQuery = searchQuery,
+                onSearchToggle = {
+                    searchActive = !searchActive
+                    if (!searchActive) searchQuery = ""
+                },
+                onSearchQueryChange = { searchQuery = it },
+                duplicateCount = duplicateGroupsList.size,
+                onOpenDuplicates = { showDuplicates = true },
+                onUpgrade = {
+                    // 非阻塞触发：实时进度由 Backfiller/Upgrader 状态流驱动 pill 与消息条
+                    scope.launch { historyViewModel.manualUpgradeNow() }
+                },
+                upgrading = upgradingNow,
+                upgradeLabel = upgradePillText
             )
         }
 
@@ -247,12 +323,85 @@ fun MediaLibraryScreen(
             }
             if (grouped) {
                 groups.forEach { group ->
-                    val headerKey = group.tweetId ?: ("other_" + (group.items.firstOrNull()?.id.orEmpty()))
+                    val headerKey = "group_${group.author}_${group.dayLabel}"
                     item(key = "group_header_$headerKey") { LibraryGroupHeader(group = group) }
                     items(group.items, key = { it.id }) { entity -> cardFor(entity) }
                 }
             } else {
                 items(items, key = { it.id }) { entity -> cardFor(entity) }
+            }
+        }
+    }
+
+    // ── 疑似重复作品 Sheet（2026-09-15 批次3：P1-4① pHash 查重）──
+    if (showDuplicates) {
+        ModalBottomSheet(onDismissRequest = { showDuplicates = false }) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "疑似重复作品",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Black,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "按感知哈希识别画面相似的视频/图片。每组自动保留画质最高的一条，其余点「删除」移除（含本地文件）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (duplicateGroupsList.isEmpty()) {
+                    Text(
+                        text = "未发现疑似重复。新下载的媒体会自动计算指纹，稍后再看。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                duplicateGroupsList.forEach { group ->
+                    val keep = group.maxByOrNull { it.fileSize.coerceAtLeast(0L) } ?: group.first()
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.55f)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "${keep.uploader.ifBlank { "未知作者" }} · ${group.size} 条画面相似",
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "保留：${keep.title.take(28)} · ${formatFileSize(keep.fileSize)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            group.filter { it.id != keep.id }.forEach { dup ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = dup.title.take(30).ifBlank { dup.filePath.substringAfterLast('/') },
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${formatFileSize(dup.fileSize)} · ${dup.quality}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    TextButton(onClick = {
+                                        historyViewModel.deleteHistory(dup, deleteLocalFile = true)
+                                    }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -262,11 +411,8 @@ fun MediaLibraryScreen(
 private fun LibraryGroupHeader(group: LibraryGroup) {
     Row(Modifier.padding(top = 4.dp)) {
         Text(
-            text = if (group.tweetId != null) {
-                "推文分组 · ${group.items.size} 个媒体"
-            } else {
-                "其他 · ${group.items.size} 个媒体"
-            },
+            // 2026-09-15 分组准则：作者 + 发布日（同作者同一天连续帖合成一组）
+            text = "${group.author} · ${group.dayLabel} · ${group.items.size} 个媒体",
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary,
@@ -286,6 +432,19 @@ private fun LibraryHeader(
     onScan: () -> Unit,
     grouped: Boolean,
     onGroupToggle: () -> Unit,
+    // 2026-09-15 v2 批次5：文本搜索（文案/作者/文件名）
+    searchActive: Boolean,
+    searchQuery: String,
+    onSearchToggle: () -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    // 2026-09-15 v2 批次3：pHash 查重入口
+    duplicateCount: Int,
+    onOpenDuplicates: () -> Unit,
+    // 2026-09-15 新增：手动「升级」（发布时间补齐 + 画质升级，无视节流立即一轮）
+    onUpgrade: () -> Unit,
+    upgrading: Boolean,
+    // 升级 pill 实时文本：空闲「升级」/进行中「补齐 12/300 · 网络极好」
+    upgradeLabel: String
 ) {
     // L2 玻璃头部（方案 A 单行头）：E 徽章 + 媒体库 | 占用 · 刷新，下接筛选胶囊
     // 顶部加 statusBarsPadding 让玻璃卡从状态栏底部开始（对齐收件箱）
@@ -313,7 +472,9 @@ private fun LibraryHeader(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // 单行头：E 徽章 + 标题 | 占用 + 刷新
+            // ── 主行：E 徽章 + 标题/数据副行 | 升级 pill + 刷新 ──
+            // 2026-09-15 头部重设计：作品数与占用提升为标题副行（数据可视化优先），
+            // 分组切换降级为独立视图行（低频操作不占主操作区）
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     shape = CircleShape,
@@ -321,43 +482,73 @@ private fun LibraryHeader(
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f))
                 ) {
                     Box(
-                        modifier = Modifier.size(22.dp),
+                        modifier = Modifier.size(34.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = "E",
-                            fontSize = 11.sp,
+                            fontSize = 15.sp,
                             fontWeight = FontWeight.Black,
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = "媒体库",
-                    fontSize = 22.sp,
-                    lineHeight = 28.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = (-0.02).sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = formatFileSize(totalBytes),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Bold
-                )
+                Spacer(Modifier.width(11.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "媒体库",
+                        fontSize = 20.sp,
+                        lineHeight = 25.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = (-0.02).sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "$allCount 件作品 · 共 ${formatFileSize(totalBytes)}",
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Spacer(Modifier.width(8.dp))
-                LibraryHeaderIconButton(
-                    onClick = onGroupToggle,
-                    contentDescription = if (grouped) "平铺视图" else "按推文分组"
+                // 升级 pill：补齐发布时间排序 + 换更高画质（手动立即一轮）
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                    modifier = Modifier.pressableNoRipple(enabled = !upgrading) { onUpgrade() }
                 ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        if (upgrading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 1.5.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Text(
+                            text = upgradeLabel,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1
+                        )
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                // 搜索入口（2026-09-15 批次5）：文案/作者/文件名模糊搜索
+                LibraryHeaderIconButton(onClick = onSearchToggle, contentDescription = "搜索媒体库") {
                     Icon(
-                        if (grouped) Icons.Outlined.ViewStream else Icons.Outlined.ViewAgenda,
+                        if (searchActive) Icons.Outlined.SearchOff else Icons.Outlined.Search,
                         contentDescription = null,
-                        tint = if (grouped) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(21.dp)
+                        tint = if (searchActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
                 Spacer(Modifier.width(6.dp))
@@ -365,23 +556,102 @@ private fun LibraryHeader(
                     Icon(Icons.Outlined.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
                 }
             }
-            // 筛选胶囊（带计数 + 选中态 primaryContainer + 语义点）
+            // ── 搜索条（展开时出现，2026-09-15 批次5）──
+            AnimatedVisibility(visible = searchActive) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = onSearchQueryChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("搜索文案、作者或文件名", style = MaterialTheme.typography.bodySmall) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp)
+                )
+            }
+            // ── 视图行：排序准则说明 + 分组切换 pill（低频操作降级到次行）──
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "按发帖时间排序 · 最新在前",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Surface(
+                    shape = CircleShape,
+                    color = if (grouped) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f)
+                    else MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.55f),
+                    border = BorderStroke(
+                        1.dp,
+                        if (grouped) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                        else MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+                    ),
+                    modifier = Modifier.pressableNoRipple { onGroupToggle() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            if (grouped) Icons.Outlined.ViewStream else Icons.Outlined.ViewAgenda,
+                            contentDescription = null,
+                            tint = if (grouped) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = if (grouped) "按作者·日期分组" else "作品分组",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (grouped) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                // 查重入口（2026-09-15 批次3）：仅检出重复组时显示
+                if (duplicateCount > 0) {
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
+                        modifier = Modifier.pressableNoRipple { onOpenDuplicates() }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.FileCopy,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "重复 $duplicateCount 组",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+            }
+            // ── 统计筛选行：三张数据卡，兼作品类型筛选（数值大字 + 标签小字）──
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 val options = listOf(
-                    LibraryFilter.ALL to allCount,
-                    LibraryFilter.VIDEO to videoCount,
-                    LibraryFilter.IMAGE to imageCount
+                    Triple(LibraryFilter.ALL, "全部作品", allCount),
+                    Triple(LibraryFilter.VIDEO, "视频", videoCount),
+                    Triple(LibraryFilter.IMAGE, "图片", imageCount)
                 )
-                options.forEach { (value, count) ->
+                options.forEach { (value, label, count) ->
                     val selected = filter == value
                     Surface(
                         modifier = Modifier
                             .weight(1f)
-                            .clickable { onFilterChange(value) },
-                        shape = CircleShape,
+                            .pressableNoRipple { onFilterChange(value) },
+                        shape = RoundedCornerShape(16.dp),
                         color = if (selected) {
                             MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f)
                         } else {
@@ -393,28 +663,34 @@ private fun LibraryHeader(
                             else MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
                         )
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            modifier = Modifier.padding(vertical = 10.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
-                            if (selected) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(5.dp)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.primary)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                            }
                             Text(
-                                text = "${value.label} $count",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                text = "$count",
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = (-0.01).sp,
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                             )
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                if (selected) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(4.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primary)
+                                    )
+                                }
+                                Text(
+                                    text = label,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
@@ -463,7 +739,7 @@ private fun LibraryHeaderIconButton(
                 this.contentDescription = contentDescription
                 role = Role.Button
             }
-            .clickable(onClick = onClick),
+            .pressableNoRipple { onClick() },
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
@@ -662,15 +938,29 @@ private fun MediaCard(
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = mediaMeta(entity),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
+                    // 2026-09-15 卡片信息规划：质量·大小与时间分区展示——
+                    // 「发帖」时间 = 排序主键（主题色高亮，与下载时间明确区分）；
+                    // 无发布时间（未补齐）时显示灰色「下载」时间；已归位时下载时间
+                    // 降级为同行的辅助小字（不同天才显示，避免冗余）
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = mediaMeta(entity),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        val hasPublished = entity.publishedAt != null
+                        Text(
+                            text = mediaTimeText(entity),
+                            color = if (hasPublished) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = if (hasPublished) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelSmall,
+                            fontWeight = if (hasPublished) FontWeight.ExtraBold else FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), shape = RoundedCornerShape(999.dp)) {
                         Text(
                             "播放",
@@ -701,7 +991,7 @@ private fun CircleIconAction(onClick: () -> Unit, danger: Boolean = false, conte
     Surface(
         color = if (danger) Color(0xFFE11D48).copy(alpha = 0.78f) else Color.Black.copy(alpha = 0.48f),
         shape = CircleShape,
-        modifier = Modifier.size(30.dp).clickable(onClick = onClick)
+        modifier = Modifier.size(30.dp).pressableNoRipple { onClick() }
     ) {
         Box(contentAlignment = Alignment.Center) {
             content()
@@ -722,17 +1012,60 @@ private fun mediaBadge(entity: DownloadHistoryEntity): String {
     return author
 }
 
+/** pHash 重复分组（2026-09-15 批次3）：汉明距离 ≤4 判疑似重复，贪心聚组（纯内存）。 */
+private fun duplicateGroups(items: List<DownloadHistoryEntity>): List<List<DownloadHistoryEntity>> {
+    val withHash = items.filter { it.phash != null && it.phash != 0L }
+    val used = mutableSetOf<String>()
+    val groups = mutableListOf<List<DownloadHistoryEntity>>()
+    for (i in withHash.indices) {
+        val a = withHash[i]
+        if (a.id in used) continue
+        val group = mutableListOf(a)
+        for (j in i + 1 until withHash.size) {
+            val b = withHash[j]
+            if (b.id in used) continue
+            if (com.ed.edqiu.service.PhashService.hamming(a.phash!!, b.phash!!) <=
+                com.ed.edqiu.service.PhashService.HAMMING_THRESHOLD
+            ) {
+                group += b
+            }
+        }
+        if (group.size >= 2) {
+            group.forEach { used += it.id }
+            groups += group
+        }
+    }
+    return groups
+}
+
 private fun mediaMeta(entity: DownloadHistoryEntity): String {
-    // 质量 · 大小 · 时间（类型交给缩略图角标，标题只保留作者，消除重复）
+    // 质量 · 大小（类型交给缩略图角标，标题只保留作者；时间独立成行区分发帖/下载）
     val quality = entity.quality
         .removePrefix("video_")
         .removePrefix("image_")
         .ifBlank { null }
     return listOf(
         quality,
-        formatFileSize(entity.fileSize),
-        formatTime(entity.completedAt)
+        formatFileSize(entity.fileSize)
     ).filterNotNull().joinToString(" · ")
+}
+
+/**
+ * 时间行文本（2026-09-15 与下载时间明确区分）：
+ * - 已归位（有发布时间）：主题色「发帖 MM-dd HH:mm」；发布与下载不同天时
+ *   追加灰色「· 下载 MM-dd」辅助信息；
+ * - 未归位：灰色「下载 MM-dd HH:mm」（补拉完成后自动切换为发帖时间）。
+ */
+private fun mediaTimeText(entity: DownloadHistoryEntity): String {
+    val publishedAt = entity.publishedAt
+    return if (publishedAt != null) {
+        val base = "发帖 ${formatTime(publishedAt)}"
+        val downloadDay = SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date(entity.completedAt))
+        val publishDay = SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date(publishedAt))
+        if (downloadDay != publishDay) "$base · 下载 $downloadDay" else base
+    } else {
+        "下载 ${formatTime(entity.completedAt)}"
+    }
 }
 
 private fun formatDuration(millis: Long): String {

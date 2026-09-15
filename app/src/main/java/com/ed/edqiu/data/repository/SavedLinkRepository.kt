@@ -70,6 +70,13 @@ class SavedLinkRepository(
      */
     var onCaptured: ((String) -> Unit)? = null
 
+    /**
+     * 下载请求登记回调（2026-09-15 P0-4 持久队列挂载点）：
+     * 每次 [requestDownload] 执行时把任务登记进 WorkManager 持久队列，
+     * 进程被杀后由 Worker 自动续跑。由 AppContainer 挂载到 DownloadQueue.enqueue。
+     */
+    var onDownloadRequested: ((String) -> Unit)? = null
+
     suspend fun capture(text: String): CaptureResult {
         val canonicalUrl = TweetIdExtractor.canonicalUrlFromText(text)
             ?: return CaptureResult.Invalid
@@ -106,7 +113,9 @@ class SavedLinkRepository(
     suspend fun requestDownload(
         tweetId: String,
         manual: Boolean = false,
-        proxy: ProxySettings? = null
+        proxy: ProxySettings? = null,
+        /** Worker 续跑路径传 true：不再触发登记钩子（避免自我递归）。 */
+        viaQueue: Boolean = false
     ): DownloadRequestResult = downloadRequestMutex.withLock {
         var link = dao.getByTweetId(tweetId) ?: return DownloadRequestResult.Missing
         if (link.status == LinkStatus.DOWNLOADED) {
@@ -117,6 +126,9 @@ class SavedLinkRepository(
             dao.resetFailures(listOf(tweetId))
             link = dao.getByTweetId(tweetId) ?: return DownloadRequestResult.Missing
         }
+
+        // P0-4：登记进 WorkManager 持久队列（幂等 KEEP）——执行中途进程被杀也能续跑
+        if (!viaQueue) onDownloadRequested?.invoke(tweetId)
 
         val now = System.currentTimeMillis()
         val attemptNumber = link.attemptCount + 1
@@ -131,7 +143,8 @@ class SavedLinkRepository(
                     tweetId = tweetId,
                     status = LinkStatus.DOWNLOADED,
                     filePath = first.filePath,
-                    downloadedAt = first.downloadedAt
+                    downloadedAt = first.downloadedAt,
+                    publishedAt = first.publishedAt
                 )
                 dao.applyMeta(
                     tweetId = tweetId,
@@ -204,7 +217,8 @@ class SavedLinkRepository(
                     tweetId = link.tweetId,
                     status = LinkStatus.DOWNLOADED,
                     filePath = item.filePath,
-                    downloadedAt = item.foundAt
+                    downloadedAt = item.foundAt,
+                    publishedAt = item.publishedAt
                 )
                 if (link.authorId == null || link.caption == null || link.avatarUrl == null) {
                     dao.applyMeta(
@@ -252,7 +266,8 @@ class SavedLinkRepository(
                     savedAt = item.foundAt,
                     status = LinkStatus.DOWNLOADED,
                     filePath = item.filePath,
-                    downloadedAt = item.foundAt
+                    downloadedAt = item.foundAt,
+                    publishedAt = item.publishedAt
                 )
             )
             if (insertedRowId != -1L) imported++

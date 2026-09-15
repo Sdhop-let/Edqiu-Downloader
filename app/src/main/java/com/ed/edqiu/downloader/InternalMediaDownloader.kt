@@ -15,8 +15,6 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
-import java.net.InetSocketAddress
-import java.net.Proxy
 import java.net.URL
 import java.util.Locale
 
@@ -27,6 +25,22 @@ import java.util.Locale
  */
 class TweetGoneException(message: String) : Exception(message)
 
+/**
+ * 源推文只有低码率 mp4 变体（<2Mbps）但存在 HLS 高画质自适应流。
+ * 下载层收到该异常后转交 yt-dlp 引擎拉取 HLS 最佳画质（2026-09-15 源头画质优化：
+ * 避免先落盘低清 mp4 再靠后台升级，X 网页清晰而 App 内模糊的根源即在此）。
+ */
+class HlsBetterSourceException(val maxMp4Bitrate: Int) :
+    Exception("检测到 HLS 高画质流（mp4 最高仅 ${maxMp4Bitrate}bps）")
+
+/**
+ * 引擎一：FXTwitter 直连下载器。
+ *
+ * 职责：调 FXTwitter API 解析推文元数据 → 选择最高码率变体 → 断点续传落盘 → 写 sidecar。
+ * 由 [com.ed.edqiu.data.repository.DownloaderClient] 编排在三层引擎链的第一层；
+ * 2026-09-15 P0-1 起 [downloadFile] / [writeSidecar] 同时作为共享原语供
+ * 第三方 API 兜底引擎（ThirdPartyApiResolver 链路）复用，故可见性为 internal。
+ */
 class InternalMediaDownloader(private val context: Context) {
 
     data class DownloadedFile(
@@ -36,7 +50,9 @@ class InternalMediaDownloader(private val context: Context) {
         val authorId: String?,
         val authorName: String?,
         val caption: String?,
-        val thumbnailUrl: String?
+        val thumbnailUrl: String?,
+        /** 推文发布时间（epoch ms，2026-09-15 媒体库按发布时间排序）；解析失败为 null。 */
+        val publishedAt: Long? = null
     )
 
     suspend fun downloadTweet(rawUrl: String, proxy: ProxySettings? = null): Result<List<DownloadedFile>> = withContext(Dispatchers.IO) {
@@ -56,8 +72,16 @@ class InternalMediaDownloader(private val context: Context) {
             val authorName = author?.optString("name")?.takeIf { it.isNotBlank() }
             val uploader = authorId?.removePrefix("@") ?: "unknown"
             val caption = tweet.optString("text").takeIf { it.isNotBlank() }
+            val publishedAt = parsePublishedAt(tweet)
             val media = extractMedia(tweet)
             if (media.isEmpty()) error("推文中没有可下载的视频或图片")
+
+            // 2026-09-15 源头画质优化：mp4 变体最高码率不足 2Mbps 且存在 HLS 流时，
+            // 不落盘低清文件，直接转交 yt-dlp 引擎拉 HLS 最佳画质（1080p+）
+            val (maxMp4Bitrate, hasHls) = analyzeVariants(tweet)
+            if (hasHls && maxMp4Bitrate < 2_000_000) {
+                throw HlsBetterSourceException(maxMp4Bitrate)
+            }
 
             val outputDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                 ?: File(context.filesDir, "Download")
@@ -84,7 +108,7 @@ class InternalMediaDownloader(private val context: Context) {
                 DownloadTaskBus.add(task)
 
                 runCatching {
-                    downloadFile(item.url, target, proxy)
+                    downloadFile(item.url, target, proxy, taskId = task.id)
                     writeSidecar(
                         mediaFile = target,
                         sourceUrl = normalizedUrl,
@@ -96,7 +120,8 @@ class InternalMediaDownloader(private val context: Context) {
                         quality = item.quality,
                         mediaIndex = mediaIndex,
                         mediaType = item.kind.uppercase(Locale.ROOT),
-                        ext = item.ext
+                        ext = item.ext,
+                        publishedAt = publishedAt
                     )
                     DownloadedFile(
                         tweetId = tweetId,
@@ -105,7 +130,8 @@ class InternalMediaDownloader(private val context: Context) {
                         authorId = authorId,
                         authorName = authorName,
                         caption = caption,
-                        thumbnailUrl = item.thumbnail ?: item.url
+                        thumbnailUrl = item.thumbnail ?: item.url,
+                        publishedAt = publishedAt
                     )
                 }.onSuccess { file ->
                     downloaded += file
@@ -132,8 +158,41 @@ class InternalMediaDownloader(private val context: Context) {
         }
     }
 
-    private fun extractMedia(tweet: JSONObject): List<MediaItem> {
+    /**
+     * 分析推文全部视频变体：返回 (最高 mp4 码率 bps, 是否存在 HLS 流)。
+     * 用于源头画质优化——mp4 不够好且有 HLS 时转 yt-dlp 高画质引擎。
+     */
+    private fun analyzeVariants(tweet: JSONObject): Pair<Int, Boolean> {
+        var maxBitrate = 0
+        var hasHls = false
+        fun scanArray(array: org.json.JSONArray?) {
+            array ?: return
+            (0 until array.length()).forEach { i ->
+                val item = array.optJSONObject(i) ?: return@forEach
+                val variants = item.optJSONArray("variants")
+                    ?: item.optJSONObject("video_info")?.optJSONArray("variants")
+                    ?: return@forEach
+                (0 until variants.length()).forEach { j ->
+                    val v = variants.optJSONObject(j) ?: return@forEach
+                    val url = v.optString("url", "")
+                    when {
+                        url.contains(".m3u8") -> hasHls = true
+                        url.contains(".mp4") || v.optString("content_type") == "video/mp4" ->
+                            maxBitrate = maxOf(maxBitrate, v.optInt("bitrate", 0))
+                    }
+                }
+            }
+        }
         val mediaObject = tweet.optJSONObject("media") ?: JSONObject()
+        scanArray(mediaObject.optJSONArray("videos"))
+        scanArray(mediaObject.optJSONArray("all"))
+        scanArray(tweet.optJSONArray("media_extended"))
+        tweet.optJSONObject("extended_entities")?.let { scanArray(it.optJSONArray("media")) }
+        tweet.optJSONObject("entities")?.let { scanArray(it.optJSONArray("media")) }
+        return maxBitrate to hasHls
+    }
+
+    private fun extractMedia(tweet: JSONObject): List<MediaItem> {        val mediaObject = tweet.optJSONObject("media") ?: JSONObject()
         val candidates = buildList {
             addAll(mediaObject.optObjects("videos"))
             addAll(mediaObject.optObjects("photos"))
@@ -184,28 +243,84 @@ class InternalMediaDownloader(private val context: Context) {
         }
     }
 
-    private fun downloadFile(url: String, target: File, proxy: ProxySettings?) {
-        val proxyObj = proxy?.toJavaProxy()
-        val connection = if (proxyObj != null) {
-            URL(url).openConnection(proxyObj) as HttpURLConnection
-        } else {
-            // 无代理时必须用无参 openConnection()，传 null 在部分 Android 版本会抛 "proxy can not be null"
-            URL(url).openConnection() as HttpURLConnection
-        }
-        connection.requestMethod = "GET"
-        connection.setRequestProperty("User-Agent", "Edqiu/1.0")
-        connection.connectTimeout = 10_000
-        connection.readTimeout = 30_000
-        try {
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                error("HTTP ${connection.responseCode} 下载失败")
+    /**
+     * 媒体文件下载（2026-09-14 网络路径优化）：
+     * 1. 64KB 缓冲流（原为默认 8KB 拷贝，小缓冲是慢速首因之一）；
+     * 2. 断点续传：下载写 .part 临时文件，中断后凭 Range 头续传，失败自动重试 2 次；
+     * 3. 进度回写 DownloadTaskBus（300ms 节流），下载中列表可见实时进度；
+     * 4. 服务器不支持 Range 时（HTTP 200）自动降级为全量重下。
+     */
+    /** 共享原语（internal）：可断点续传的媒体文件下载，第三方兜底引擎复用。 */
+    internal fun downloadFile(url: String, target: File, proxy: ProxySettings?, taskId: String? = null) {
+        val part = File(target.parentFile, target.name + ".part")
+        val maxAttempts = 2
+        var lastError: Throwable? = null
+        for (attempt in 1..maxAttempts) {
+            try {
+                val resumedBytes = if (part.exists()) part.length() else 0L
+                val proxyObj = proxy?.toJavaProxy()
+                val connection = if (proxyObj != null) {
+                    URL(url).openConnection(proxyObj) as HttpURLConnection
+                } else {
+                    // 无代理时必须用无参 openConnection()，传 null 在部分 Android 版本会抛 "proxy can not be null"
+                    URL(url).openConnection() as HttpURLConnection
+                }
+                connection.requestMethod = "GET"
+                connection.setRequestProperty("User-Agent", "Edqiu/1.0")
+                // 续传请求：只取未下载部分（CDN twimg 普遍支持 Range）
+                if (resumedBytes > 0L) {
+                    connection.setRequestProperty("Range", "bytes=$resumedBytes-")
+                }
+                connection.connectTimeout = 15_000
+                connection.readTimeout = 30_000
+                connection.instanceFollowRedirects = true
+                try {
+                    val code = connection.responseCode
+                    val appending = resumedBytes > 0L && code == HttpURLConnection.HTTP_PARTIAL
+                    if (code != HttpURLConnection.HTTP_OK && code != HttpURLConnection.HTTP_PARTIAL) {
+                        error("HTTP $code 下载失败")
+                    }
+                    val contentLength = connection.contentLengthLong.takeIf { it > 0 } ?: -1L
+                    val startOffset = if (appending) resumedBytes else 0L
+                    var written = startOffset
+                    var lastReport = 0L
+                    connection.inputStream.use { raw ->
+                        java.io.BufferedInputStream(raw, 64 * 1024).use { input ->
+                            java.io.FileOutputStream(part, appending).use { output ->
+                                val buffer = ByteArray(64 * 1024)
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read == -1) break
+                                    output.write(buffer, 0, read)
+                                    written += read
+                                    // 进度节流：每 300ms 回写一次，避免高频重组
+                                    val now = System.currentTimeMillis()
+                                    if (taskId != null && contentLength > 0 && now - lastReport > 300) {
+                                        lastReport = now
+                                        DownloadTaskBus.updateTask(taskId) {
+                                            it.copy(progress = (written.toFloat() / (startOffset + contentLength) * 100f).coerceIn(0f, 99f))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // 下载完成：.part 转正
+                    if (target.exists()) target.delete()
+                    if (!part.renameTo(target)) {
+                        part.copyTo(target, overwrite = true)
+                        part.delete()
+                    }
+                    return
+                } finally {
+                    connection.disconnect()
+                }
+            } catch (e: Exception) {
+                lastError = e
+                Log.w(TAG, "下载中断（第 $attempt 次尝试）url=$url 已有 ${part.length()} 字节，将尝试续传", e)
             }
-            connection.inputStream.use { input ->
-                FileOutputStream(target).use { output -> input.copyTo(output) }
-            }
-        } finally {
-            connection.disconnect()
         }
+        throw lastError ?: error("下载失败")
     }
 
     private fun fetchText(url: String, proxy: ProxySettings?): String {
@@ -235,13 +350,8 @@ class InternalMediaDownloader(private val context: Context) {
         }
     }
 
-    /** [ProxySettings] 转 [java.net.Proxy]；未启用时返回 null（直连）。 */
-    private fun ProxySettings?.toJavaProxy(): Proxy? {
-        if (this == null || !enabled) return null
-        return Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port))
-    }
-
-    private fun writeSidecar(
+    /** 共享原语（internal）：写 .meta.json sidecar 供收件箱 DownloadMonitor 配对；第三方兜底引擎复用。 */
+    internal fun writeSidecar(
         mediaFile: File,
         sourceUrl: String,
         tweetId: String,
@@ -252,7 +362,8 @@ class InternalMediaDownloader(private val context: Context) {
         quality: String,
         mediaIndex: Int,
         mediaType: String,
-        ext: String
+        ext: String,
+        publishedAt: Long? = null
     ) {
         val json = JSONObject()
             .put("url", sourceUrl)
@@ -266,8 +377,27 @@ class InternalMediaDownloader(private val context: Context) {
             .put("mediaIndex", mediaIndex)
             .put("mediaType", mediaType)
             .put("ext", ext)
+            .put("publishedAt", publishedAt ?: JSONObject.NULL)
         File(mediaFile.absolutePath + META_SUFFIX).writeText(json.toString())
         Log.i(TAG, "Downloaded ${mediaFile.name}")
+    }
+
+    /**
+     * 解析推文发布时间（epoch ms，2026-09-15 媒体库按发布时间排序）：
+     * 优先 FXTwitter 的 `created_timestamp`（epoch 秒），兜底解析 `created_at`（ISO8601）。
+     * 解析失败返回 null（sidecar 写 JSON null，UI/排序按「无发布时间」垫底处理）。
+     */
+    private fun parsePublishedAt(tweet: JSONObject): Long? {
+        val tsSeconds = tweet.optLong("created_timestamp", 0L)
+        if (tsSeconds > 0L) return tsSeconds * 1000L
+        val createdAt = tweet.optString("created_at", "").takeIf { it.isNotBlank() } ?: return null
+        return runCatching {
+            java.time.OffsetDateTime.parse(createdAt).toInstant().toEpochMilli()
+        }.getOrElse {
+            runCatching {
+                java.time.Instant.parse(createdAt).toEpochMilli()
+            }.getOrNull()
+        }
     }
 
     private fun JSONObject.optObjects(key: String): List<JSONObject> {

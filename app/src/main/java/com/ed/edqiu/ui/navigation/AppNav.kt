@@ -2,6 +2,13 @@
 
 import android.app.Application
 import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -32,6 +39,8 @@ import com.ed.edqiu.navigation.AppNavigation
 import com.ed.edqiu.navigation.MineNav
 import com.ed.edqiu.di.AppContainer
 import com.ed.edqiu.di.EdqiuViewModelFactory
+import com.ed.edqiu.ui.components.CapsuleFeedbackController
+import com.ed.edqiu.ui.components.CapsuleFeedbackHost
 import com.ed.edqiu.ui.components.EdqiuSnackbarHost
 import com.ed.edqiu.ui.components.GlassBackground
 import com.ed.edqiu.ui.detail.DetailScreen
@@ -73,6 +82,10 @@ private object Routes {
     fun detail(tweetId: String) = "detail/$tweetId"
 }
 
+/** 页面转场时长：iOS 风格柔和淡入淡出 + 微缩放，280ms 是「顺滑不拖沓」的平衡点 */
+private const val NAV_TRANSITION_MS = 280
+private const val NAV_TRANSITION_EXIT_MS = 200
+
 @Composable
 fun EdqiuApp(container: AppContainer) {
     val dynamicColor by container.settingsRepository.dynamicColorFlow
@@ -95,6 +108,8 @@ fun EdqiuApp(container: AppContainer) {
         .collectAsStateWithLifecycle(initialValue = true)
     val liquidGlass by container.settingsRepository.liquidGlassEnabledFlow
         .collectAsStateWithLifecycle(initialValue = true)
+    val hapticStrength by container.settingsRepository.hapticStrengthFlow
+        .collectAsStateWithLifecycle(initialValue = 2)
     val predictiveBack by container.settingsRepository.predictiveBackFlow
         .collectAsStateWithLifecycle(initialValue = true)
     val keyColor = Color(accentColor)
@@ -112,7 +127,8 @@ fun EdqiuApp(container: AppContainer) {
     CompositionLocalProvider(
         LocalDensity provides scaledDensity,
         ThemeEffects.BlurStrength provides blurStrength,
-        ThemeEffects.LiquidGlassEnabled provides liquidGlass
+        ThemeEffects.LiquidGlassEnabled provides liquidGlass,
+        com.ed.edqiu.ui.util.LocalHapticStrength provides hapticStrength
     ) {
     EdqiuTheme(
         themeMode = themeMode,
@@ -139,16 +155,18 @@ fun EdqiuApp(container: AppContainer) {
                     backupCredentialStore = container.backupCredentialStore,
                     backupLedgerRepository = container.backupLedgerRepository,
                     preDownloadManager = container.preDownloadManager,
+                    downloadScope = container.globalIoScope,
                     application = application
                 )
             }
 
             val snackbarHostState = remember { SnackbarHostState() }
             val snackbarController = remember { SnackbarController() }
+            val capsuleController = remember { CapsuleFeedbackController() }
             val scope = rememberCoroutineScope()
 
             LaunchedEffect(Unit) {
-                snackbarController.observe(scope, snackbarHostState)
+                snackbarController.observe(scope, snackbarHostState, capsuleController)
             }
 
             // 预测性返回：Android 14+ 系统预测性返回动画（跟随手指 + 可预测），受主题设置开关控制
@@ -159,20 +177,55 @@ fun EdqiuApp(container: AppContainer) {
             CompositionLocalProvider(LocalSnackbarController provides snackbarController) {
                 GlassBackground(
                     seed = keyColor,
-                    blurRadius = if (blurEnabled) (blurIntensity * 40f).dp else 0.dp
+                    // 2026-09-14 模糊强度区分度修复：线性 40dp 在渐变背景上肉眼几乎无差异，
+                    // 改非线性二次映射（0→0 / 0.33→7dp / 0.67→29dp / 1→64dp），低中高段拉开档位
+                    blurRadius = if (blurEnabled) (blurIntensity * blurIntensity * 64f).dp else 0.dp
                 ) {
                     Scaffold(
                         containerColor = Color.Transparent,
                         // 让内容延伸到状态栏后（每个页面的 HeaderPanel 自己加 statusBarsPadding）
                         contentWindowInsets = WindowInsets(0),
-                        snackbarHost = { EdqiuSnackbarHost(hostState = snackbarHostState) }
+                        snackbarHost = {
+                            // 双宿主叠加：传统 Snackbar（带操作按钮）+ 底部玻璃胶囊（状态反馈，浮于其上）
+                            Box {
+                                EdqiuSnackbarHost(hostState = snackbarHostState)
+                                CapsuleFeedbackHost(controller = capsuleController)
+                            }
+                        }
                     ) { innerPadding ->
                         NavHost(
                             navController = nav,
                             startDestination = Routes.DOWNLOAD_SHELL,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(innerPadding)
+                                .padding(innerPadding),
+                            // 转场（2026-09-14）：默认生硬切换 → 柔和淡入 + 微缩放（iOS 呼吸感）
+                            // 新页淡入放大 0.96→1（视觉"靠近"），旧页纯淡出让位；返回反向
+                            enterTransition = {
+                                fadeIn(tween(NAV_TRANSITION_MS, easing = FastOutSlowInEasing)) +
+                                    scaleIn(
+                                        initialScale = 0.96f,
+                                        animationSpec = tween(NAV_TRANSITION_MS, easing = FastOutSlowInEasing)
+                                    )
+                            },
+                            exitTransition = {
+                                fadeOut(tween(NAV_TRANSITION_EXIT_MS, easing = FastOutSlowInEasing))
+                            },
+                            popEnterTransition = {
+                                // 返回时上一界面带轻微"回位"缩放（0.98→1），与 push 的 0.96→1 呼应
+                                fadeIn(tween(NAV_TRANSITION_MS, easing = FastOutSlowInEasing)) +
+                                    scaleIn(
+                                        initialScale = 0.98f,
+                                        animationSpec = tween(NAV_TRANSITION_MS, easing = FastOutSlowInEasing)
+                                    )
+                            },
+                            popExitTransition = {
+                                fadeOut(tween(NAV_TRANSITION_EXIT_MS, easing = FastOutSlowInEasing)) +
+                                    scaleOut(
+                                        targetScale = 0.97f,
+                                        animationSpec = tween(NAV_TRANSITION_EXIT_MS, easing = FastOutSlowInEasing)
+                                    )
+                            }
                         ) {
                             composable(Routes.DOWNLOAD_SHELL) {
                                 AppNavigation(

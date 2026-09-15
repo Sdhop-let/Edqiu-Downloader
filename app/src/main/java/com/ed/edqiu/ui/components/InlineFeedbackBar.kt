@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -36,11 +38,18 @@ import kotlinx.coroutines.delay
  * 出现在按钮下方，停留 5 秒后以展开/收起 + 淡入淡出的流畅动画消失。
  *
  * - 容器色/文字色与全局 Snackbar 一致（#1F232A / #EDEEF1），视觉语言统一
+ * - 图标随 [FeedbackKind] 三态（2026-09-15）：成功绿 ✓ / 失败红 ✕ / 中性 ℹ，
+ *   色值与底部玻璃胶囊对齐，修复「失败消息显示绿色成功图标」的语义错误
  * - `message` 置为 null 即触发退出动画；非 null 后自动计时 5s 调用 [onDismiss]
  */
+data class FeedbackMessage(
+    val text: String,
+    val kind: FeedbackKind = FeedbackKind.SUCCESS
+)
+
 @Composable
 fun InlineFeedbackBar(
-    message: String?,
+    message: FeedbackMessage?,
     modifier: Modifier = Modifier,
     durationMillis: Long = 5000L,
     onDismiss: () -> Unit
@@ -58,6 +67,7 @@ fun InlineFeedbackBar(
         exit = shrinkVertically(animationSpec = tween(260)) + fadeOut(animationSpec = tween(260)),
         modifier = modifier
     ) {
+        val kind = message?.kind ?: FeedbackKind.NEUTRAL
         Surface(
             shape = RoundedCornerShape(14.dp),
             color = Color(0xFF1F232A),
@@ -67,15 +77,20 @@ fun InlineFeedbackBar(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
+                val (icon, tint) = when (kind) {
+                    FeedbackKind.SUCCESS -> Icons.Filled.CheckCircle to Color(0xFF34C759)
+                    FeedbackKind.ERROR -> Icons.Rounded.ErrorOutline to Color(0xFFFF453A)
+                    FeedbackKind.NEUTRAL -> Icons.Rounded.Info to Color(0xFF9AA3AF)
+                }
                 Icon(
-                    Icons.Default.CheckCircle,
+                    icon,
                     contentDescription = null,
-                    tint = Color(0xFF7ED9A3),
+                    tint = tint,
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = message.orEmpty(),
+                    text = message?.text.orEmpty(),
                     color = Color(0xFFEDEEF1),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium

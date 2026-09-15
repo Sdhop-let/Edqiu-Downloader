@@ -133,21 +133,25 @@ object FXTwitterResolver {
 
     /**
      * Parse proxy URL string into a java.net.Proxy object.
-     * Format: "http://host:port"
+     * Format: "http://host:port" 或 "socks5://host:port"（2026-09-15 P0-3 双类型代理）。
      */
     private fun parseProxy(proxyUrl: String?): Proxy? {
-        if (proxyUrl == null) return null
-        try {
-            val withoutProtocol = proxyUrl.removePrefix("http://")
+        if (proxyUrl.isNullOrBlank()) return null
+        return runCatching {
+            val isSocks = proxyUrl.startsWith("socks5://")
+            val withoutProtocol = proxyUrl.removePrefix("http://").removePrefix("socks5://")
             val parts = withoutProtocol.split(":")
             if (parts.size != 2) return null
             val host = parts[0]
             val port = parts[1].toIntOrNull() ?: return null
-            return Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port))
-        } catch (e: Exception) {
+            if (isSocks) {
+                Proxy(Proxy.Type.SOCKS, InetSocketAddress(host, port))
+            } else {
+                Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port))
+            }
+        }.onFailure { e ->
             Log.w(TAG, "Failed to parse proxy URL: $proxyUrl", e)
-            return null
-        }
+        }.getOrNull()
     }
 
     private fun extractMediaItems(root: JSONObject): List<FXMediaItem> {

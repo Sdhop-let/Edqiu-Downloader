@@ -7,6 +7,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
@@ -41,29 +42,34 @@ fun EdqiuTheme(
     }
 
     val context = LocalContext.current
-    // 基础方案：动态取色走系统引擎（提供中性面），否则由强调色种子生成全套
-    val base: ColorScheme = if (dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-    } else {
+    // 引擎结果缓存：HCT/DynamicScheme 求值虽是纯数学，但每次重组重算浪费
+    val accent = remember(keyColor, dark, tonalStyle, monetSpec) {
         colorSchemeFromSeed(keyColor, dark, tonalStyle, monetSpec)
     }
-    // 强调色族：始终由 keyColor 派生（保证强调色全局即时生效，不受动态取色覆盖）
-    val accent = colorSchemeFromSeed(keyColor, dark, tonalStyle, monetSpec)
-
-    val colorScheme = base.copy(
-        primary = accent.primary,
-        onPrimary = accent.onPrimary,
-        primaryContainer = accent.primaryContainer,
-        onPrimaryContainer = accent.onPrimaryContainer,
-        secondary = accent.secondary,
-        onSecondary = accent.onSecondary,
-        secondaryContainer = accent.secondaryContainer,
-        onSecondaryContainer = accent.onSecondaryContainer,
-        tertiary = accent.tertiary,
-        onTertiary = accent.onTertiary,
-        tertiaryContainer = accent.tertiaryContainer,
-        onTertiaryContainer = accent.onTertiaryContainer
-    )
+    // 2026-09-14 Monet 冲突修复：
+    // 旧逻辑无论 Monet 开关，secondary/tertiary 一律被 keyColor 引擎覆盖 ——
+    // Monet 开启时壁纸 hue 的中性面 + keyColor hue 的 secondary/tertiary（±30/60° 派生）
+    // 两套色相并排打架（切强调色时辅色容器跟着跳，与背景色域脱节）。
+    // 新语义：
+    // - Monet 开：primary 族（强调色链路）= keyColor 引擎；secondary/tertiary/中性面 = 系统壁纸
+    //   Monet 同源派生 —— 辅色与背景协调，强调色只作用于按钮/链接/选中态；
+    // - Monet 关：全套角色色 = keyColor 引擎（mcu-pipeline 同源种子 → 全套，自洽无冲突）。
+    val useSystemMonet = dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val base: ColorScheme = if (useSystemMonet) {
+        if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else {
+        accent
+    }
+    val colorScheme = if (useSystemMonet) {
+        base.copy(
+            primary = accent.primary,
+            onPrimary = accent.onPrimary,
+            primaryContainer = accent.primaryContainer,
+            onPrimaryContainer = accent.onPrimaryContainer
+        )
+    } else {
+        base
+    }
 
     MaterialTheme(
         colorScheme = colorScheme,

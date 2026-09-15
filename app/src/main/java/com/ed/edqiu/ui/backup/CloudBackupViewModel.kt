@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ed.edqiu.data.preferences.CloudSyncPreferences
+import com.ed.edqiu.ui.components.FeedbackKind
 import com.ed.edqiu.backup.BackupFiles
 import com.ed.edqiu.backup.BackupScope
 import com.ed.edqiu.backup.BackupScheduler
@@ -70,8 +71,10 @@ data class CloudBackupUiState(
     val baiduAuth: BaiduAuthUiState = BaiduAuthUiState(),
     /** 123 网盘授权页 URL（授权 Dialog 用，发起授权时生成）。 */
     val pan123AuthorizeUrl: String? = null,
-    /** 一次性提示消息（Snackbar）。 */
+    /** 一次性提示消息（内联反馈条）。 */
     val message: String? = null,
+    /** 提示消息的语义类型（成功/失败/中性），驱动反馈条图标与颜色。 */
+    val messageKind: FeedbackKind = FeedbackKind.SUCCESS,
 )
 
 /**
@@ -103,6 +106,7 @@ class CloudBackupViewModel(
         val pendingAuthProviderId: String? = null,
         val pan123AuthorizeUrl: String? = null,
         val message: String? = null,
+        val messageKind: FeedbackKind = FeedbackKind.SUCCESS,
     )
 
     /** 设置侧状态（当前选中网盘 + 其备份范围 / 自动备份）。 */
@@ -141,6 +145,7 @@ class CloudBackupViewModel(
             baiduAuth = baidu,
             pan123AuthorizeUrl = auth.pan123AuthorizeUrl,
             message = auth.message,
+            messageKind = auth.messageKind,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CloudBackupUiState())
 
@@ -200,7 +205,7 @@ class CloudBackupViewModel(
             val target = registry.get(ProviderId.ALIYUN) as? AliPanTarget
             if (target == null) {
                 _auth.update { it.copy(pendingAuthProviderId = null) }
-                postMessage("阿里云盘适配器未注册")
+                postMessage("阿里云盘适配器未注册", FeedbackKind.ERROR)
                 return@launch
             }
             target.setRefreshToken(token).fold(
@@ -211,7 +216,7 @@ class CloudBackupViewModel(
                 },
                 onFailure = { error ->
                     _auth.update { it.copy(pendingAuthProviderId = null) }
-                    postMessage("阿里云盘授权失败：${error.message ?: "未知错误"}")
+                    postMessage("阿里云盘授权失败：${error.message ?: "未知错误"}", FeedbackKind.ERROR)
                 },
             )
         }
@@ -223,7 +228,7 @@ class CloudBackupViewModel(
             val target = registry.get(ProviderId.PAN123_OPEN) as? Pan123OpenTarget
             if (target == null) {
                 _auth.update { it.copy(pendingAuthProviderId = null, pan123AuthorizeUrl = null) }
-                postMessage("123 网盘适配器未注册")
+                postMessage("123 网盘适配器未注册", FeedbackKind.ERROR)
                 return@launch
             }
             target.setAuthCode(code).fold(
@@ -234,7 +239,7 @@ class CloudBackupViewModel(
                 },
                 onFailure = { error ->
                     _auth.update { it.copy(pendingAuthProviderId = null, pan123AuthorizeUrl = null) }
-                    postMessage("123 网盘授权失败：${error.message ?: "未知错误"}")
+                    postMessage("123 网盘授权失败：${error.message ?: "未知错误"}", FeedbackKind.ERROR)
                 },
             )
         }
@@ -297,13 +302,13 @@ class CloudBackupViewModel(
         viewModelScope.launch {
             val target = registry.get(providerId)
             if (target == null) {
-                postMessage("未找到备份目标")
+                postMessage("未找到备份目标", FeedbackKind.ERROR)
                 return@launch
             }
             val name = target.displayName
             target.testConnection().fold(
                 onSuccess = { postMessage("$name 连接正常，授权有效") },
-                onFailure = { postMessage("$name 连接失败：${it.message}") },
+                onFailure = { postMessage("$name 连接失败：${it.message}", FeedbackKind.ERROR) },
             )
             refreshProviders()
         }
@@ -325,7 +330,7 @@ class CloudBackupViewModel(
             // 换账号后旧账本（DONE 记录 + 云端 file id）失效，一并清除避免误跳过
             runCatching { ledgerRepository.clear(providerId) }
             refreshProviders()
-            postMessage("已清除登录状态，请重新授权")
+            postMessage("已清除登录状态，请重新授权", FeedbackKind.NEUTRAL)
         }
     }
 
@@ -356,7 +361,10 @@ class CloudBackupViewModel(
         BackupSettings.setAutoEnabled(context, providerId, enabled)
         BackupScheduler.setAutoBackup(context, providerId, enabled)
         _settings.update { it.copy(autoBackupEnabled = enabled) }
-        postMessage(if (enabled) "已开启自动备份（每天后台执行）" else "已关闭自动备份")
+        postMessage(
+            if (enabled) "已开启自动备份（每天后台执行）" else "已关闭自动备份",
+            if (enabled) FeedbackKind.SUCCESS else FeedbackKind.NEUTRAL
+        )
     }
 
     // ================= 备份执行 =================
@@ -367,11 +375,11 @@ class CloudBackupViewModel(
         viewModelScope.launch {
             val target = registry.get(providerId)
             if (target == null) {
-                postMessage("未找到备份目标")
+                postMessage("未找到备份目标", FeedbackKind.ERROR)
                 return@launch
             }
             if (!runCatching { target.isConfigured() }.getOrDefault(false)) {
-                postMessage("「${target.displayName}」尚未配置，请先授权")
+                postMessage("「${target.displayName}」尚未配置，请先授权", FeedbackKind.NEUTRAL)
                 return@launch
             }
             val scope = BackupSettings.scope(context, providerId)
@@ -381,16 +389,20 @@ class CloudBackupViewModel(
             val monitorUri = settingsRepository.monitorDirUriFlow.first()
             val files = BackupFiles.collect(context, monitorUri, scope, providerId, doneTaskIds, failedTaskIds, ledgerRepository)
             if (files.isEmpty()) {
-                postMessage("没有需要备份的新文件")
+                postMessage("没有需要备份的新文件", FeedbackKind.NEUTRAL)
                 return@launch
             }
             engine.enqueue(providerId, files)
             engine.runQueue().fold(
                 onSuccess = { summary ->
-                    postMessage("备份完成：成功 ${summary.succeeded}，失败 ${summary.failed}，跳过 ${summary.skipped}")
+                    // 有失败项时用中性图标提示注意，全成功才显示绿色对勾
+                    postMessage(
+                        "备份完成：成功 ${summary.succeeded}，失败 ${summary.failed}，跳过 ${summary.skipped}",
+                        if (summary.failed > 0) FeedbackKind.NEUTRAL else FeedbackKind.SUCCESS
+                    )
                 },
                 onFailure = { error ->
-                    postMessage("备份失败：${error.message ?: "未知错误"}")
+                    postMessage("备份失败：${error.message ?: "未知错误"}", FeedbackKind.ERROR)
                 },
             )
         }
@@ -403,10 +415,13 @@ class CloudBackupViewModel(
             engine.retryFailed(providerId)
             engine.runQueue().fold(
                 onSuccess = { summary ->
-                    postMessage("重试完成：成功 ${summary.succeeded}，失败 ${summary.failed}，跳过 ${summary.skipped}")
+                    postMessage(
+                        "重试完成：成功 ${summary.succeeded}，失败 ${summary.failed}，跳过 ${summary.skipped}",
+                        if (summary.failed > 0) FeedbackKind.NEUTRAL else FeedbackKind.SUCCESS
+                    )
                 },
                 onFailure = { error ->
-                    postMessage("重试失败：${error.message ?: "未知错误"}")
+                    postMessage("重试失败：${error.message ?: "未知错误"}", FeedbackKind.ERROR)
                 },
             )
         }
@@ -469,17 +484,17 @@ class CloudBackupViewModel(
     private fun startPan123Auth() {
         val target = registry.get(ProviderId.PAN123_OPEN) as? Pan123OpenTarget
         if (target == null) {
-            postMessage("123 网盘适配器未注册")
+            postMessage("123 网盘适配器未注册", FeedbackKind.ERROR)
             return
         }
         if (!target.isClientConfigured) {
-            postMessage("未配置 123 网盘应用资质，请在构建配置中填写 PAN123_CLIENT_ID")
+            postMessage("未配置 123 网盘应用资质，请在构建配置中填写 PAN123_CLIENT_ID", FeedbackKind.ERROR)
             return
         }
         val state = UUID.randomUUID().toString()
         val url = runCatching { target.buildAuthorizeUrl(state) }.getOrNull()
         if (url.isNullOrBlank()) {
-            postMessage("生成 123 网盘授权链接失败，请检查应用资质配置")
+            postMessage("生成 123 网盘授权链接失败，请检查应用资质配置", FeedbackKind.ERROR)
             return
         }
         _auth.update {
@@ -531,8 +546,8 @@ class CloudBackupViewModel(
         }
     }
 
-    private fun postMessage(message: String) {
-        _auth.update { it.copy(message = message) }
+    private fun postMessage(message: String, kind: FeedbackKind = FeedbackKind.SUCCESS) {
+        _auth.update { it.copy(message = message, messageKind = kind) }
     }
 
     /** 消费一次性提示（Snackbar 展示后调用）。 */

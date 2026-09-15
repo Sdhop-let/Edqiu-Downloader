@@ -63,13 +63,14 @@ interface SavedLinkDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertAll(links: List<SavedLink>)
 
-    /** 刷新：用监控目录的扫描结果更新状态与命中文件。 */
+    /** 刷新：用监控目录的扫描结果更新状态与命中文件（publishedAt 仅在提供时覆盖）。 */
     @Query(
         """
         UPDATE saved_links
         SET status = :status,
             file_path = :filePath,
             downloaded_at = :downloadedAt,
+            published_at = COALESCE(:publishedAt, published_at),
             attempt_count = CASE WHEN :status = 'DOWNLOADED' THEN 0 ELSE attempt_count END,
             last_error = NULL,
             next_retry_at = NULL
@@ -80,7 +81,8 @@ interface SavedLinkDao {
         tweetId: String,
         status: LinkStatus,
         filePath: String?,
-        downloadedAt: Long?
+        downloadedAt: Long?,
+        publishedAt: Long? = null
     )
 
     /** 捕获阶段补全作者/文案/缩略图（仅当本地为空时由仓库层判断）。 */

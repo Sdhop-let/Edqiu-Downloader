@@ -28,7 +28,9 @@ class DownloadMonitor(private val context: Context) {
         val authorId: String? = null,
         val authorName: String? = null,
         val caption: String? = null,
-        val thumbnailUrl: String? = null
+        val thumbnailUrl: String? = null,
+        /** 推文发布时间（epoch ms，来自 sidecar），作者页按发布时间排序用。 */
+        val publishedAt: Long? = null
     )
 
     sealed interface ScanResult {
@@ -170,7 +172,8 @@ class DownloadMonitor(private val context: Context) {
                 authorId = meta?.uploader?.let { if (it.startsWith("@")) it else "@$it" },
                 authorName = meta?.authorName ?: meta?.uploader,
                 caption = meta?.title,
-                thumbnailUrl = meta?.thumbnail
+                thumbnailUrl = meta?.thumbnail,
+                publishedAt = meta?.publishedAt
             )
         }
         return result

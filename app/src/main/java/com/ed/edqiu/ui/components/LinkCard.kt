@@ -5,6 +5,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +20,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -30,11 +35,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -59,9 +67,18 @@ fun LinkCard(
     onSelectionToggle: () -> Unit = {},
     onQuickDelete: (() -> Unit)? = null,
     // 卡片直接下载（待处理/失败时显示，免进详情页即可下载）
-    onDownload: (() -> Unit)? = null
+    onDownload: (() -> Unit)? = null,
+    // 实时下载进度（2026-09-15）：0..99，null = 该条当前未在下载中。
+    // 数据来自 DownloadTaskBus（双引擎 300ms 节流回写），下载中显示
+    // 「下载中 xx%」pill + 细进度条，下载完成即由 DB 的 DOWNLOADED 状态接管。
+    downloadProgress: Int? = null
 ) {
-    val accent = statusColor(link.status)
+    val isDownloading = downloadProgress != null
+    val accent = if (isDownloading) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        statusColor(link.status)
+    }
     val author = link.authorName?.takeIf { it.isNotBlank() }
         ?: link.authorId?.takeIf { it.isNotBlank() }
         ?: "未知作者"
@@ -71,13 +88,27 @@ fun LinkCard(
 
     // L1 玻璃卡片（双层玻璃：卡片在玻璃背景上的玻璃）—— 圆角 20dp 对齐原型 .lcard
     // 列表滚动项关闭 shadow：Modifier.shadow 创建独立 RenderNode，滚动合成压力大
+    // 按压反馈（2026-09-14）：iOS 风按压缩放（0.975）替代涟漪 —— 按下即跟手，松手弹性回位
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val cardScale by animateFloatAsState(
+        targetValue = if (pressed) 0.975f else 1f,
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = 1100f),
+        label = "linkCardPress"
+    )
     GlassSurface(
         tier = GlassTier.L1,
         shape = RoundedCornerShape(20.dp),
         elevated = false,
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = cardScale
+                scaleY = cardScale
+            }
             .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
                 onClick = if (selectionMode) onSelectionToggle else onClick,
                 onLongClick = onLongClick
             )
@@ -122,9 +153,16 @@ fun LinkCard(
                         modifier = Modifier.weight(1f)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    StatusPill(status = link.status)
+                    // 下载中：pill 换成「下载中 xx%」（主题蓝），下载完成由 DOWNLOADED 状态接管
+                    if (isDownloading && downloadProgress != null) {
+                        DownloadingPill(progress = downloadProgress)
+                    } else {
+                        StatusPill(status = link.status)
+                    }
                     // 待处理/失败记录直接下载：免进详情页，点卡片旁下载键即触发（推文不存在则无意义）
+                    // 下载中不显示下载键，防止重复触发
                     if ((link.status == LinkStatus.PENDING || link.status == LinkStatus.FAILED) &&
+                        !isDownloading &&
                         !selectionMode && onDownload != null
                     ) {
                         Spacer(modifier = Modifier.width(6.dp))
@@ -177,6 +215,30 @@ fun LinkCard(
                     overflow = TextOverflow.Ellipsis,
                     minLines = 1
                 )
+
+                // 实时下载进度条（仅下载中显示）：4dp 细条 + 主题蓝，随百分比平滑推进
+                if (isDownloading && downloadProgress != null) {
+                    val animatedProgress by animateFloatAsState(
+                        targetValue = downloadProgress / 100f,
+                        animationSpec = tween(durationMillis = 280),
+                        label = "linkCardDownloadProgress"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(animatedProgress.coerceIn(0.02f, 1f))
+                                .height(4.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary)
+                        )
+                    }
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -304,6 +366,21 @@ private fun StatusPill(status: LinkStatus) {
         modifier = Modifier
             .clip(CircleShape)
             .background(color.copy(alpha = 0.12f))
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    )
+}
+
+/** 下载中状态 pill：「下载中 43%」，主题蓝，与 [StatusPill] 同形态。 */
+@Composable
+private fun DownloadingPill(progress: Int) {
+    Text(
+        text = "下载中 $progress%",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.ExtraBold,
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
             .padding(horizontal = 8.dp, vertical = 4.dp)
     )
 }

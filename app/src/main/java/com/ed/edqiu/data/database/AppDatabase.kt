@@ -11,8 +11,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.ed.edqiu.data.model.MediaType
 
 @Database(
-    entities = [DownloadHistoryEntity::class, DownloadTaskEntity::class],
-    version = 6,
+    entities = [DownloadHistoryEntity::class, DownloadTaskEntity::class, SubscriptionEntity::class],
+    version = 8,
     exportSchema = false
 )
 @TypeConverters(AppDatabase.Converters::class)
@@ -21,6 +21,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun downloadHistoryDao(): DownloadHistoryDao
 
     abstract fun downloadTaskDao(): DownloadTaskDao
+
+    abstract fun subscriptionDao(): SubscriptionDao
 
     class Converters {
         @TypeConverter
@@ -152,6 +154,36 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** 2026-09-15：download_history 加推文发布时间（媒体库按发布时间排序，无值垫底）。 */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE download_history ADD COLUMN publishedAt INTEGER")
+            }
+        }
+
+        /**
+         * 2026-09-15 v2 批次3/4：
+         * ① download_history 加感知哈希 phash（64bit DCT pHash，重复媒体检测）；
+         * ② 新建 subscriptions 表（作者订阅自动下载）。
+         */
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE download_history ADD COLUMN phash INTEGER")
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `subscriptions` (
+                        `screenName` TEXT NOT NULL,
+                        `enabled` INTEGER NOT NULL,
+                        `lastCheckedAt` INTEGER,
+                        `lastVideoAt` INTEGER,
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`screenName`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -159,7 +191,10 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "twitter_downloader.db"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
+                )
                 .fallbackToDestructiveMigration()
                 .build().also { INSTANCE = it }
             }

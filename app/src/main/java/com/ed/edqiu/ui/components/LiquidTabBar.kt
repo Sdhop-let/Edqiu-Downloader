@@ -95,16 +95,50 @@ fun LiquidTabBar(
             label = "capsuleX"
         )
 
+        // 胶囊圆角动态贴合（2026-09-14，Apple Liquid Glass 细节）：
+        // 外壳是 stadium（高 50dp 圆角 25dp），内壁半径 = 25-3(内边距) = 22dp。
+        // 选中胶囊滑向两端时圆角从 16dp 渐变到 22dp（stadium），弧线与外壳内壁同心对齐；
+        // 居中时保持 16dp 的小圆角观感。随 capsuleX 同步动画，滑动全程圆角连续变化。
+        val tabCount = tabs.size
+        val barCenterX = itemWidth.value * tabCount / 2f
+        val capsuleCenterX = capsuleX + itemWidth.value / 2f
+        val halfSpan = (barCenterX - itemWidth.value / 2f).coerceAtLeast(1f)
+        val edgeT = kotlin.math.abs(capsuleCenterX - barCenterX) / halfSpan
+        val capsuleRadius by animateFloatAsState(
+            targetValue = 16f + edgeT.coerceIn(0f, 1f) * 6f,
+            animationSpec = spring(dampingRatio = 0.85f, stiffness = 600f),
+            label = "capsuleRadius"
+        )
+
+        // 外壳（2026-09-14：不再是"完全透明"，整体液态玻璃胶囊底 —— 对齐 iOS 底栏预期）
         if (liquidGlass) {
             GlassSurface(
                 tier = GlassTier.L2,
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(25.dp),
+                elevated = true,
+                modifier = Modifier.fillMaxSize()
+            ) { }
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(25.dp))
+                    .background(primaryContainer.copy(alpha = 0.55f))
+            )
+        }
+
+        // 选中胶囊：玻璃模式下用 primaryContainer 实底突出选中态（叠在外壳玻璃上），
+        // 圆角随位置动态贴合外壳内壁
+        if (liquidGlass) {
+            Box(
                 modifier = Modifier
                     .offset(x = capsuleX.dp)
                     .width(itemWidth)
                     .fillMaxHeight()
                     .padding(horizontal = 3.dp, vertical = 3.dp)
-            ) { }
+                    .clip(RoundedCornerShape(capsuleRadius.dp))
+                    .background(primaryContainer.copy(alpha = 0.94f))
+            )
         } else {
             Box(
                 modifier = Modifier
@@ -112,7 +146,7 @@ fun LiquidTabBar(
                     .width(itemWidth)
                     .fillMaxHeight()
                     .padding(horizontal = 3.dp, vertical = 3.dp)
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(RoundedCornerShape(capsuleRadius.dp))
                     .background(primaryContainer)
             )
         }

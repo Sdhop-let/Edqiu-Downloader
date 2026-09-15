@@ -11,5 +11,7 @@ data class TweetMeta(
     val caption: String? = null,
     val avatarUrl: String? = null,
     val thumbnailUrl: String? = null,
-    val authorBio: String? = null
+    val authorBio: String? = null,
+    /** 推文发布时间（epoch ms，2026-09-15 旧记录发布时间补拉用）。 */
+    val publishedAt: Long? = null
 )

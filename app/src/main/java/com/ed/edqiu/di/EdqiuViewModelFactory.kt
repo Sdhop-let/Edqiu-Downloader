@@ -36,6 +36,8 @@ class EdqiuViewModelFactory(
     private val backupCredentialStore: CredentialStore,
     private val backupLedgerRepository: BackupLedgerRepository,
     private val preDownloadManager: PreDownloadManager,
+    // 应用级下载作用域：收件箱/详情页下载执行不随页面销毁中断（退后台继续下载）
+    private val downloadScope: kotlinx.coroutines.CoroutineScope,
     private val application: Application
 ) : ViewModelProvider.Factory {
 
@@ -48,10 +50,11 @@ class EdqiuViewModelFactory(
                     savedLinkRepository,
                     settingsRepository,
                     linkCaptureCoordinator,
-                    preDownloadManager
+                    preDownloadManager,
+                    downloadScope
                 ) as T
             modelClass.isAssignableFrom(DetailViewModel::class.java) ->
-                DetailViewModel(application, savedLinkRepository, settingsRepository) as T
+                DetailViewModel(application, savedLinkRepository, settingsRepository, downloadScope) as T
             modelClass.isAssignableFrom(DownloadCenterViewModel::class.java) ->
                 DownloadCenterViewModel(savedLinkRepository, settingsRepository) as T
             modelClass.isAssignableFrom(HistoryViewModel::class.java) ->

@@ -64,7 +64,9 @@ class MetadataFetcher {
                     caption = t.text,
                     avatarUrl = t.author?.avatarUrl,
                     thumbnailUrl = firstMediaThumbnail(t.media),
-                    authorBio = t.author?.description?.takeIf { it.isNotBlank() }
+                    authorBio = t.author?.description?.takeIf { it.isNotBlank() },
+                    // FXTwitter 的 created_timestamp 为 epoch 秒
+                    publishedAt = t.createdTimestamp?.takeIf { it > 0L }?.let { it * 1000L }
                 )
             } else {
                 null
@@ -119,7 +121,8 @@ class MetadataFetcher {
         val id: String = "",
         val text: String? = null,
         val author: FxAuthor? = null,
-        val media: FxMedia? = null
+        val media: FxMedia? = null,
+        @SerialName("created_timestamp") val createdTimestamp: Long? = null
     )
 
     @Serializable
@@ -150,6 +153,8 @@ class MetadataFetcher {
         val title: String? = null,
         val thumbnail: String? = null,
         val uploader: String? = null,
-        val authorName: String? = null
+        val authorName: String? = null,
+        /** 推文发布时间（epoch ms，2026-09-15 媒体库/作者页按发布时间排序）。 */
+        val publishedAt: Long? = null
     )
 }

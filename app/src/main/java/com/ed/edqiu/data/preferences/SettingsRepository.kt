@@ -86,6 +86,14 @@ class SettingsRepository(context: Context) {
     val blurIntensityFlow: Flow<Float> =
         dataStore.data.map { it[BLUR_INTENSITY] ?: 0.6f }
 
+    /** 按压震动档位（2026-09-14）：0=关闭 1=轻(CLOCK_TICK) 2=中(VIRTUAL_KEY) 3=明确(CONFIRM) */
+    val hapticStrengthFlow: Flow<Int> =
+        dataStore.data.map { it[HAPTIC_STRENGTH] ?: 2 }
+
+    /** 强制最高刷新率（2026-09-14，默认 ON）：MainActivity 锁定设备支持的 120Hz 模式 */
+    val highRefreshRateFlow: Flow<Boolean> =
+        dataStore.data.map { it[HIGH_REFRESH_RATE] ?: true }
+
     /** Apple 风格悬浮底栏（默认 ON） */
     val floatingTabBarFlow: Flow<Boolean> =
         dataStore.data.map { it[FLOATING_TAB_BAR] ?: true }
@@ -184,6 +192,14 @@ class SettingsRepository(context: Context) {
         dataStore.edit { it[BLUR_INTENSITY] = intensity.coerceIn(0f, 1f) }
     }
 
+    suspend fun setHapticStrength(level: Int) {
+        dataStore.edit { it[HAPTIC_STRENGTH] = level.coerceIn(0, 3) }
+    }
+
+    suspend fun setHighRefreshRate(enabled: Boolean) {
+        dataStore.edit { it[HIGH_REFRESH_RATE] = enabled }
+    }
+
     suspend fun setFloatingTabBar(enabled: Boolean) {
         dataStore.edit { it[FLOATING_TAB_BAR] = enabled }
     }
@@ -220,6 +236,8 @@ class SettingsRepository(context: Context) {
         private val MONET_SPEC = stringPreferencesKey("monet_spec")
         private val BLUR_ENABLED = booleanPreferencesKey("blur_enabled")
         private val BLUR_INTENSITY = floatPreferencesKey("blur_intensity")
+        private val HAPTIC_STRENGTH = intPreferencesKey("haptic_strength")
+        private val HIGH_REFRESH_RATE = booleanPreferencesKey("high_refresh_rate")
         private val FLOATING_TAB_BAR = booleanPreferencesKey("floating_tab_bar")
         private val LIQUID_GLASS_ENABLED = booleanPreferencesKey("liquid_glass_enabled")
         private val PREDICTIVE_BACK = booleanPreferencesKey("predictive_back")

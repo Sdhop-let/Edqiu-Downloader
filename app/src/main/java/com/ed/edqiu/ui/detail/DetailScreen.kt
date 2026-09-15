@@ -1,5 +1,6 @@
 package com.ed.edqiu.ui.detail
 
+import com.ed.edqiu.ui.util.pressableNoRipple
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -66,6 +67,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.data.model.SavedLink
+import com.ed.edqiu.ui.components.FeedbackKind
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.StatusBadge
@@ -86,26 +88,23 @@ fun DetailScreen(
     val link by vm.link.collectAsStateWithLifecycle()
     val downloading by vm.downloading.collectAsStateWithLifecycle()
     val downloadFeedback by vm.downloadFeedback.collectAsStateWithLifecycle()
+    // 实时下载进度（tweetId → 0..99）：下载按钮转圈时显示当前百分比
+    val downloadProgress by vm.downloadProgress.collectAsStateWithLifecycle()
 
     LaunchedEffect(tweetId) { vm.load(tweetId) }
-    // 下载结果弹窗：成功/失败标题 + 详情
-    downloadFeedback?.let { feedback ->
-        AlertDialog(
-            onDismissRequest = { vm.clearDownloadFeedback() },
-            title = {
-                Text(
-                    when (feedback.success) {
-                        true -> "下载成功"
-                        false -> "下载失败"
-                        else -> "下载结果"
-                    }
-                )
-            },
-            text = { Text(feedback.message) },
-            confirmButton = {
-                Button(onClick = { vm.clearDownloadFeedback() }) { Text("知道了") }
-            }
-        )
+    // 下载结果走底部玻璃胶囊（2026-09-15：原居中 AlertDialog 打断浏览，状态类反馈统一胶囊化）
+    LaunchedEffect(downloadFeedback) {
+        downloadFeedback?.let { feedback ->
+            snackbar.show(
+                message = feedback.message,
+                kind = when (feedback.success) {
+                    true -> FeedbackKind.SUCCESS
+                    false -> FeedbackKind.ERROR
+                    null -> FeedbackKind.NEUTRAL
+                }
+            )
+            vm.clearDownloadFeedback()
+        }
     }
 
     val data = link
@@ -135,6 +134,7 @@ fun DetailScreen(
                 onBack = onBack,
                 onDownload = vm::requestDownload,
                 downloading = downloading,
+                downloadProgress = downloadProgress[data.tweetId],
                 onOpenProfile = { handle ->
                     if (!openTwitterProfile(context, handle)) snackbar.show("无法打开作者主页")
                 }
@@ -182,6 +182,8 @@ private fun DetailTopBar(
     onBack: () -> Unit,
     onDownload: () -> Unit,
     downloading: Boolean,
+    // 实时下载百分比（0..99）：下载中且有进度时按钮显示数字替代纯转圈
+    downloadProgress: Int? = null,
     onOpenProfile: (String) -> Unit
 ) {
     val authorName = data.authorName ?: data.authorId ?: "未知作者"
@@ -203,7 +205,7 @@ private fun DetailTopBar(
                 .fillMaxHeight()
                 .then(
                     if (data.authorId != null) {
-                        Modifier.clickable { onOpenProfile(data.authorId!!) }
+                        Modifier.pressableNoRipple { onOpenProfile(data.authorId!!) }
                     } else Modifier
                 ),
             contentAlignment = Alignment.Center
@@ -232,14 +234,20 @@ private fun DetailTopBar(
             enabled = data.status != LinkStatus.DOWNLOADED &&
                 data.status != LinkStatus.DELETED && !downloading
         ) {
-            if (downloading) {
-                CircularProgressIndicator(
+            when {
+                // 有实时进度：直接显示百分比数字（比纯转圈信息量更高）
+                downloading && downloadProgress != null -> Text(
+                    text = "$downloadProgress%",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                downloading -> CircularProgressIndicator(
                     strokeWidth = 2.5.dp,
                     modifier = Modifier.size(20.dp),
                     color = MaterialTheme.colorScheme.onSurface
                 )
-            } else {
-                Icon(Icons.Default.Download, contentDescription = "下载")
+                else -> Icon(Icons.Default.Download, contentDescription = "下载")
             }
         }
     }
@@ -336,7 +344,7 @@ private fun AuthorCard(data: SavedLink, onOpenProfile: (String) -> Unit) {
         ) {
             // 头像可点击跳作者主页
             if (handle != null) {
-                Box(modifier = Modifier.clickable { onOpenProfile(handle) }) {
+                Box(modifier = Modifier.pressableNoRipple { onOpenProfile(handle) }) {
                     Avatar(data = data)
                 }
             } else {
@@ -580,7 +588,7 @@ private fun CollapsibleCaption(caption: String) {
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier
-                        .clickable { expanded = !expanded }
+                        .pressableNoRipple { expanded = !expanded }
                         .padding(vertical = 2.dp)
                 )
             }

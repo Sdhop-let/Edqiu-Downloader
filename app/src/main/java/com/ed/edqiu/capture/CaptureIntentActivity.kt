@@ -4,41 +4,41 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -47,6 +47,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 import com.ed.edqiu.EdqiuApplication
 import com.ed.edqiu.data.repository.SavedLinkRepository
+import com.ed.edqiu.ui.components.CapsuleFeedbackController
+import com.ed.edqiu.ui.components.CapsuleFeedbackHost
+import com.ed.edqiu.ui.components.FeedbackKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -54,13 +57,17 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * 接收系统分享 / 「处理文本」的保存结果页。
+ * 接收系统分享 / 「处理文本」的保存结果页（透明 overlay）。
  *
  * 体验流程（修复「在 Twitter 点保存后卡顿」）：
  * 1. 链接入库是纯本地操作、立即完成；转圈阶段只等待作者/封面元数据补全（最长 8s）；
- * 2. 元数据成功 → 绿色对勾 +「已保存」，约 1s 后自动返回原应用；
- * 3. 失败 → 显示原因 +「重试一次」；仍失败可点「完成」退出
+ * 2. 元数据成功 → 成功胶囊，约 1.1s 后自动返回原应用；
+ * 3. 失败 → 底部小操作卡显示原因 +「重试一次」；仍失败可点「完成」退出
  *   （链接已入库，元数据后续由收件箱刷新自动补全）。
+ *
+ * UI（2026-09-15 重构）：原居中大结果卡占据屏幕上部 1/3，遮挡原 App 内容视野。
+ * 改为主 App 同源的「底部胶囊」反馈语言：加载/成功用玻璃胶囊，失败用小型玻璃操作卡，
+ * 全部贴底部、不遮内容。本 Activity 不在主 App 导航栈内，自持一套 CapsuleFeedbackController。
  */
 private enum class Phase { LOADING, SUCCESS, FAILED }
 
@@ -116,12 +123,12 @@ class CaptureIntentActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
-                SaveResultCard(
+                CaptureFeedbackLayer(
                     phase = phase,
                     failureReason = failureReason,
                     canRetry = !retryUsed && savedTweetId != null,
                     onRetry = {
-                        val tweetId = savedTweetId ?: return@SaveResultCard
+                        val tweetId = savedTweetId ?: return@CaptureFeedbackLayer
                         retryUsed = true
                         phase = Phase.LOADING
                         fetchMeta(tweetId)
@@ -154,103 +161,135 @@ class CaptureIntentActivity : ComponentActivity() {
     }
 }
 
-/** 居中玻璃结果卡：转圈 / 对勾 / 失败原因 + 重试。 */
+/**
+ * 底部反馈层：
+ * - LOADING → 常驻胶囊「正在保存…」（sticky，不自动消失）
+ * - SUCCESS → 成功胶囊，停留 1.1s 后随 Activity 一起结束
+ * - FAILED → 胶囊收起，底部浮出小型操作卡（原因 + 重试/完成）
+ */
 @Composable
-private fun SaveResultCard(
+private fun CaptureFeedbackLayer(
     phase: Phase,
     failureReason: String,
     canRetry: Boolean,
     onRetry: () -> Unit,
     onFinish: () -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 120.dp),
-        contentAlignment = Alignment.TopCenter
-    ) {
-        Surface(
-            shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 12.dp,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp)
+    val capsule = remember { CapsuleFeedbackController() }
+
+    LaunchedEffect(phase) {
+        when (phase) {
+            Phase.LOADING -> capsule.show(FeedbackKind.NEUTRAL, "正在保存…", sticky = true)
+            Phase.SUCCESS -> capsule.show(FeedbackKind.SUCCESS, "已保存到收件箱")
+            Phase.FAILED -> capsule.clear()
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        CapsuleFeedbackHost(
+            controller = capsule,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
+        // 失败操作卡：与胶囊退场自然衔接（胶囊下沉收起、卡片浮入）
+        AnimatedVisibility(
+            visible = phase == Phase.FAILED,
+            enter = slideInVertically(tween(240)) { it / 2 } + fadeIn(tween(200)),
+            modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 28.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                when (phase) {
-                    Phase.LOADING -> {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(46.dp),
-                            strokeWidth = 4.dp
-                        )
-                        Text("正在保存…", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Text("正在补全作者与封面信息", style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Phase.SUCCESS -> {
-                        SuccessCheck()
-                        Text("已保存到收件箱", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    }
-                    Phase.FAILED -> {
-                        Box(
-                            modifier = Modifier
-                                .size(46.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.errorContainer),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(26.dp)
-                            )
-                        }
-                        Text("保存遇到问题", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Text(
-                            failureReason,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            if (canRetry) {
-                                Button(onClick = onRetry, shape = RoundedCornerShape(14.dp)) {
-                                    Text("重试一次")
-                                }
-                            }
-                            OutlinedButton(onClick = onFinish, shape = RoundedCornerShape(14.dp)) {
-                                Text("完成")
-                            }
-                        }
-                    }
-                }
-            }
+            SaveFailureCard(
+                reason = failureReason,
+                canRetry = canRetry,
+                onRetry = onRetry,
+                onFinish = onFinish
+            )
         }
     }
 }
 
-/** 完成态：绿色圆底 + 缩放弹入的对勾。 */
+/** 失败小型操作卡：深色玻璃与胶囊同源，居中布局，仅失败时出现。 */
 @Composable
-private fun SuccessCheck() {
-    var shown by mutableStateOf(false)
-    val scale by animateFloatAsState(
-        targetValue = if (shown) 1f else 0.3f,
-        animationSpec = tween(260),
-        label = "check_scale"
-    )
-    androidx.compose.runtime.LaunchedEffect(Unit) { shown = true }
+private fun SaveFailureCard(
+    reason: String,
+    canRetry: Boolean,
+    onRetry: () -> Unit,
+    onFinish: () -> Unit
+) {
+    val errorAccent = Color(0xFFFF453A)
     Box(
         modifier = Modifier
-            .size(46.dp)
-            .alpha(scale)
-            .clip(CircleShape)
-            .background(Color(0xFF22C55E)),
-        contentAlignment = Alignment.Center
+            .navigationBarsPadding()
+            .padding(horizontal = 32.dp)
+            .padding(bottom = 20.dp)
+            .widthIn(max = 380.dp)
+            .shadow(
+                elevation = 14.dp,
+                shape = RoundedCornerShape(22.dp),
+                ambientColor = Color.Black.copy(alpha = 0.18f),
+                spotColor = Color.Black.copy(alpha = 0.28f)
+            )
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color(0xF01A1D21))
     ) {
-        Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp))
+        // 顶部镜面高光（与 CapsulePill 同语言）
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.14f),
+                            Color.White.copy(alpha = 0.03f),
+                            Color.Transparent
+                        ),
+                        startY = 0f,
+                        endY = 60f
+                    )
+                )
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 22.dp, vertical = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(9.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(errorAccent.copy(alpha = 0.22f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = null,
+                    tint = errorAccent,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Text(
+                "保存遇到问题",
+                color = Color(0xFFEDEEF1),
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp
+            )
+            Text(
+                reason,
+                color = Color(0xFFB9BEC7),
+                fontSize = 12.5.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 3
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (canRetry) {
+                    Button(onClick = onRetry, shape = RoundedCornerShape(12.dp)) {
+                        Text("重试一次")
+                    }
+                }
+                OutlinedButton(onClick = onFinish, shape = RoundedCornerShape(12.dp)) {
+                    Text("完成")
+                }
+            }
+        }
     }
 }

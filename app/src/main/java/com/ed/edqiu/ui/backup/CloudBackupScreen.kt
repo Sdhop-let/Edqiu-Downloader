@@ -1,5 +1,6 @@
 package com.ed.edqiu.ui.backup
 
+import com.ed.edqiu.ui.util.pressableNoRipple
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -65,6 +66,7 @@ import com.ed.edqiu.backup.model.BackupTaskStatus
 import com.ed.edqiu.backup.model.ProviderId
 import com.ed.edqiu.ui.components.DynamicSwitch
 import com.ed.edqiu.ui.components.GlassSurface
+import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.components.InlineFeedbackBar
 import com.ed.edqiu.ui.components.GlassTier
 import kotlinx.coroutines.launch
@@ -88,11 +90,11 @@ fun CloudBackupScreen(
     val uiState by vm.uiState.collectAsStateWithLifecycle()
 
     // 内联反馈：消息固定显示在备份设置卡片下方，5s 后动画消失（替代全局顶部 Snackbar）
-    var inlineFeedback by remember { mutableStateOf<String?>(null) }
+    var inlineFeedback by remember { mutableStateOf<FeedbackMessage?>(null) }
 
     LaunchedEffect(uiState.message) {
         uiState.message?.let {
-            inlineFeedback = it
+            inlineFeedback = FeedbackMessage(it, uiState.messageKind)
             vm.consumeMessage()
         }
     }
@@ -348,7 +350,7 @@ private fun ProviderRow(
                     Modifier
                 }
             )
-            .clickable(onClick = onClick)
+            .pressableNoRipple { onClick() }
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(13.dp),
@@ -378,7 +380,7 @@ private fun ProviderRow(
             Surface(
                 modifier = Modifier
                     .size(34.dp)
-                    .clickable(onClick = onRefresh),
+                    .pressableNoRipple { onRefresh() },
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
             ) {

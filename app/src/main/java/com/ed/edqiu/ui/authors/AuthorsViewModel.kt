@@ -3,6 +3,7 @@ package com.ed.edqiu.ui.authors
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.data.model.SavedLink
 import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.data.repository.SavedLinkRepository
@@ -101,13 +102,32 @@ class AuthorsViewModel(
         }
     }
 
+    /**
+     * 作品排序键（2026-09-15 排序准则）：
+     * 1. 推文不存在（DELETED）的条目永远垫底（无发布时间可言）；
+     * 2. 其余按「推文发布时间」倒序（sidecar 链路写入 publishedAt）——同作者
+     *    连续发布的帖子自然相邻，修复旧排序（下载/捕获时间）把同一天发布的
+     *    连续帖拆成两组的问题；
+     * 3. 无发布时间的旧记录回退 downloadedAt ?: savedAt，仍在非 DELETED 段内。
+     */
+    private fun SavedLink.workSortKey(): Long =
+        publishedAt ?: downloadedAt ?: savedAt
+
+    private fun List<SavedLink>.sortedByPublished(): List<SavedLink> =
+        sortedWith(
+            compareBy(
+                { it.status == LinkStatus.DELETED },       // DELETED 垫底
+                { -(it.workSortKey()) }                    // 发布时间倒序
+            )
+        )
+
     private fun List<SavedLink>.groupByHandle(): List<AuthorSummary> {
         return asSequence()
             .filter { !it.authorId.isNullOrBlank() }
             .groupBy { normalizeHandle(it.authorId) }
             .mapNotNull { (_, links) ->
-                // 组内按时间倒序：最新记录优先，作为「最新非空值替换」的取值顺序
-                val newestFirst = links.sortedByDescending { it.downloadedAt ?: it.savedAt }
+                // 组内按发布时间倒序：最新记录优先，作为「最新非空值替换」的取值顺序
+                val newestFirst = links.sortedByPublished()
                 val displayHandle = newestFirst.first().authorId?.trim().orEmpty()
                 if (displayHandle.isEmpty()) return@mapNotNull null
                 AuthorSummary(
@@ -116,7 +136,7 @@ class AuthorsViewModel(
                     name = newestFirst.firstOrNull { !it.authorName.isNullOrBlank() }?.authorName,
                     avatarUrl = newestFirst.firstOrNull { !it.avatarUrl.isNullOrBlank() }?.avatarUrl,
                     workCount = links.size,
-                    recentAt = newestFirst.first().downloadedAt ?: newestFirst.first().savedAt,
+                    recentAt = newestFirst.first().workSortKey(),
                     works = newestFirst
                 )
             }

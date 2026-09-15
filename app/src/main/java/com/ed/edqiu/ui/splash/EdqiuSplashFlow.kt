@@ -1,5 +1,6 @@
 package com.ed.edqiu.ui.splash
 
+import com.ed.edqiu.BuildConfig
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -239,7 +240,7 @@ private fun EnterStage() {
 
             Spacer(modifier = Modifier.weight(0.56f))
             Text(
-                text = "v1.2.0",
+                text = "v${BuildConfig.VERSION_NAME}",
                 modifier = Modifier.padding(bottom = 32.dp),
                 color = Color(0xFFD1D5DB),
                 fontSize = 11.sp

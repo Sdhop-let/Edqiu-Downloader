@@ -1,5 +1,6 @@
 package com.ed.edqiu.ui.history
 
+import com.ed.edqiu.ui.util.pressableNoRipple
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ed.edqiu.ui.components.EmptyState
+import com.ed.edqiu.ui.components.FeedbackKind
 import com.ed.edqiu.ui.navigation.LocalSnackbarController
 import java.text.DateFormat
 import java.util.Date
@@ -59,7 +61,7 @@ fun HistoryScreen(
 
     LaunchedEffect(feedback) {
         feedback?.let {
-            snackbar.show(it)
+            snackbar.show(it, kind = FeedbackKind.SUCCESS)
             vm.clearFeedback()
         }
     }
@@ -135,7 +137,7 @@ fun HistoryScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { vm.toggleSelected(entry.archiveId) },
+                            .pressableNoRipple { vm.toggleSelected(entry.archiveId) },
                         shape = MaterialTheme.shapes.medium,
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surface

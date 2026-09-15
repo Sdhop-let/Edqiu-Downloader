@@ -5,19 +5,24 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ed.edqiu.data.model.SavedLink
 import com.ed.edqiu.data.preferences.SettingsRepository
+import com.ed.edqiu.data.repository.DownloadTaskBus
 import com.ed.edqiu.data.repository.SavedLinkRepository
+import com.ed.edqiu.ui.list.InboxDownloadProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class DetailViewModel(
     application: Application,
     private val repo: SavedLinkRepository,
-    private val settings: SettingsRepository
+    private val settings: SettingsRepository,
+    // 应用级下载作用域（AppContainer.globalIoScope）：退后台/页面销毁不中断下载
+    private val downloadScope: kotlinx.coroutines.CoroutineScope
 ) : AndroidViewModel(application) {
 
     private val linkMutable = MutableStateFlow<SavedLink?>(null)
@@ -29,6 +34,15 @@ class DetailViewModel(
     /** 下载进行中标志：true 时下载按钮转圈，给用户即时反馈。 */
     private val downloadingMutable = MutableStateFlow(false)
     val downloading: StateFlow<Boolean> = downloadingMutable
+
+    /**
+     * 收件箱实时下载进度（2026-09-15）：tweetId → 0..99。
+     * 与 ListViewModel 同源（DownloadTaskBus 双引擎 300ms 节流回写），
+     * 详情页下载按钮据此显示当前百分比。
+     */
+    val downloadProgress: StateFlow<Map<String, Int>> = DownloadTaskBus.tasks
+        .map { tasks -> InboxDownloadProgress.progressByTweet(tasks) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     private val downloadFeedbackMutable = MutableStateFlow<DownloadFeedback?>(null)
     val downloadFeedback: StateFlow<DownloadFeedback?> = downloadFeedbackMutable
@@ -55,9 +69,10 @@ class DetailViewModel(
 
     fun requestDownload() {
         val id = linkMutable.value?.tweetId ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            // 先亮「下载中」即时反馈（下载耗时可能 10-60s，无中间反馈会误以为没反应）
-            downloadingMutable.value = true
+        // 下载执行放应用级 downloadScope：用户退后台后（不划掉 App）下载持续进行
+        downloadingMutable.value = true
+        downloadScope.launch {
+            // 先亮「下载中」即时反馈（按钮转圈/百分比），完成或失败后恢复
             val result = runCatching { repo.requestDownload(id, manual = true) }
                 .getOrElse { error ->
                     SavedLinkRepository.DownloadRequestResult.Failed(

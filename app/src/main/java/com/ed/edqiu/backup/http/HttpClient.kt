@@ -1,5 +1,6 @@
 package com.ed.edqiu.backup.http
 
+import com.ed.edqiu.BuildConfig
 import android.util.Log
 import com.ed.edqiu.backup.model.BackupException
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +38,7 @@ object HttpClient {
     private const val CONNECT_TIMEOUT_MS = 20_000L
     private const val READ_TIMEOUT_MS = 30_000L
     private const val WRITE_TIMEOUT_MS = 30_000L
-    private const val USER_AGENT = "Edqiu-Backup/1.2.0 (Android)"
+    private const val USER_AGENT = "Edqiu-Backup/" + BuildConfig.VERSION_NAME + " (Android)"
 
     private const val JSON_MEDIA_TYPE = "application/json; charset=utf-8"
 

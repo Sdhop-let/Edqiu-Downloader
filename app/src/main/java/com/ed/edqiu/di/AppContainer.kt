@@ -124,5 +124,12 @@ class AppContainer(context: Context) {
     init {
         // 捕获挂载：收件箱保存链接成功后 → 攒批自动预下载（受开关控制）
         savedLinkRepository.onCaptured = preDownloadManager::onLinkCaptured
+        // P0-4 持久队列挂载（2026-09-15）：每次请求下载 → 登记 WorkManager 唯一任务，
+        // 下载中途进程被杀后由 Worker 在进程恢复时自动续跑（不改变收件箱手动模式语义）
+        savedLinkRepository.onDownloadRequested = { tweetId ->
+            com.ed.edqiu.background.DownloadQueue.enqueue(context.applicationContext, listOf(tweetId))
+        }
+        // P2-1 作者订阅轮询（2026-09-15 批次4）：挂载在应用级 IO 作用域，幂等启动
+        com.ed.edqiu.service.SubscriptionManager.start(context.applicationContext, globalIoScope)
     }
 }

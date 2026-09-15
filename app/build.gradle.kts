@@ -41,8 +41,14 @@ android {
         applicationId = "com.ed.Edqiu"
         minSdk = 24
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.4.2"
+        versionCode = 36
+        versionName = "1.5.1"
+
+        // 2026-09-15：只保留 arm64-v8a（Android 16/17 手机端均为 arm64），APK 从 225.9MB 降至约 80MB；
+        // ffmpeg/yt-dlp 功能完整保留，x86 系模拟器不再支持
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // 网盘直连备份：应用资质占位（百度/阿里/123 client_id、client_secret）

@@ -32,9 +32,11 @@ import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Cookie
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.Tune
@@ -56,6 +58,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -81,7 +84,9 @@ import com.ed.edqiu.data.preferences.CookiePreferences
 import com.ed.edqiu.data.preferences.DownloadPathPreferences
 import com.ed.edqiu.data.preferences.PreDownloadPreferences
 import com.ed.edqiu.data.preferences.ProxyPreferences
+import com.ed.edqiu.data.preferences.ThirdPartyApiPreferences
 import com.ed.edqiu.data.proxy.ProxyDetector
+import com.ed.edqiu.data.proxy.ProxyTester
 import com.ed.edqiu.service.AppUpdateInfo
 import com.ed.edqiu.service.AppUpdateService
 import com.ed.edqiu.service.WebDavSyncService
@@ -90,6 +95,8 @@ import com.ed.edqiu.backup.provider.WebDavEngine
 import com.ed.edqiu.backup.provider.WebDavCredential
 import com.ed.edqiu.background.WebDavAutoBackupScheduler
 import com.ed.edqiu.BuildConfig
+import com.ed.edqiu.ui.components.FeedbackKind
+import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.components.InlineFeedbackBar
 import com.ed.edqiu.ui.components.DynamicSwitch
 import java.text.SimpleDateFormat
@@ -123,7 +130,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // 内联反馈：操作结果固定显示在触发按钮所在卡片内，5s 后动画消失（不再在页面顶部挤压内容）
-    var inlineFeedback by remember { mutableStateOf<String?>(null) }
+    var inlineFeedback by remember { mutableStateOf<FeedbackMessage?>(null) }
 
     val proxyPreferences = remember { ProxyPreferences(context) }
     val cookiePreferences = remember { CookiePreferences(context) }
@@ -141,6 +148,14 @@ fun SettingsScreen(
     var proxyEnabled by remember { mutableStateOf(false) }
     var proxyHost by remember { mutableStateOf("127.0.0.1") }
     var proxyPort by remember { mutableStateOf("7890") }
+    var proxyType by remember { mutableStateOf(ProxySettings.TYPE_HTTP) }
+    var isTestingProxy by remember { mutableStateOf(false) }
+
+    // 第三方解析兜底（P0-1 第三层）：端点留空 = 关闭
+    val thirdPartyApiPreferences = remember { ThirdPartyApiPreferences(context) }
+    var tpEndpoint by remember { mutableStateOf("") }
+    var tpApiKey by remember { mutableStateOf("") }
+    var tpConfigured by remember { mutableStateOf(false) }
 
     var authToken by remember { mutableStateOf("") }
     var ct0 by remember { mutableStateOf("") }
@@ -174,7 +189,7 @@ fun SettingsScreen(
                 context.contentResolver.takePersistableUriPermission(it, flags)
             }.isSuccess
             if (!persisted) {
-                scope.launch { inlineFeedback = "无法持久化目录授权，保存失败，请重试" }
+                scope.launch { inlineFeedback = FeedbackMessage("无法持久化目录授权，保存失败，请重试", FeedbackKind.ERROR) }
                 return@let
             }
             val path = uriToDisplayPath(context, it) ?: it.toString()
@@ -182,7 +197,7 @@ fun SettingsScreen(
             customPath = it.toString()
             pathPreferences.saveCustomTreeUri(customPath, displayPath)
             useCustomPath = true
-            scope.launch { inlineFeedback = ("下载保存路径已更新") }
+            scope.launch { inlineFeedback = FeedbackMessage("下载保存路径已更新", FeedbackKind.SUCCESS) }
         }
     }
 
@@ -191,6 +206,11 @@ fun SettingsScreen(
         proxyEnabled = proxy.enabled
         proxyHost = proxy.host
         proxyPort = proxy.port.toString()
+        proxyType = proxy.type
+
+        tpEndpoint = thirdPartyApiPreferences.getEndpoint()
+        tpApiKey = thirdPartyApiPreferences.getApiKey()
+        tpConfigured = thirdPartyApiPreferences.isConfigured
 
         authToken = cookiePreferences.getAuthToken()
         ct0 = cookiePreferences.getCt0()
@@ -229,10 +249,15 @@ fun SettingsScreen(
             isCheckingAppUpdate = true
             AppUpdateService.checkForUpdate(context)
                 .onSuccess { info ->
-                    if (info == null) inlineFeedback = ("当前已是最新版本")
+                    if (info == null) inlineFeedback = FeedbackMessage("当前已是最新版本", FeedbackKind.NEUTRAL)
                     else appUpdateInfo = info
                 }
-                .onFailure { e -> inlineFeedback = ("检查更新失败：${e.message ?: "网络异常"}") }
+                .onFailure { e ->
+                    inlineFeedback = FeedbackMessage(
+                        "检查更新失败：${e.message ?: "网络异常"}",
+                        FeedbackKind.ERROR
+                    )
+                }
             isCheckingAppUpdate = false
         }
     }
@@ -246,12 +271,18 @@ fun SettingsScreen(
                 .onSuccess { apkFile ->
                     val installStarted = AppUpdateService.installApk(context, apkFile)
                     appUpdateInfo = null
-                    inlineFeedback = (
+                    inlineFeedback = FeedbackMessage(
                         if (installStarted) "系统安装器已打开，请按提示覆盖安装"
-                        else "请允许安装未知来源应用后，再点击立即更新"
+                        else "请允许安装未知来源应用后，再点击立即更新",
+                        if (installStarted) FeedbackKind.SUCCESS else FeedbackKind.NEUTRAL
                     )
                 }
-                .onFailure { e -> inlineFeedback = ("下载新版本失败：${e.message ?: "网络异常"}") }
+                .onFailure { e ->
+                    inlineFeedback = FeedbackMessage(
+                        "下载新版本失败：${e.message ?: "网络异常"}",
+                        FeedbackKind.ERROR
+                    )
+                }
             isDownloadingAppUpdate = false
         }
     }
@@ -259,30 +290,29 @@ fun SettingsScreen(
     val pendingAppUpdate = appUpdateInfo
     if (pendingAppUpdate != null) {
         AlertDialog(
-            onDismissRequest = { if (!isDownloadingAppUpdate) appUpdateInfo = null },
+            onDismissRequest = { appUpdateInfo = null },
             title = { Text("发现新版本 ${pendingAppUpdate.versionName}") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("当前版本：${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                     Text("新版本：${pendingAppUpdate.versionName} (${pendingAppUpdate.versionCode})")
                     if (pendingAppUpdate.publishedAt.isNotBlank()) Text("发布时间：${pendingAppUpdate.publishedAt}")
-                    Text("下载完成后会调用系统安装器，旧数据和本地媒体会保留。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (isDownloadingAppUpdate) {
-                        LinearProgressIndicator(progress = { appUpdateProgress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
-                    }
+                    Text(
+                        "下载在后台进行，完成后自动调用系统安装器，旧数据和本地媒体会保留。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             },
             confirmButton = {
-                TextButton(
-                    enabled = !isDownloadingAppUpdate,
-                    onClick = { downloadAndInstallAppUpdate(pendingAppUpdate) }
-                ) { Text(if (isDownloadingAppUpdate) "下载中" else "立即更新") }
+                // 2026-09-15：确认即关闭弹窗并后台下载（原下载中禁用全部按钮且不可关闭，模态锁死）
+                TextButton(onClick = {
+                    appUpdateInfo = null
+                    downloadAndInstallAppUpdate(pendingAppUpdate)
+                }) { Text("立即更新") }
             },
             dismissButton = {
-                TextButton(
-                    enabled = !isDownloadingAppUpdate,
-                    onClick = { appUpdateInfo = null }
-                ) { Text("稍后") }
+                TextButton(onClick = { appUpdateInfo = null }) { Text("稍后") }
             }
         )
     }
@@ -386,7 +416,7 @@ fun SettingsScreen(
                                     else pathPreferences.customPath = customPath
                                     pathPreferences.useCustomPath = true
                                     displayPath = pathPreferences.displayDownloadDir(context)
-                                    scope.launch { inlineFeedback = ("下载路径已保存") }
+                                    scope.launch { inlineFeedback = FeedbackMessage("下载路径已保存", FeedbackKind.SUCCESS) }
                                 },
                                 enabled = customPath.isNotBlank(),
                                 modifier = Modifier.weight(1f),
@@ -435,6 +465,20 @@ fun SettingsScreen(
                         actionText = if (isCheckingAppUpdate) "检查中" else "检查",
                         onClick = { checkAppUpdate() }
                     )
+                    // 下载进度内联显示（2026-09-15）：更新下载从模态弹窗移出，期间可继续使用页面
+                    if (isDownloadingAppUpdate) {
+                        Spacer(Modifier.height(10.dp))
+                        LinearProgressIndicator(
+                            progress = { appUpdateProgress.coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            "正在下载更新 ${(appUpdateProgress * 100).toInt()}%…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
                     InlineFeedbackBar(
                         message = inlineFeedback,
                         onDismiss = { inlineFeedback = null }
@@ -450,7 +494,10 @@ fun SettingsScreen(
                         Icon(Icons.Outlined.VpnLock, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text("启用代理", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-                            Text("当前 http://${proxyHost.ifBlank { "127.0.0.1" }}:${proxyPort.ifBlank { "7890" }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                if (proxyEnabled) "当前 ${if (proxyType == ProxySettings.TYPE_SOCKS5) "socks5" else "http"}://${proxyHost.ifBlank { "127.0.0.1" }}:${proxyPort.ifBlank { "7890" }}" else "未启用，全部引擎直连",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                         DynamicSwitch(
                             checked = proxyEnabled,
@@ -460,7 +507,8 @@ fun SettingsScreen(
                                     ProxySettings(
                                         enabled = enabled,
                                         host = proxyHost.ifBlank { "127.0.0.1" },
-                                        port = proxyPort.toIntOrNull() ?: 7890
+                                        port = proxyPort.toIntOrNull() ?: 7890,
+                                        type = proxyType
                                     )
                                 )
                             }
@@ -488,33 +536,99 @@ fun SettingsScreen(
                             )
                         }
                         Spacer(Modifier.height(8.dp))
-                        // 自动检测主流代理（Clash / FlClash / Clash Verge / v2rayNG / Shadowsocks）
-                        OutlinedButton(
-                            onClick = {
-                                scope.launch {
-                                    val detection = withContext(Dispatchers.IO) { ProxyDetector.detect(context) }
-                                    when (detection.kind) {
-                                        "VPN" -> {
-                                            // 系统 VPN 隧道：直连即可，无需填代理
-                                            inlineFeedback = detection.description
-                                        }
-                                        "PROXY" -> {
-                                            detection.port?.let { port ->
-                                                proxyHost = detection.host
-                                                proxyPort = port.toString()
-                                                proxyEnabled = true
-                                                proxyPreferences.saveProxySettings(
-                                                    ProxySettings(enabled = true, host = detection.host, port = port)
-                                                )
-                                            }
-                                            inlineFeedback = detection.description
-                                        }
-                                        else -> inlineFeedback = detection.description
+                        Text(
+                            "代理类型（Clash 混合端口两者通用；yt-dlp 回退建议 HTTP）",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(
+                                ProxySettings.TYPE_HTTP to "HTTP",
+                                ProxySettings.TYPE_SOCKS5 to "SOCKS5"
+                            ).forEach { (value, label) ->
+                                val selected = proxyType == value
+                                OutlinedButton(
+                                    onClick = {
+                                        proxyType = value
+                                        proxyPreferences.saveProxySettings(
+                                            ProxySettings(
+                                                enabled = proxyEnabled,
+                                                host = proxyHost.ifBlank { "127.0.0.1" },
+                                                port = proxyPort.toIntOrNull() ?: 7890,
+                                                type = value
+                                            )
+                                        )
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = if (selected) {
+                                        ButtonDefaults.outlinedButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                        )
+                                    } else {
+                                        ButtonDefaults.outlinedButtonColors()
                                     }
+                                ) {
+                                    Text(
+                                        label,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                                    )
                                 }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text("自动检测代理") }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        // 自动检测主流代理（Clash / FlClash / Clash Verge / v2rayNG / Shadowsocks）+ 一键连通性测试（P0-3）
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        val detection = withContext(Dispatchers.IO) { ProxyDetector.detect(context) }
+                                        when (detection.kind) {
+                                            "VPN" -> {
+                                                // 系统 VPN 隧道：直连即可，无需填代理
+                                                inlineFeedback = FeedbackMessage(detection.description, FeedbackKind.NEUTRAL)
+                                            }
+                                            "PROXY" -> {
+                                                detection.port?.let { port ->
+                                                    proxyHost = detection.host
+                                                    proxyPort = port.toString()
+                                                    proxyEnabled = true
+                                                    proxyPreferences.saveProxySettings(
+                                                        ProxySettings(enabled = true, host = detection.host, port = port, type = proxyType)
+                                                    )
+                                                }
+                                                inlineFeedback = FeedbackMessage(detection.description, FeedbackKind.SUCCESS)
+                                            }
+                                            else -> inlineFeedback = FeedbackMessage(detection.description, FeedbackKind.NEUTRAL)
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) { Text("自动检测代理") }
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        isTestingProxy = true
+                                        val outcome = ProxyTester.test(
+                                            ProxySettings(
+                                                enabled = true,
+                                                host = proxyHost.ifBlank { "127.0.0.1" },
+                                                port = proxyPort.toIntOrNull() ?: 7890,
+                                                type = proxyType
+                                            )
+                                        )
+                                        isTestingProxy = false
+                                        inlineFeedback = outcome.fold(
+                                            onSuccess = { FeedbackMessage(it, FeedbackKind.SUCCESS) },
+                                            onFailure = { FeedbackMessage(it.message ?: "测试失败", FeedbackKind.ERROR) }
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                enabled = !isTestingProxy
+                            ) { Text(if (isTestingProxy) "测试中…" else "测试连通") }
+                        }
                     }
 
                     HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color(0xFFE2E8F0))
@@ -550,7 +664,7 @@ fun SettingsScreen(
                             onClick = {
                                 cookiePreferences.saveCookies(authToken, ct0)
                                 cookiesConfigured = cookiePreferences.hasCookies()
-                                scope.launch { inlineFeedback = ("Cookie 已保存") }
+                                scope.launch { inlineFeedback = FeedbackMessage("Cookie 已保存", FeedbackKind.SUCCESS) }
                             }
                         ) { Text("保存 Cookie") }
                         OutlinedButton(
@@ -564,6 +678,54 @@ fun SettingsScreen(
                             }
                         ) { Text("清除") }
                     }
+
+                    HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color(0xFFE2E8F0))
+                    // 第三方解析兜底（P0-1 第三层）：端点留空 = 关闭
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Icon(Icons.Outlined.Extension, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("第三方解析兜底", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                            Text(
+                                if (tpConfigured) "已启用：FXTwitter 与 yt-dlp 均失败后启用" else "未启用（端点留空即关闭）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = tpEndpoint,
+                        onValueChange = { tpEndpoint = it },
+                        label = { Text("API 端点（支持 {id} 占位符）") },
+                        placeholder = { Text("https://api.example.com/twitter/status/{id}") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = tpApiKey,
+                        onValueChange = { tpApiKey = it },
+                        label = { Text("API Key（可留空）") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp)
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        shape = RoundedCornerShape(16.dp),
+                        onClick = {
+                            thirdPartyApiPreferences.save(tpEndpoint, tpApiKey)
+                            tpConfigured = thirdPartyApiPreferences.isConfigured
+                            scope.launch {
+                                inlineFeedback = FeedbackMessage(
+                                    if (tpConfigured) "第三方兜底已保存并启用" else "第三方兜底已关闭（端点为空）",
+                                    if (tpConfigured) FeedbackKind.SUCCESS else FeedbackKind.NEUTRAL
+                                )
+                            }
+                        }
+                    ) { Text("保存第三方兜底") }
+
                     InlineFeedbackBar(
                         message = inlineFeedback,
                         onDismiss = { inlineFeedback = null }
@@ -694,12 +856,12 @@ fun SettingsScreen(
                                             .onSuccess {
                                                 connectionVerified = true
                                                 cloudSyncPreferences.connectionVerified = true
-                                                inlineFeedback = ("连接成功，WebDAV 配置已保存")
+                                                inlineFeedback = FeedbackMessage("连接成功，WebDAV 配置已保存", FeedbackKind.SUCCESS)
                                             }
                                             .onFailure { e ->
                                                 connectionVerified = false
                                                 cloudSyncPreferences.connectionVerified = false
-                                                inlineFeedback = ("连接失败：${e.message ?: "未知错误"}")
+                                                inlineFeedback = FeedbackMessage("连接失败：${e.message ?: "未知错误"}", FeedbackKind.ERROR)
                                             }
                                         isTestingConnection = false
                                     }
@@ -719,9 +881,9 @@ fun SettingsScreen(
                                                     cloudSyncPreferences.lastSyncTime = System.currentTimeMillis()
                                                     lastSyncTime = cloudSyncPreferences.lastSyncTime
                                                 }
-                                                inlineFeedback = ("同步完成：新增 $newCount 个，跳过 $skipCount 个")
+                                                inlineFeedback = FeedbackMessage("同步完成：新增 $newCount 个，跳过 $skipCount 个", FeedbackKind.SUCCESS)
                                             }
-                                            .onFailure { e -> inlineFeedback = ("WebDAV 同步失败：${e.message ?: "未知错误"}") }
+                                            .onFailure { e -> inlineFeedback = FeedbackMessage("WebDAV 同步失败：${e.message ?: "未知错误"}", FeedbackKind.ERROR) }
                                         isWebDavSyncing = false
                                     }
                                 },
@@ -765,10 +927,10 @@ fun SettingsScreen(
                                         cloudSyncPreferences.autoBackupEnabled = it
                                         if (it) {
                                             WebDavAutoBackupScheduler.schedule(context, autoBackupDays)
-                                            scope.launch { inlineFeedback = ("已开启自动备份（每 ${autoBackupDays} 天）") }
+                                            scope.launch { inlineFeedback = FeedbackMessage("已开启自动备份（每 ${autoBackupDays} 天）", FeedbackKind.SUCCESS) }
                                         } else {
                                             WebDavAutoBackupScheduler.cancel(context)
-                                            scope.launch { inlineFeedback = ("已关闭自动备份") }
+                                            scope.launch { inlineFeedback = FeedbackMessage("已关闭自动备份", FeedbackKind.NEUTRAL) }
                                         }
                                     }
                                 )
@@ -892,6 +1054,72 @@ fun SettingsScreen(
                     Spacer(Modifier.height(10.dp))
                     Text(
                         "关闭预下载后，手动下载完成仍会自动联动网盘同步",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            }
+
+            // ── 作品订阅管理（2026-09-15 v2 批次4：P2-1 作者订阅自动下载）──
+            if (section == null || section == DlSection.PREDOWNLOAD) {
+            item {
+                val subs by com.ed.edqiu.service.SubscriptionManager.observe(context)
+                    .collectAsState(initial = emptyList())
+                SectionCard(title = "作品订阅", subtitle = "关注的作者发新视频自动下载", icon = Icons.Outlined.Notifications) {
+                    if (subs.isEmpty()) {
+                        Text(
+                            "暂无订阅——进入播放页点右上 ⋮ 选「订阅该作者」即可。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    subs.forEach { sub ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "@${sub.screenName}",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = buildString {
+                                        append(if (sub.enabled) "订阅中" else "已暂停")
+                                        sub.lastVideoAt?.let {
+                                            append(" · 上次新作品 ")
+                                            append(SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(it)))
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            DynamicSwitch(
+                                checked = sub.enabled,
+                                onCheckedChange = { enabled ->
+                                    scope.launch {
+                                        com.ed.edqiu.service.SubscriptionManager.setEnabled(context, sub.screenName, enabled)
+                                    }
+                                }
+                            )
+                            TextButton(onClick = {
+                                scope.launch {
+                                    com.ed.edqiu.service.SubscriptionManager.remove(context, sub.screenName)
+                                }
+                            }) {
+                                Text("删除", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "后台每 25 分钟检测一轮（每轮最多 3 个作者，每作者最多自动下载 3 条新作品）。" +
+                            "检测走 yt-dlp 用户页，需网络可达 X（自动套用代理设置）。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

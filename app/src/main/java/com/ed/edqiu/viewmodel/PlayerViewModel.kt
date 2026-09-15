@@ -28,7 +28,12 @@ data class PlayerUiState(
     val duration: Long = 0,
     val isFullscreen: Boolean = false,
     val playbackSpeed: Float = 1f,
-    val isMuted: Boolean = false
+    val isMuted: Boolean = false,
+    /** 当前媒体已就绪（STATE_READY）：2026-09-15 垂直翻页时封面淡出时机依据。 */
+    val isReady: Boolean = false,
+    /** 视频真实像素宽高（onVideoSizeChanged，2026-09-15 比例自适应缩放依据；0=未知/图片）。 */
+    val videoWidth: Int = 0,
+    val videoHeight: Int = 0
 )
 
 class PlayerViewModel(application: Application) : AndroidViewModel(application) {
@@ -58,11 +63,25 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 _playerState.update { it.copy(isPlaying = isPlaying) }
             }
             override fun onPlaybackStateChanged(state: Int) {
+                // 就绪状态外露：垂直翻页落定后封面在媒体真正可播时才淡出，避免黑屏闪烁
+                _playerState.update { it.copy(isReady = state == Player.STATE_READY) }
                 if (state == Player.STATE_READY || state == Player.STATE_ENDED) {
                     syncPlaybackPosition()
                 }
             }
+            // 2026-09-15 比例自适应：拿到视频真实像素宽高，供 PlayerScreen 选择缩放模式
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                _playerState.update {
+                    it.copy(videoWidth = videoSize.width, videoHeight = videoSize.height)
+                }
+            }
         })
+        // 2026-09-15 v2 批次3（P1-1 旗舰硬件红利）：邻条自动预载——播放列表化后，
+        // ExoPlayer 自动预载相邻播放项（8s 时长预算），上滑切换秒开、无起播黑帧。
+        // 预载目标为播放列表邻居，不额外占播放器实例；图片项不在播放列表内（见 videoEntities）。
+        runCatching {
+            exoPlayer.setPreloadConfiguration(ExoPlayer.PreloadConfiguration(8_000_000L))
+        }
         viewModelScope.launch {
             while (true) {
                 syncPlaybackPosition()
@@ -84,7 +103,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun playVideo(filePath: String) {
         val file = File(filePath)
         if (!file.exists()) {
-            _playerState.update { it.copy(currentVideo = null) }
+            _playerState.update { it.copy(currentVideo = null, isReady = false) }
             return
         }
 
@@ -104,19 +123,49 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     createdAt = System.currentTimeMillis(),
                     completedAt = System.currentTimeMillis()
                 )
-            _playerState.update { it.copy(currentVideo = entity) }
+            _playerState.update { it.copy(currentVideo = entity, isReady = true) }
             return
         }
 
-        if (_playerState.value.currentVideo?.filePath == filePath && exoPlayer.mediaItemCount > 0) {
+        // 同路径早退检查（2026-09-14 修复"立即返回后再点无法播放"）：
+        // 立即返回会触发 stopPlayer() → ExoPlayer 回 STATE_IDLE（stop 清空已准备内容），
+        // 此时不允许直接 play()（IDLE 下无已准备媒体，play() 永远不会开始），
+        // 必须落到底部的重新定位 + prepare 流程
+        if (_playerState.value.currentVideo?.filePath == filePath &&
+            exoPlayer.mediaItemCount > 0 &&
+            exoPlayer.playbackState != Player.STATE_IDLE
+        ) {
             if (!exoPlayer.playWhenReady) exoPlayer.play()
             return
         }
 
-        val mediaItem = MediaItem.fromUri(Uri.fromFile(file))
-        exoPlayer.setMediaItem(mediaItem)
-        exoPlayer.prepare()
-        exoPlayer.playWhenReady = true
+        // 2026-09-15 v2 批次3（P1-1）：播放列表化切换——整个视频列表进 ExoPlayer 播放列表，
+        // 切条 = seekTo(index)（不再 setMediaItem 单条），ExoPlayer 据此自动预载相邻条目。
+        // seekTo 同索引时不重置进度（单条→列表的平滑升级路径）。
+        val videos = ensurePlaylist()
+        var index = videos.indexOfFirst { it.filePath == filePath }
+        // 列表内容与播放列表错位（画质升级替换路径/删除/流更新）→ 强制重建一次
+        if (index < 0 || index < exoPlayer.mediaItemCount &&
+            exoPlayer.getMediaItemAt(index).localConfiguration?.tag != filePath
+        ) {
+            exoPlayer.clearMediaItems()
+            ensurePlaylist()
+            index = videos.indexOfFirst { it.filePath == filePath }
+        }
+
+        _playerState.update { it.copy(isReady = false, videoWidth = 0, videoHeight = 0) }
+        if (index >= 0 && index < exoPlayer.mediaItemCount) {
+            if (index != exoPlayer.currentMediaItemIndex || exoPlayer.playbackState == Player.STATE_IDLE) {
+                exoPlayer.seekTo(index, 0L)
+                if (exoPlayer.playbackState == Player.STATE_IDLE) exoPlayer.prepare()
+            }
+            exoPlayer.playWhenReady = true
+        } else {
+            // 兜底：列表外文件（如刚下载完尚未出现在 Flow 中）单条播放
+            exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+        }
 
         // Find matching entity or create minimal one
         val entity = videoList.value.find { it.filePath == filePath }
@@ -137,8 +186,32 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun playVideo(entity: DownloadHistoryEntity) {
-        _playerState.update { it.copy(currentVideo = entity) }
+        // 2026-09-15 严重 bug 修复：原实现先写 currentVideo 再调 playVideo(filePath)，
+        // 导致「同路径早退」误判（以为 ExoPlayer 已在播目标条目）→ 只 play() 不切媒体，
+        // 封面显示新条目、实际内容还是旧视频（用户实测：翻页后内容永远是第一条）。
+        // 正确顺序：先走完整的媒体切换流程，再同步展示实体。
         playVideo(entity.filePath)
+        _playerState.update { it.copy(currentVideo = entity) }
+    }
+
+    /**
+     * 确保播放列表与当前视频列表一致（2026-09-15 批次3）。
+     * 仅视频进列表（图片走查看器分支，避免预载撞上无法解码的图片项）。
+     * @return 当前视频实体列表（与播放列表一一对应）。
+     */
+    private fun ensurePlaylist(): List<DownloadHistoryEntity> {
+        val videos = videoList.value.filter { !MediaFileTypes.isImageFile(it.filePath) }
+        if (exoPlayer.mediaItemCount != videos.size) {
+            exoPlayer.clearMediaItems()
+            videos.forEach { entity ->
+                val item = MediaItem.fromUri(Uri.fromFile(File(entity.filePath)))
+                    .buildUpon()
+                    .setTag(entity.filePath)
+                    .build()
+                exoPlayer.addMediaItem(item)
+            }
+        }
+        return videos
     }
 
     fun pauseVideo() {
@@ -199,4 +272,3 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         exoPlayer.release()
     }
 }
-

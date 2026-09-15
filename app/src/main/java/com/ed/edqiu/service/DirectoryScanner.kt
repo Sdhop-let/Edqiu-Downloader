@@ -31,7 +31,9 @@ object DirectoryScanner {
         try {
             val dao = AppDatabase.getInstance(context).downloadHistoryDao()
             val hiddenHistoryPreferences = HiddenHistoryPreferences(context)
-            val existingPaths = dao.getAllFilePaths()
+            val existingPaths = dao.getAllFilePaths().toHashSet()
+            // 2026-09-15：旧记录（sidecar 已有发布时间但 DB 还没写入）的回填清单
+            val missingPublishedPaths = dao.getFilePathsMissingPublishedAt().toHashSet()
             val candidateFiles = scanRoots(context)
                 .asSequence()
                 .filter { it.exists() && it.isDirectory }
@@ -42,6 +44,7 @@ object DirectoryScanner {
 
             var newCount = 0
             var skippedCount = 0
+            var backfilledCount = 0
             candidateFiles.forEach { file ->
                 if (hiddenHistoryPreferences.isHidden(file.absolutePath)) {
                     skippedCount++
@@ -56,12 +59,18 @@ object DirectoryScanner {
                     } else {
                         skippedCount++
                     }
+                } else if (file.absolutePath in missingPublishedPaths) {
+                    // 回填：老记录没有发布时间，从 sidecar 补齐（媒体库排序归位）
+                    readPublishedAtFromSidecar(file)?.let { publishedAt ->
+                        dao.backfillPublishedAt(file.absolutePath, publishedAt)
+                        backfilledCount++
+                    }
                 }
             }
 
             Log.i(
                 TAG,
-                "Directory scan complete: existing=${existingPaths.size}, files=${candidateFiles.size}, rebuilt=$newCount, skipped=$skippedCount"
+                "Directory scan complete: existing=${existingPaths.size}, files=${candidateFiles.size}, rebuilt=$newCount, backfilled=$backfilledCount, skipped=$skippedCount"
             )
         } catch (e: Exception) {
             Log.e(TAG, "Directory scan failed", e)
@@ -106,6 +115,7 @@ object DirectoryScanner {
         var url: String
         var title: String = nameWithoutExtension
         var thumbnail: String = if (fileMediaType == MediaType.IMAGE) file.absolutePath else ""
+        var publishedAt: Long? = null
 
         val tweetIdIndex = parts.indexOfFirst { it.length > 10 && it.all(Char::isDigit) }
         if (tweetIdIndex >= 0) {
@@ -158,6 +168,9 @@ object DirectoryScanner {
                 if (json.has("mediaIndex") && !json.isNull("mediaIndex")) {
                     mediaIndex = json.optInt("mediaIndex")
                 }
+                if (json.has("publishedAt") && !json.isNull("publishedAt")) {
+                    json.optLong("publishedAt", 0L).takeIf { it > 0L }?.let { publishedAt = it }
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to parse sidecar metadata: ${metaFile.name}", e)
             }
@@ -181,8 +194,21 @@ object DirectoryScanner {
             fileSize = file.length(),
             duration = duration,
             createdAt = file.lastModified(),
-            completedAt = file.lastModified()
+            completedAt = file.lastModified(),
+            publishedAt = publishedAt
         )
+    }
+
+    /** 只读 sidecar 的推文发布时间（epoch ms），供已有记录回填；无值返回 null。 */
+    private fun readPublishedAtFromSidecar(file: File): Long? {
+        val metaFile = File(file.absolutePath + ".meta.json")
+        if (!metaFile.exists()) return null
+        return runCatching {
+            val json = org.json.JSONObject(metaFile.readText())
+            if (json.has("publishedAt") && !json.isNull("publishedAt")) {
+                json.optLong("publishedAt", 0L).takeIf { it > 0L }
+            } else null
+        }.getOrNull()
     }
 
     /** 从媒体文件读取时长（毫秒）。图片/读取失败返回 0。 */

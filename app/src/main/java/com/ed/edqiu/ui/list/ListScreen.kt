@@ -1,10 +1,15 @@
 package com.ed.edqiu.ui.list
 
+import com.ed.edqiu.ui.util.pressableNoRipple
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -81,6 +86,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -98,6 +104,7 @@ import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.LinkCard
 import com.ed.edqiu.ui.components.SkeletonCard
+import com.ed.edqiu.ui.components.FeedbackKind
 import com.ed.edqiu.ui.navigation.LocalSnackbarController
 import com.ed.edqiu.ui.util.copyToClipboard
 import kotlinx.coroutines.launch
@@ -115,20 +122,19 @@ fun ListScreen(
     val autoCapture by vm.autoCapture.collectAsStateWithLifecycle()
     val captureFeedback by vm.captureFeedback.collectAsStateWithLifecycle()
     val actionFeedback by vm.actionFeedback.collectAsStateWithLifecycle()
-    val downloading by vm.downloading.collectAsStateWithLifecycle()
     val searchQuery by vm.searchQuery.collectAsStateWithLifecycle()
     val sortOrder by vm.sortOrder.collectAsStateWithLifecycle()
     val selectedIds by vm.selectedIds.collectAsStateWithLifecycle()
     val selectionMode by vm.selectionMode.collectAsStateWithLifecycle()
     val batchDownloadState by vm.batchDownloadState.collectAsStateWithLifecycle()
+    // 收件箱实时下载进度（tweetId → 0..99）：卡片显示「下载中 xx%」+ 进度条
+    val downloadProgress by vm.downloadProgress.collectAsStateWithLifecycle()
 
     // 筛选 tab 用 rememberSaveable：详情页/二级页往返后保留进入前的筛选，
     // 避免返回时被重置回「全部」（曾出现：失败 tab 进详情，返回后跳回全部列表）
     var filter by rememberSaveable(stateSaver = FilterSaver) { mutableStateOf(Filter.ALL) }
     var showPreDownloadPrompt by remember { mutableStateOf(false) }
     var showBatchPreview by remember { mutableStateOf(false) }
-    // 下载结果弹窗：消息 + 成功/失败标志（true=成功 false=失败 null=中性）
-    var downloadResultDialog by remember { mutableStateOf<Pair<String, Boolean?>?>(null) }
     var showPasteDialog by remember { mutableStateOf(false) }
     var pasteText by remember { mutableStateOf("") }
     var sortExpanded by remember { mutableStateOf(false) }
@@ -165,7 +171,16 @@ fun ListScreen(
                 ListViewModel.CaptureFeedback.NotTwitter -> "不是有效的 X/Twitter 链接"
                 ListViewModel.CaptureFeedback.Empty -> "剪贴板为空"
             }
-            snackbar.show(msg)
+            // 2026-09-15：保存/粘贴结果为状态类反馈 → 玻璃胶囊（成功✓ / 中性ℹ / 失败✕），
+            // 不再走传统 Snackbar 矩形块
+            snackbar.show(
+                message = msg,
+                kind = when (it) {
+                    ListViewModel.CaptureFeedback.Added -> FeedbackKind.SUCCESS
+                    ListViewModel.CaptureFeedback.NotTwitter -> FeedbackKind.ERROR
+                    else -> FeedbackKind.NEUTRAL
+                }
+            )
             vm.clearFeedback()
             // 新保存后待处理达到 5 条及以上：提示批量预下载
             if (it == ListViewModel.CaptureFeedback.Added &&
@@ -178,26 +193,32 @@ fun ListScreen(
 
     LaunchedEffect(actionFeedback) {
         actionFeedback?.let { feedback ->
-            if (feedback.asDialog) {
-                // 下载结果用弹窗展示成功/失败详情
-                downloadResultDialog = feedback.message to feedback.success
-            } else {
+            // 2026-09-14：下载结果不再弹 AlertDialog（打断操作流），改为底部玻璃胶囊提醒
+            // 带操作按钮的消息（如删除+撤销）仍走 Snackbar；纯状态反馈走胶囊
+            // success 标志映射为胶囊图标（成功✓ / 失败✕ / 中性ℹ）
+            if (feedback.actionLabel != null) {
                 snackbar.show(
                     message = feedback.message,
                     actionLabel = feedback.actionLabel,
                     onAction = feedback.onAction
+                )
+            } else {
+                snackbar.show(
+                    message = feedback.message,
+                    kind = when (feedback.success) {
+                        true -> FeedbackKind.SUCCESS
+                        false -> FeedbackKind.ERROR
+                        null -> FeedbackKind.NEUTRAL
+                    }
                 )
             }
             vm.clearActionFeedback()
         }
     }
 
-    // 下载进行中即时反馈：点击下载后立刻提示，避免下载耗时期间（10-60s）误以为没反应
-    LaunchedEffect(downloading) {
-        if (downloading) {
-            snackbar.show("正在下载，请稍候…")
-        }
-    }
+    // 2026-09-15：单条/批量下载的进行中反馈统一由底部进度胶囊承担
+    // （「下载中 · 剩余 N 条 · P%」，实时待下载数 + 实时进度），
+    // 原「正在下载，请稍候…」Snackbar 已由胶囊替代删除。
 
     val shown = remember(links, filter) {
         when (filter) {
@@ -298,7 +319,8 @@ fun ListScreen(
                                 } else null,
                                 onDownload = if (link.status == LinkStatus.PENDING || link.status == LinkStatus.FAILED) {
                                     { vm.requestDownload(link.tweetId) }
-                                } else null
+                                } else null,
+                                downloadProgress = downloadProgress[link.tweetId]
                             )
                         }
                     }
@@ -324,6 +346,26 @@ fun ListScreen(
                     )
                 }
             }
+
+            // 批量下载进行中：底部进度胶囊（非模态，不遮挡列表；悬浮 Tab 栏上方）
+            AnimatedVisibility(
+                visible = batchDownloadState?.running == true,
+                enter = fadeIn(tween(160)) + scaleIn(
+                    initialScale = 0.88f,
+                    animationSpec = spring(dampingRatio = 0.75f, stiffness = 420f)
+                ),
+                exit = fadeOut(tween(140)) + scaleOut(targetScale = 0.9f, animationSpec = tween(140)),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .zIndex(5f)
+                    .padding(bottom = navBarBottom + 96.dp)
+            ) {
+                BatchProgressCapsule(
+                    total = batchDownloadState?.total ?: 0,
+                    remaining = batchDownloadState?.remaining ?: 0,
+                    currentProgress = batchDownloadState?.currentProgress
+                )
+            }
         }
     }
 
@@ -333,7 +375,7 @@ fun ListScreen(
             onDismiss = { longPressedLink = null },
             onCopy = {
                 copyToClipboard(context, "Edqiu 链接", link.rawUrl)
-                snackbar.show("已复制链接")
+                snackbar.show("已复制链接", kind = FeedbackKind.SUCCESS)
                 longPressedLink = null
             },
             onDownload = {
@@ -343,26 +385,6 @@ fun ListScreen(
             onDelete = {
                 vm.delete(link.tweetId)
                 longPressedLink = null
-            }
-        )
-    }
-
-    // 下载结果弹窗：明确告知成功/失败及原因
-    downloadResultDialog?.let { (message, success) ->
-        AlertDialog(
-            onDismissRequest = { downloadResultDialog = null },
-            title = {
-                Text(
-                    when (success) {
-                        true -> "下载成功"
-                        false -> "下载失败"
-                        else -> "下载结果"
-                    }
-                )
-            },
-            text = { Text(message) },
-            confirmButton = {
-                Button(onClick = { downloadResultDialog = null }) { Text("知道了") }
             }
         )
     }
@@ -383,12 +405,17 @@ fun ListScreen(
         )
     }
 
-    // 批量下载状态弹窗：转圈进行中 → 打勾成功 / 打叉失败
-    batchDownloadState?.let { state ->
-        BatchDownloadStatusDialog(
-            state = state,
-            onDismiss = vm::dismissBatchDownloadState
-        )
+    // 批量下载状态：进行中显示底部进度胶囊（不遮挡列表，2026-09-14 由中央弹窗改造）；
+    // 完成态走结果胶囊提示并自动收起
+    LaunchedEffect(batchDownloadState?.running, batchDownloadState?.success) {
+        val state = batchDownloadState
+        if (state != null && !state.running && state.success != null) {
+            snackbar.show(
+                message = state.message,
+                kind = if (state.success == true) FeedbackKind.SUCCESS else FeedbackKind.ERROR
+            )
+            vm.dismissBatchDownloadState()
+        }
     }
 
     if (showPreDownloadPrompt) {
@@ -681,7 +708,7 @@ private fun InboxHeader(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
                                 .size(16.dp)
-                                .clickable { onSearchChange("") }
+                                .pressableNoRipple { onSearchChange("") }
                         )
                     }
                 }
@@ -700,7 +727,7 @@ private fun InboxHeader(
                         modifier = Modifier
                             .fillMaxHeight()
                             .padding(horizontal = 14.dp)
-                            .clickable { onSortExpandedChange(true) },
+                            .pressableNoRipple { onSortExpandedChange(true) },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
@@ -739,7 +766,7 @@ private fun InboxHeader(
                     elevated = false,
                     modifier = Modifier
                         .weight(1f)
-                        .clickable { onFilterChange(f) }
+                        .pressableNoRipple { onFilterChange(f) }
                 ) {
                     Text(
                         text = f.label,
@@ -804,7 +831,7 @@ private fun HeaderIconButton(
                 this.contentDescription = contentDescription
                 role = Role.Button
             }
-            .clickable(onClick = onClick)
+            .pressableNoRipple { onClick() }
     ) {
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -871,57 +898,44 @@ private fun EmptyStateCard(searching: Boolean, onPaste: () -> Unit) {
 }
 
 /**
- * 批量下载状态弹窗：派发期间转圈，结束后打勾（成功）或打叉（失败）。
+ * 批量下载进行中底部胶囊（2026-09-14）：非模态进度提示，替代原中央转圈弹窗。
+ * 深色玻璃 pill + 小转圈 + 条数，悬浮于底部导航之上，不遮挡列表视野；
+ * 完成后由结果胶囊接管（running=false 时本胶囊退场）。
  */
 @Composable
-private fun BatchDownloadStatusDialog(
-    state: ListViewModel.BatchDownloadUiState,
-    onDismiss: () -> Unit
-) {
-    val finished = !state.running
-    AlertDialog(
-        onDismissRequest = { if (finished) onDismiss() },
-        title = {
-            Text(
-                when {
-                    state.running -> "批量下载中"
-                    state.success == true -> "下载成功"
-                    else -> "下载失败"
-                }
+private fun BatchProgressCapsule(total: Int, remaining: Int, currentProgress: Int? = null) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .padding(horizontal = 24.dp)
+            .shadow(
+                elevation = 12.dp,
+                shape = RoundedCornerShape(50),
+                ambientColor = Color.Black.copy(alpha = 0.16f),
+                spotColor = Color.Black.copy(alpha = 0.24f)
             )
-        },
-        text = {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                if (state.running) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(52.dp),
-                        strokeWidth = 4.dp
-                    )
-                } else {
-                    Icon(
-                        imageVector = if (state.success == true) Icons.Default.CheckCircle else Icons.Default.Cancel,
-                        contentDescription = if (state.success == true) "成功" else "失败",
-                        tint = if (state.success == true) Color(0xFF22A45D) else MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(64.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.height(14.dp))
-                Text(
-                    text = state.message.ifBlank { "正在把所选链接派发给下载器…" },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        },
-        confirmButton = {
-            if (finished) {
-                Button(onClick = onDismiss) { Text("知道了") }
-            }
-        }
-    )
+            .clip(RoundedCornerShape(50))
+            .background(Color(0xF01A1D21))
+            .padding(start = 14.dp, end = 20.dp, top = 10.dp, bottom = 10.dp)
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(16.dp),
+            strokeWidth = 2.dp,
+            color = Color(0xFF8FB6FF)
+        )
+        Spacer(Modifier.size(9.dp))
+        Text(
+            // 2026-09-15 实时化：剩余待下载条数随完成递减（含下载中那一条），附当前条实时百分比
+            text = buildString {
+                append("下载中")
+                append(" · 剩余 $remaining 条")
+                currentProgress?.let { append(" · $it%") }
+            },
+            color = Color(0xFFEDEEF1),
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
 }
 
 /** 批量模式头部右侧的「全选」胶囊（L2 玻璃 + 主色，与筛选胶囊同语言）。 */
@@ -1011,7 +1025,7 @@ private fun androidx.compose.foundation.layout.RowScope.BatchAction(
         modifier = Modifier
             .fillMaxHeight()
             .clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = enabled, onClick = onClick)
+            .pressableNoRipple(enabled = enabled) { onClick() }
             .padding(horizontal = 12.dp)
     ) {
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(18.dp))

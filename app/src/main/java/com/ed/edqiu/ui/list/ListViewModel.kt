@@ -5,27 +5,36 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ed.edqiu.capture.LinkCaptureCoordinator
 import com.ed.edqiu.clipboard.ClipboardCapture
+import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.data.model.SavedLink
 import com.ed.edqiu.data.preferences.SettingsRepository
+import com.ed.edqiu.data.repository.DownloadTaskBus
 import com.ed.edqiu.data.repository.SavedLinkRepository
 import com.ed.edqiu.domain.TweetIdExtractor
 import com.ed.edqiu.predownload.PreDownloadManager
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class ListViewModel(
     application: Application,
     private val repo: SavedLinkRepository,
     private val settings: SettingsRepository,
     private val captureCoordinator: LinkCaptureCoordinator,
-    private val preDownloadManager: PreDownloadManager
+    private val preDownloadManager: PreDownloadManager,
+    // 应用级下载作用域（AppContainer.globalIoScope，SupervisorJob）：下载执行不随
+    // Activity/ViewModel 销毁中断——用户退后台后只要不划掉 App，下载持续进行。
+    // 下载期间的 UI 状态写 StateFlow（线程安全），页面回来即可恢复订阅。
+    private val downloadScope: CoroutineScope
 ) : AndroidViewModel(application) {
 
     private val searchQueryMutable = MutableStateFlow("")
@@ -48,6 +57,15 @@ class ListViewModel(
         LinkListOrganizer.organize(links, query, sortOrder)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /**
+     * 收件箱实时下载进度（2026-09-15）：tweetId → 0..99 百分比。
+     * 数据源 = DownloadTaskBus 内存任务总线（双引擎 300ms 节流回写），
+     * 卡片据此显示「下载中 xx%」+ 进度条；进程结束下载任务随之消失，无需持久化。
+     */
+    val downloadProgress: StateFlow<Map<String, Int>> = DownloadTaskBus.tasks
+        .map { tasks -> InboxDownloadProgress.progressByTweet(tasks) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
     val pendingCount: StateFlow<Int> = repo.countPending()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
@@ -64,9 +82,8 @@ class ListViewModel(
     val actionFeedback = MutableStateFlow<ActionFeedback?>(null)
     private val lastDeletedArchiveIds = MutableStateFlow<List<String>>(emptyList())
 
-    /** 单条下载进行中标志：true 期间列表页给出「正在下载」即时反馈，避免用户以为没反应。 */
-    private val downloadingMutable = MutableStateFlow(false)
-    val downloading: StateFlow<Boolean> = downloadingMutable
+    // 2026-09-15：原 downloading 布尔标志已删除——单条下载改走统一的进度胶囊
+    // （batchDownloadState），携带实时剩余条数与当前条百分比，信息量更足。
 
     data class ActionFeedback(
         val message: String,
@@ -114,9 +131,10 @@ class ListViewModel(
     }
 
     fun requestDownload(tweetId: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            // 先亮「下载中」即时反馈，再执行（下载耗时可能 10-60s，无中间反馈会误以为没反应）
-            downloadingMutable.value = true
+        // 下载执行放应用级 downloadScope：退后台/页面销毁不中断（不划掉 App 就继续下载）；
+        // 进度走与批量统一的胶囊（剩余 N 条 + 当前条百分比），结果仍走弹窗反馈。
+        val tracker = startProgressCapsule(listOf(tweetId))
+        downloadScope.launch {
             val result = runCatching { repo.requestDownload(tweetId, manual = true) }
                 .getOrElse { error ->
                     SavedLinkRepository.DownloadRequestResult.Failed(
@@ -124,7 +142,8 @@ class ListViewModel(
                         nextRetryAt = null
                     )
                 }
-            downloadingMutable.value = false
+            tracker.cancel()
+            batchDownloadStateMutable.value = null
             actionFeedback.value = ActionFeedback(
                 message = downloadMessage(result),
                 asDialog = true,
@@ -134,11 +153,16 @@ class ListViewModel(
         }
     }
 
-    /** 批量下载弹窗状态：转圈（running）→ 打勾（success=true）/ 打叉（success=false）。 */
+    /** 批量/单条下载进度胶囊状态（2026-09-15 实时化）：remaining=实时待下载条数（随完成递减），currentProgress=当前条百分比。 */
     data class BatchDownloadUiState(
         val running: Boolean,
         val success: Boolean? = null,
-        val message: String = ""
+        val message: String = "",
+        val total: Int = 0,
+        // 实时待下载数量：批内仍未变为 DOWNLOADED 的条数，随下载完成递减
+        val remaining: Int = 0,
+        // 当前活跃任务的实时百分比（0..99，串行下载同一时刻只有一条活跃）
+        val currentProgress: Int? = null
     )
 
     private val batchDownloadStateMutable = MutableStateFlow<BatchDownloadUiState?>(null)
@@ -148,13 +172,44 @@ class ListViewModel(
         batchDownloadStateMutable.value = null
     }
 
+    /**
+     * 下载期间实时跟踪进度（2026-09-15 实时化）：
+     * - 实时待下载数量 = 批内 DB 状态仍非 DOWNLOADED 的条数（requestDownload 每条完成
+     *   即落库 DOWNLOADED，Room Flow 实时发射）；
+     * - 当前条百分比 = DownloadTaskBus 活跃 DOWNLOADING 任务（双引擎 300ms 节流回写）。
+     * 在 [downloadScope]（应用级）收集：页面销毁不影响跟踪，回来恢复显示。
+     */
+    private fun trackDownloadProgress(
+        batchIds: Set<String>,
+        stateFlow: MutableStateFlow<BatchDownloadUiState?>
+    ): Job = downloadScope.launch {
+        combine(repo.observeAll(), DownloadTaskBus.tasks) { links, tasks ->
+            val remaining = links.count { it.tweetId in batchIds && it.status != LinkStatus.DOWNLOADED }
+            val pct = InboxDownloadProgress.progressByTweet(tasks).values.maxOrNull()
+            remaining to pct
+        }.collect { (remaining, pct) ->
+            stateFlow.update { state ->
+                state?.takeIf { it.running }?.copy(remaining = remaining, currentProgress = pct)
+            }
+        }
+    }
+
+    /** 启动进度胶囊（单条/批量共用）+ 返回跟踪协程，下载结束后由调用方取消。 */
+    private fun startProgressCapsule(batchIds: Collection<String>): Job {
+        val ids = batchIds.toSet()
+        batchDownloadStateMutable.value = BatchDownloadUiState(running = true, total = ids.size, remaining = ids.size)
+        return trackDownloadProgress(ids, batchDownloadStateMutable)
+    }
+
     fun downloadSelected() {
         val ids = selectedIdsMutable.value
         if (ids.isEmpty()) return
-        batchDownloadStateMutable.value = BatchDownloadUiState(running = true)
-        viewModelScope.launch(Dispatchers.IO) {
+        // 下载执行放应用级 downloadScope：退后台不中断；胶囊显示实时剩余条数 + 当前条百分比
+        val tracker = startProgressCapsule(ids)
+        downloadScope.launch {
             // 直接走收件箱下载（DownloaderClient 双引擎回退），不排队不受后台预下载影响
             val result = repo.requestDownloads(ids)
+            tracker.cancel()
             batchDownloadStateMutable.value = BatchDownloadUiState(
                 running = false,
                 success = result.launched > 0,
@@ -171,7 +226,7 @@ class ListViewModel(
      * 批量派发所有 PENDING，弹窗反馈结果；无待处理时也给出明确提示（避免"点了没反应"）。
      */
     fun downloadAllPending() {
-        viewModelScope.launch(Dispatchers.IO) {
+        downloadScope.launch {
             val ids = repo.pendingTweetIds()
             if (ids.isEmpty()) {
                 batchDownloadStateMutable.value = BatchDownloadUiState(
@@ -181,8 +236,9 @@ class ListViewModel(
                 )
                 return@launch
             }
-            batchDownloadStateMutable.value = BatchDownloadUiState(running = true)
+            val tracker = startProgressCapsule(ids)
             val result = repo.requestDownloads(ids)
+            tracker.cancel()
             batchDownloadStateMutable.value = BatchDownloadUiState(
                 running = false,
                 success = result.launched > 0,
@@ -192,10 +248,10 @@ class ListViewModel(
         }
     }
 
-    /** 预下载提示：批量派发指定 tweetId 的下载请求（直接走收件箱下载）。 */
+    /** 预下载提示：批量派发指定 tweetId 的下载请求（直接走收件箱下载，应用级 scope 后台不中断）。 */
     fun downloadPending(tweetIds: Collection<String>) {
         if (tweetIds.isEmpty()) return
-        viewModelScope.launch(Dispatchers.IO) {
+        downloadScope.launch {
             val result = repo.requestDownloads(tweetIds)
             // 手动批量下载完成 → 联动网盘同步
             if (result.launched > 0) preDownloadManager.syncAfterManualDownload()
@@ -245,12 +301,11 @@ class ListViewModel(
     ) {
         val failed = result as? SavedLinkRepository.DownloadRequestResult.Failed ?: return
         val retryAt = failed.nextRetryAt ?: return
-        viewModelScope.launch {
+        // 重试同样挂应用级 scope：退后台后到期照常自动重试
+        downloadScope.launch {
             delay((retryAt - System.currentTimeMillis()).coerceAtLeast(0L))
             if (!autoRetry.value) return@launch
-            val retryResult = withContext(Dispatchers.IO) {
-                repo.requestDownload(tweetId)
-            }
+            val retryResult = repo.requestDownload(tweetId)
             scheduleRetry(tweetId, retryResult)
         }
     }

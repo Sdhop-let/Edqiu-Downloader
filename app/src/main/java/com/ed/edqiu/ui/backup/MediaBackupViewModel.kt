@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ed.edqiu.backup.BackupFiles
+import com.ed.edqiu.ui.components.FeedbackKind
+import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.backup.BackupScope
 import com.ed.edqiu.backup.data.BackupLedgerRepository
 import com.ed.edqiu.backup.data.BackupTaskStore
@@ -59,7 +61,7 @@ data class MediaBackupUiState(
     val items: List<MediaBackupItem> = emptyList(),
     val filter: BackupScope = BackupScope.ALL,
     val running: Boolean = false,
-    val message: String? = null,
+    val message: FeedbackMessage? = null,
 ) {
     val uploadedCount: Int get() = items.count { it.state == MediaUploadState.UPLOADED }
     val notUploadedCount: Int get() = items.count { it.state == MediaUploadState.NOT_UPLOADED }
@@ -102,7 +104,7 @@ class MediaBackupViewModel(
     private val context = application.applicationContext
 
     private val _filter = MutableStateFlow(BackupScope.VIDEO)
-    private val _message = MutableStateFlow<String?>(null)
+    private val _message = MutableStateFlow<FeedbackMessage?>(null)
     private val _items = MutableStateFlow<List<MediaBackupItem>>(emptyList())
     private val _providerConfigured = MutableStateFlow(false)
 
@@ -162,10 +164,10 @@ class MediaBackupViewModel(
             engine.enqueue(providerId, listOf(item.file))
             engine.runQueue().fold(
                 onSuccess = { summary ->
-                    postMessage("「${item.remotePath}」上传完成：成功 ${summary.succeeded}，失败 ${summary.failed}")
+                    postMessage("「${item.remotePath}」上传完成：成功 ${summary.succeeded}，失败 ${summary.failed}", FeedbackKind.SUCCESS)
                 },
                 onFailure = { error ->
-                    postMessage("上传失败：${error.message ?: "未知错误"}")
+                    postMessage("上传失败：${error.message ?: "未知错误"}", FeedbackKind.ERROR)
                 },
             )
         }
@@ -185,16 +187,16 @@ class MediaBackupViewModel(
                     }
             }.map { it.file }
             if (targets.isEmpty()) {
-                postMessage("没有需要上传的文件")
+                postMessage("没有需要上传的文件", FeedbackKind.NEUTRAL)
                 return@launch
             }
             engine.enqueue(providerId, targets)
             engine.runQueue().fold(
                 onSuccess = { summary ->
-                    postMessage("同步完成：成功 ${summary.succeeded}，失败 ${summary.failed}，跳过 ${summary.skipped}")
+                    postMessage("同步完成：成功 ${summary.succeeded}，失败 ${summary.failed}，跳过 ${summary.skipped}", FeedbackKind.SUCCESS)
                 },
                 onFailure = { error ->
-                    postMessage("同步失败：${error.message ?: "未知错误"}")
+                    postMessage("同步失败：${error.message ?: "未知错误"}", FeedbackKind.ERROR)
                 },
             )
         }
@@ -212,7 +214,7 @@ class MediaBackupViewModel(
         val target = registry.get(ProviderId.WEBDAV)
         val configured = target != null && runCatching { target.isConfigured() }.getOrDefault(false)
         if (!configured) {
-            postMessage("WebDAV 尚未配置，请先到「下载器设置 → WebDAV 同步」填写并测试连接")
+            postMessage("WebDAV 尚未配置，请先到「下载器设置 → WebDAV 同步」填写并测试连接", FeedbackKind.NEUTRAL)
             return null
         }
         return ProviderId.WEBDAV
@@ -260,8 +262,8 @@ class MediaBackupViewModel(
         Log.i(TAG, "rebuildItems() 扫描 ${files.size} 个文件，provider=$providerId")
     }
 
-    private fun postMessage(message: String) {
-        _message.value = message
+    private fun postMessage(message: String, kind: FeedbackKind = FeedbackKind.SUCCESS) {
+        _message.value = FeedbackMessage(message, kind)
     }
 
     companion object {

@@ -1,5 +1,6 @@
 package com.ed.edqiu.backup.auth
 
+import com.ed.edqiu.BuildConfig
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
@@ -54,7 +55,7 @@ class AliPanWebViewAuth(
         settings.domStorageEnabled = true
         settings.loadWithOverviewMode = true
         settings.useWideViewPort = true
-        settings.userAgentString = settings.userAgentString + " EdqiuBackup/1.2.0"
+        settings.userAgentString = settings.userAgentString + " EdqiuBackup/" + BuildConfig.VERSION_NAME
 
         webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {

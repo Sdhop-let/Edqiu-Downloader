@@ -149,6 +149,49 @@ object YoutubeDLService {
         }
     }
 
+    /**
+     * 拉取作者最新推文 ID 列表（2026-09-15 v2 批次4：P2-1 作者订阅的检测通道）。
+     * 用 yt-dlp 用户页 + --flat-playlist（只要 ID 不要媒体元数据，快且省流量）。
+     * @return 最新推文的纯数字 ID 列表（新→旧），失败返回 failure（调用方静默跳过本轮）。
+     */
+    suspend fun getUserTimelineTweetIds(
+        screenName: String,
+        limit: Int = 8,
+        proxyUrl: String? = null,
+        cookieFilePath: String? = null
+    ): Result<List<String>> = withContext(Dispatchers.IO) {
+        try {
+            val request = YoutubeDLRequest("https://x.com/$screenName").apply {
+                addOption("--flat-playlist")
+                addOption("--dump-single-json")
+                addOption("--playlist-items", "1:$limit")
+                addOption("--no-warnings")
+                addOption("--no-check-certificate")
+                if (proxyUrl != null) addOption("--proxy", proxyUrl)
+                if (cookieFilePath != null) addOption("--cookies", cookieFilePath)
+            }
+            val result = YoutubeDL.getInstance().execute(request, null)
+            val json = parseDumpJson(result.out)
+            val entries = json.optJSONArray("entries")
+            val ids = mutableListOf<String>()
+            if (entries != null) {
+                for (i in 0 until entries.length()) {
+                    val entry = entries.optJSONObject(i) ?: continue
+                    val id = entry.optString("id").takeWhile { it.isDigit() }
+                    if (id.isNotBlank()) ids += id
+                }
+            }
+            if (ids.isEmpty()) {
+                Result.failure(Exception("用户时间线未返回推文（可能改名/私密/无作品）"))
+            } else {
+                Result.success(ids)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "getUserTimelineTweetIds error for $screenName", e)
+            Result.failure(e)
+        }
+    }
+
     private fun parseFormats(json: org.json.JSONObject): List<VideoFormat> {
         val formatsArray = json.optJSONArray("formats") ?: return emptyList()
         val formats = mutableListOf<VideoFormat>()

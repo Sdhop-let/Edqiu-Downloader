@@ -1,5 +1,6 @@
 package com.ed.edqiu.ui.downloads
 
+import com.ed.edqiu.ui.util.pressableNoRipple
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -231,7 +232,7 @@ private fun DownloadedMediaRow(link: SavedLink, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .pressableNoRipple { onClick() },
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))

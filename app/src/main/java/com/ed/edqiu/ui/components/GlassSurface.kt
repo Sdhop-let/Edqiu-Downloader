@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -21,16 +22,20 @@ import androidx.compose.ui.unit.dp
 import com.ed.edqiu.ui.theme.ThemeEffects
 
 /**
- * 玻璃层级（设计文档 §3.2）
+ * 玻璃层级（设计文档 §3.2；2026-09-14 通透度回调二轮）
  *
  * - L1 页面层：列表、卡片所在区域（大面玻璃，重透）
  * - L2 浮层：底部导航栏、播放器控制层（悬浮玻璃，重模糊）
  * - L3 弹出层：BottomSheet、Snackbar（最高层玻璃）
+ *
+ * 2026-09-14 二轮降白：一轮回调后实机反馈仍偏白。浅色底再降一档
+ * （L1 0.28 / L2 0.42 / L3 0.56），高光再压；同时 GlassBackground
+ * 底色渐变加浓，让玻璃"透出彩"而不是"透出白"。
  */
 enum class GlassTier(val bgAlpha: Float, val edgeAlpha: Float) {
-    L1(0.55f, 0.42f),
-    L2(0.68f, 0.52f),
-    L3(0.78f, 0.58f)
+    L1(0.34f, 0.24f),
+    L2(0.46f, 0.30f),
+    L3(0.58f, 0.34f)
 }
 
 /**
@@ -74,7 +79,9 @@ fun GlassSurface(
         (if (dark) 0.28f else 0.16f) * (1f - blurStrength * 0.5f)
     )
 
-    var m = modifier.clip(shape)
+    // 2026-09-14 顺序修正：shadow 必须在 clip 之前 —— 原 clip→shadow 链把阴影整个裁掉
+    //（卡片无浮起感）；正确链 = 先画阴影（不被裁）再裁内容圆角
+    var m = modifier
     if (elevated) {
         // 悬浮阴影：iOS 风格的下投阴影
         m = m.shadow(
@@ -84,18 +91,21 @@ fun GlassSurface(
             spotColor = Color.Black.copy(alpha = if (dark) 0.45f else 0.16f)
         )
     }
+    m = m.clip(shape)
 
     Box(modifier = m.background(glassColor)) {
         if (liquidGlass) {
             // 背景渐变折射：上部亮 + 底部微暗（模拟玻璃曲率）
+            // 2026-09-14 三轮：白框根因组合拳——白色装饰层全线再压（镜面 0.12/描边 0.08），
+            // 玻璃底色微升（L1 0.34）让高光相对弱化、玻璃呈"整块材质"而非"叠白框"
             Box(
                 Modifier
                     .matchParentSize()
                     .background(
                         Brush.verticalGradient(
-                            0f to Color.White.copy(alpha = if (dark) 0.06f else 0.42f),
+                            0f to Color.White.copy(alpha = if (dark) 0.03f else 0.10f),
                             0.55f to Color.Transparent,
-                            1f to Color.Black.copy(alpha = if (dark) 0.10f else 0.03f)
+                            1f to Color.Black.copy(alpha = if (dark) 0.06f else 0.015f)
                         )
                     )
             )
@@ -106,8 +116,8 @@ fun GlassSurface(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = tier.edgeAlpha),
-                                Color.White.copy(alpha = tier.edgeAlpha * 0.15f),
+                                Color.White.copy(alpha = tier.edgeAlpha * 0.7f),
+                                Color.White.copy(alpha = tier.edgeAlpha * 0.08f),
                                 Color.Transparent
                             ),
                             startY = 0f,
@@ -122,9 +132,9 @@ fun GlassSurface(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = if (dark) 0.12f else 0.28f),
-                                Color.White.copy(alpha = 0.06f),
-                                Color.White.copy(alpha = if (dark) 0.04f else 0.10f)
+                                Color.White.copy(alpha = if (dark) 0.06f else 0.08f),
+                                Color.White.copy(alpha = 0.03f),
+                                Color.White.copy(alpha = if (dark) 0.015f else 0.04f)
                             ),
                             startY = 0f,
                             endY = 400f
@@ -138,8 +148,8 @@ fun GlassSurface(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = if (dark) 0.20f else 0.50f),
-                                Color.White.copy(alpha = 0.04f),
+                                Color.White.copy(alpha = if (dark) 0.08f else 0.12f),
+                                Color.White.copy(alpha = 0.015f),
                                 Color.Transparent
                             ),
                             startY = 0f,
@@ -155,17 +165,18 @@ fun GlassSurface(
                         Brush.verticalGradient(
                             colors = listOf(
                                 Color.Transparent,
-                                Color.White.copy(alpha = if (dark) 0.03f else 0.08f)
+                                Color.White.copy(alpha = if (dark) 0.015f else 0.02f)
                             )
                         )
                     )
             )
-            // 磨砂软化：随模糊强度对装饰折射层做轻微 gaussian 柔化（真实 blur，作用于高光/描边）
+            // 磨砂雾感：纯渐变实现（2026-09-14 v1.4.8 移除 blur 修饰符）——
+            // blur 的离屏渲染 buffer 在 ColorOS 上合成出方形白色边框（每张玻璃卡下方可见），
+            // 且渐变本身已是柔性薄雾，blur 增益极小；移除后视觉几乎无损而根因消除
             if (blurStrength > 0f) {
                 Box(
                     Modifier
                         .matchParentSize()
-                        .blur((blurStrength * 2.5f).dp)
                         .background(
                             Brush.verticalGradient(
                                 colors = listOf(
@@ -180,16 +191,12 @@ fun GlassSurface(
                 )
             }
         } else {
-            // 扁平半透明：仅保留玻璃底色（无折射/高光/描边），保证内容可读
+            // 液态玻璃关闭：哑光近实底（2026-09-14 与开启态拉开区分度）——
+            // 底色 alpha 拉到 0.92 几乎不透明，无折射/高光/磨砂层，观感是"普通浅色卡片"
             Box(
                 Modifier
                     .matchParentSize()
-                    .background(
-                        Brush.verticalGradient(
-                            0f to Color.White.copy(alpha = if (dark) 0.04f else 0.14f),
-                            1f to Color.Transparent
-                        )
-                    )
+                    .background(if (dark) Color(0xFF1A1D21).copy(alpha = 0.92f) else Color.White.copy(alpha = 0.92f))
             )
         }
         content()
@@ -282,12 +289,14 @@ fun GlassBackground(
         modifier = modifier.fillMaxSize()
     ) {
         // 背景层（莫奈渐变 + 径向光斑）包在内部 Box 中应用 blur → 仅柔化背景，不影响前景 content
+        // 边缘保持默认 clamp：渐变在屏幕边缘连续，clamp 无伪影；Unbounded 会让透明色混入屏幕边缘
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .let { if (blurRadius > 0.dp) it.blur(blurRadius) else it }
         ) {
             // 底层：莫奈色域渐变 —— tint 来自 ColorScheme.primary（动态取色/种子色模式统一从 ColorScheme 取色）
+            // 2026-09-14 二轮降白：浅色渐变加浓（玻璃透出彩而非白），暗色微调
             Box(
                 Modifier
                     .fillMaxSize()
@@ -295,15 +304,15 @@ fun GlassBackground(
                         Brush.verticalGradient(
                             colors = if (dark) {
                                 listOf(
-                                    tintSeed.copy(alpha = 0.85f),
-                                    tintSeed.copy(alpha = 0.55f),
-                                    tertiary.copy(alpha = 0.55f)
+                                    tintSeed.copy(alpha = 0.92f),
+                                    tintSeed.copy(alpha = 0.62f),
+                                    tertiary.copy(alpha = 0.60f)
                                 )
                             } else {
                                 listOf(
-                                    tintSeed.copy(alpha = 0.88f),
-                                    tintSeed.copy(alpha = 0.52f),
-                                    tertiary.copy(alpha = 0.58f)
+                                    tintSeed.copy(alpha = 0.98f),
+                                    tintSeed.copy(alpha = 0.68f),
+                                    tertiary.copy(alpha = 0.70f)
                                 )
                             },
                             startY = 0f,
@@ -318,7 +327,7 @@ fun GlassBackground(
                     .background(
                         Brush.radialGradient(
                             colors = listOf(
-                                tintSeed.copy(alpha = if (dark) 0.55f else 0.55f),
+                                tintSeed.copy(alpha = 0.60f),
                                 Color.Transparent
                             ),
                             radius = 1100f
@@ -332,7 +341,7 @@ fun GlassBackground(
                     .background(
                         Brush.radialGradient(
                             colors = listOf(
-                                tertiary.copy(alpha = if (dark) 0.15f else 0.15f),
+                                tertiary.copy(alpha = 0.18f),
                                 Color.Transparent
                             ),
                             center = Offset(900f, 2600f),
@@ -347,7 +356,7 @@ fun GlassBackground(
                     .background(
                         Brush.radialGradient(
                             colors = listOf(
-                                secondary.copy(alpha = if (dark) 0.24f else 0.22f),
+                                secondary.copy(alpha = 0.26f),
                                 Color.Transparent
                             ),
                             center = Offset(200f, 500f),

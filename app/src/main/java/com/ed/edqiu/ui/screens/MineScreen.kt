@@ -1,11 +1,13 @@
 package com.ed.edqiu.ui.screens
 
+import com.ed.edqiu.ui.util.pressableNoRipple
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -140,13 +142,7 @@ private fun MineMainView(
 
         GlassSurface(
             tier = GlassTier.L1,
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.animateContentSize(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessLow
-                )
-            )
+            shape = RoundedCornerShape(20.dp)
         ) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Text(
@@ -204,7 +200,7 @@ private fun MineMainView(
                     SubMenuDivider()
                     SubMenuItemRow(Icons.Default.Backup, "存储与备份", "数据库清理、导出导入", onStorageBackup)
                     SubMenuDivider()
-                    SubMenuItemRow(Icons.Default.ContentPaste, "捕获与同步", "剪贴板、无障碍、后台更新", onCapture)
+                    SubMenuItemRow(Icons.Default.ContentPaste, "下载与捕获", "下载重试、监控目录、剪贴板与无障碍", onCapture)
                     SubMenuDivider()
                     SubMenuItemRow(Icons.Default.Info, "关于与诊断", "版本信息、反馈、隐私政策", onAbout)
                 }
@@ -285,7 +281,7 @@ private fun ExpandableMenuSection(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onToggle)
+                .pressableNoRipple { onToggle() }
                 .padding(vertical = 10.dp)
         ) {
             Box(
@@ -337,20 +333,16 @@ private fun ExpandableMenuSection(
             )
         }
 
+        // 2026-09-14：展开动画利落化 —— 原 MediumBouncy+StiffnessLow 慢弹跳拖沓生硬；
+        // 改为 iOS 手感的微弹快速展开（~250ms 落定，弹跳极轻），fade 同步
         AnimatedVisibility(
             visible = isExpanded,
             enter = expandVertically(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessLow
-                )
-            ) + fadeIn(),
+                animationSpec = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow)
+            ) + fadeIn(tween(180)),
             exit = shrinkVertically(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessLow
-                )
-            ) + fadeOut()
+                animationSpec = spring(dampingRatio = 0.9f, stiffness = Spring.StiffnessMedium)
+            ) + fadeOut(tween(140))
         ) {
             Column(
                 modifier = Modifier
@@ -374,7 +366,7 @@ private fun SubMenuItemRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .pressableNoRipple { onClick() }
             .padding(vertical = 8.dp)
     ) {
         Box(

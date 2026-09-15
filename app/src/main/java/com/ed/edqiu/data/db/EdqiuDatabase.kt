@@ -14,7 +14,7 @@ import com.ed.edqiu.data.model.SavedLink
 
 @Database(
     entities = [SavedLink::class, DeletedLinkHistory::class, BackupLedgerEntity::class],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -125,13 +125,24 @@ abstract class EdqiuDatabase : RoomDatabase() {
             "ALTER TABLE deleted_link_history ADD COLUMN author_bio TEXT DEFAULT NULL"
         )
 
+        /** 2026-09-15：saved_links 加推文发布时间（媒体库/作者页按发布时间排序）。 */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_6_7_SQL.forEach(db::execSQL)
+            }
+        }
+
+        val MIGRATION_6_7_SQL = listOf(
+            "ALTER TABLE saved_links ADD COLUMN published_at INTEGER DEFAULT NULL"
+        )
+
         fun getDatabase(context: Context): EdqiuDatabase {
             return INSTANCE ?: synchronized(lock) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     EdqiuDatabase::class.java,
                     DB_NAME
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
                     .also { INSTANCE = it }
