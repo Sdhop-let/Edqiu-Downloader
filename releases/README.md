@@ -12,9 +12,9 @@
 | 目录 | versionCode | 状态 |
 | --- | --- | --- |
 | [v1.5.1](v1.5.1/RELEASE-NOTES.md) | 36 | ✅ 当前最新（GitHub Release 已发布） |
-| [v1.5.0](v1.5.0/RELEASE-NOTES.md) | 35 | 历史迭代 |
-| [v1.4.29](v1.4.29/RELEASE-NOTES.md) | 34 | 历史迭代 |
-| [v1.4.28](v1.4.28/RELEASE-NOTES.md) | 33 | 历史迭代 |
-| [v1.4.27](v1.4.27/RELEASE-NOTES.md) | 32 | 历史迭代 |
-| [v1.4.26](v1.4.26/RELEASE-NOTES.md) | 31 | 历史迭代 |
-| [v1.4.23](v1.4.23/RELEASE-NOTES.md) | 28 | 历史迭代 |
+| [v1.5.0](v1.5.0/RELEASE-NOTES.md) | 35 | 历史迭代（GitHub Release 已回填） |
+| [v1.4.29](v1.4.29/RELEASE-NOTES.md) | 34 | 历史迭代（GitHub Release 已回填） |
+| [v1.4.28](v1.4.28/RELEASE-NOTES.md) | 33 | 历史迭代（GitHub Release 已回填） |
+| [v1.4.27](v1.4.27/RELEASE-NOTES.md) | 32 | 历史迭代（GitHub Release 已回填） |
+| [v1.4.26](v1.4.26/RELEASE-NOTES.md) | 31 | 历史迭代（GitHub Release 已回填） |
+| [v1.4.23](v1.4.23/RELEASE-NOTES.md) | 28 | 历史迭代（APK 备份已被轮换策略清除，仅存元数据） |
