@@ -47,7 +47,7 @@ android {
         // - 16KB 内存页：全部原生 .so 已验证为 0x4000 对齐（libffmpeg/libpython/libqjs 等）。
         targetSdk = 37
         versionCode = 43
-        versionName = "1.6.6"
+        versionName = "1.6.6-test"
 
         // 2026-09-15：只保留 arm64-v8a（Android 16/17 手机端均为 arm64），APK 从 225.9MB 降至约 80MB；
         // ffmpeg/yt-dlp 功能完整保留，x86 系模拟器不再支持
