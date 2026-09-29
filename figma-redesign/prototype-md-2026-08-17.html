@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>XInvox UI 重构原型 · Liquid Glass × Monet</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  /* Monet 取色结果 */
+  --p0:#FFFFFF; --p10:#001945; --p20:#002d6d; --p30:#3B5BB5; --p40:#2F4C8F; --p50:#5372B8;
+  --p80:#8FA7DE; --p90:#DEE6F8; --p95:#EBF0FC; --p99:#F8FAFF;
+  --s0:#FFFFFF; --s40:#536070; --s90:#D7E0E8; --s95:#E8EDF2;
+  --t0:#FFFFFF; --t40:#2F6E8F; --t90:#DCE9F2;
+  --n0:#101417; --n10:#1A2026; --n20:#252D35; --n30:#37414C; --n40:#4A5561; --n50:#5E6A78;
+  --n60:#64748B; --n70:#9AA5B6; --n80:#C3C9D3; --n90:#EDF1F5; --n92:#EFF3F8; --n94:#F4F7FA; --n95:#F6F8FB; --n99:#FCFDFE;
+  --wall1:#DCE6F5; --wall2:#F6EDE4; --wall3:#E4EEF2;
+  --st-pending:#B45309; --st-ok:#087251; --st-fail:#B91C1C;
+  /* 玻璃基准：极低透明度 + 高模糊，折射背景色彩 */
+  --glass-1:rgba(255,255,255,.28); --glass-2:rgba(255,255,255,.42); --glass-3:rgba(255,255,255,.62);
+  --edge:rgba(255,255,255,.72); --edge-dark:rgba(255,255,255,.10);
+  --glass-border:rgba(255,255,255,.45);
+  --ink:#101417;
+  --radius-tab:28px;
+  --blur-l1:46px; --blur-l2:70px; --blur-l3:92px;
+}
+body{
+  font-family:Inter,"SF Pro Text","Segoe UI",system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  background:#e4eaf2;color:var(--ink);
+  min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:32px 20px 48px;
+}
+.page-title{font-size:22px;font-weight:850;letter-spacing:-.025em;margin-bottom:4px}
+.page-sub{font-size:13px;color:var(--n60);margin-bottom:22px;text-align:center;max-width:560px;line-height:1.5}
+
+/* ============ 手机框 ============ */
+.board{display:flex;gap:44px;align-items:flex-start;flex-wrap:wrap;justify-content:center}
+.phone{width:392px;flex:none;position:relative}
+.screen{
+  width:392px;height:854px;border-radius:44px;overflow:hidden;position:relative;
+  background:linear-gradient(180deg,var(--wall1) 0%,var(--wall2) 55%,#ffffff 100%);
+  box-shadow:0 34px 90px rgba(15,23,42,.32),inset 0 0 0 2px rgba(255,255,255,.55);
+  transition:background 600ms ease;
+}
+/* 背景内容层：色块集中在上半部，底部保持干净浅色 */
+.bg-layer{position:absolute;inset:-60px -60px 0 -60px;z-index:0;
+  background:
+    radial-gradient(circle at 24% 16%, var(--p30) 0, transparent 42%),
+    radial-gradient(circle at 82% 12%, var(--t40) 0, transparent 36%),
+    radial-gradient(circle at 74% 48%, var(--p80) 0, transparent 46%),
+    radial-gradient(circle at 18% 42%, rgba(255,255,255,.55) 0, transparent 32%);
+  filter: blur(42px) saturate(1.38);
+  opacity: .68;
+  transition: all 600ms ease;
+}
+/* 顶部弥散光斑 */
+.screen::before{content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(circle at 72% 10%,rgba(255,255,255,.48),transparent 18%),
+    radial-gradient(circle at 28% 92%,rgba(255,255,255,.12),transparent 22%);}
+.dynamic-island{position:absolute;top:12px;left:50%;transform:translateX(-50%);width:120px;height:34px;background:#0c0f12;border-radius:20px;z-index:50;box-shadow:inset 0 1px 2px rgba(255,255,255,.15)}
+
+/* ============ 液态玻璃材质：增强版 ============ */
+.glass{position:relative;backdrop-filter:blur(var(--blur-l1)) saturate(1.35) brightness(1.06);-webkit-backdrop-filter:blur(var(--blur-l1)) saturate(1.35) brightness(1.06);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.38) 0%, rgba(255,255,255,.14) 100%),
+    var(--glass-1);
+  background-blend-mode: screen, normal;
+  border:1px solid var(--glass-border);
+  box-shadow:
+    inset 0 1.5px 0 var(--edge),
+    inset 0 -1px 0 var(--edge-dark),
+    0 14px 38px rgba(15,23,42,.13),
+    0 2px 6px rgba(255,255,255,.12);
+}
+/* 顶部镜面高光 */
+.glass::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:1;
+  background:
+    linear-gradient(180deg,rgba(255,255,255,.58) 0%,rgba(255,255,255,.22) 30%,rgba(255,255,255,0) 100%),
+    linear-gradient(135deg,rgba(255,255,255,.14) 0%,transparent 55%);}
+/* 边缘厚度光 + 下阴影 */
+.glass::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:2;
+  box-shadow:
+    inset 0 1.5px 0 var(--edge),
+    inset 0 -1px 0 var(--edge-dark),
+    0 16px 42px rgba(15,23,42,.16),
+    0 3px 8px rgba(255,255,255,.14);}
+/* 底部二次反光 */
+.glass .glass-shine{position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:1;
+  background:linear-gradient(0deg,rgba(255,255,255,.22) 0%,rgba(255,255,255,0) 26%)}
+.g2{backdrop-filter:blur(var(--blur-l2)) saturate(1.42) brightness(1.08);-webkit-backdrop-filter:blur(var(--blur-l2)) saturate(1.42) brightness(1.08);
+  background:linear-gradient(180deg, rgba(255,255,255,.48) 0%, rgba(255,255,255,.20) 100%), var(--glass-2)}
+.g3{backdrop-filter:blur(var(--blur-l3)) saturate(1.48) brightness(1.10);-webkit-backdrop-filter:blur(var(--blur-l3)) saturate(1.48) brightness(1.10);
+  background:linear-gradient(180deg, rgba(255,255,255,.58) 0%, rgba(255,255,255,.28) 100%), var(--glass-3)}
+
+/* ============ 屏幕切换 ============ */
+.scr{position:absolute;inset:0;padding:58px 12px 80px;display:flex;flex-direction:column;gap:11px;
+  opacity:0;visibility:hidden;transform:translateY(12px);transition:opacity .28s ease,transform .32s cubic-bezier(.22,.9,.3,1.1),visibility .28s;overflow:hidden;z-index:2}
+.scr.active{opacity:1;visibility:visible;transform:none}
+#scr-mine{gap:9px}
+
+/* ============ 顶部标题区 ============ */
+.hero{position:relative;z-index:2;padding:6px 6px 0}
+.eyebrow{font-size:10px;font-weight:800;letter-spacing:.16em;color:var(--p40);text-transform:uppercase}
+.h-title{font-size:28px;font-weight:900;letter-spacing:-.03em;margin-top:3px}
+.h-sub{font-size:13px;color:var(--n60);margin-top:3px;line-height:1.45}
+
+/* ============ 收件箱 ============ */
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:14px}
+.metric{border-radius:16px;padding:12px 13px}
+.metric b{display:block;font-size:21px;letter-spacing:-.03em}
+.metric span{font-size:11px;color:var(--n60);font-weight:600}
+.toolbar{display:flex;gap:9px;margin-top:2px}
+.search{flex:1;height:46px;border-radius:16px;display:flex;align-items:center;gap:9px;padding:0 15px;font-size:13px;color:var(--n60)}
+.search .mag{width:16px;height:16px;border:2px solid var(--n60);border-radius:50%;position:relative;flex:none;opacity:.75}
+.search .mag::after{content:"";position:absolute;right:-4px;bottom:-3px;width:6px;height:2px;background:var(--n60);border-radius:2px;transform:rotate(45deg)}
+.sort{height:46px;padding:0 15px;border-radius:16px;background:var(--n0);color:#fff;display:flex;align-items:center;font-size:12px;font-weight:800;gap:6px}
+.chips{display:flex;gap:8px;margin-top:2px;overflow-x:auto;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;border-radius:999px;padding:8px 13px;font-size:12px;color:var(--n60);cursor:pointer;font-weight:700;transition:all .22s;border:0;position:relative;
+  backdrop-filter:blur(28px) saturate(1.28) brightness(1.05);-webkit-backdrop-filter:blur(28px) saturate(1.28) brightness(1.05);
+  background:linear-gradient(180deg,rgba(255,255,255,.40),rgba(255,255,255,.16)),var(--glass-1);
+  border:1px solid var(--glass-border)}
+.chip.on{background:linear-gradient(180deg,rgba(255,255,255,.55),rgba(255,255,255,.28)),var(--p90);color:var(--p30);border-color:rgba(47,76,143,.22)}
+.chip.on::after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:inset 0 0 0 1px rgba(47,76,143,.18)}
+.chip .cnt{opacity:.7;margin-left:3px}
+.list{display:flex;flex-direction:column;gap:10px;margin-top:2px;overflow-y:auto;padding:0 0 4px;flex:1;scrollbar-width:none}
+.list::-webkit-scrollbar{display:none}
+.lcard{border-radius:18px;padding:13px;display:flex;gap:12px;cursor:pointer;transition:transform .18s ease}
+.lcard:hover{transform:translateY(-1px)}
+.lthumb{width:78px;height:78px;border-radius:15px;position:relative;flex:none;overflow:hidden;
+  background:linear-gradient(135deg,var(--p40),var(--p80))}
+.lthumb.g1{background:linear-gradient(135deg,#173a6e,#5f7fc4)}
+.lthumb.g2{background:linear-gradient(135deg,#2c4a1e,#6d9c55)}
+.lthumb.g3{background:linear-gradient(135deg,#5c2b1e,#c47a5f)}
+.lthumb .avatar{position:absolute;right:6px;bottom:6px;width:24px;height:24px;border-radius:50%;border:2px solid #fff;background:var(--t40)}
+.lthumb .play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.92);z-index:2}
+.lthumb .play::after{content:"";position:absolute;left:10px;top:7px;border-left:8px solid var(--n0);border-top:5px solid transparent;border-bottom:5px solid transparent}
+.sdot{position:absolute;left:7px;top:7px;width:11px;height:11px;border-radius:50%;border:2px solid #fff;z-index:2}
+.sdot.ok{background:var(--st-ok)}.sdot.pend{background:var(--st-pending)}.sdot.fail{background:var(--st-fail)}
+.lbody{flex:1;min-width:0}
+.lrow{display:flex;align-items:center;gap:7px}
+.lauthor{font-size:14px;font-weight:850;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill{font-size:10px;font-weight:850;border-radius:999px;padding:4px 8px;white-space:nowrap}
+.pill.pend{background:#FBF1E1;color:var(--st-pending)}
+.pill.ok{background:#E1F3EC;color:var(--st-ok)}
+.pill.fail{background:#FBE7E7;color:var(--st-fail)}
+.lcopy{font-size:12.5px;color:#475569;line-height:1.4;margin-top:6px;height:35px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.lmeta{display:flex;justify-content:space-between;margin-top:7px;font-size:10.5px;color:var(--n60);font-weight:600}
+.curl{font-size:10.5px;color:var(--p40);font-weight:700}
+
+/* ============ 液态胶囊 Tab Bar：悬浮透明 ============ */
+.tabbar{position:absolute;left:16px;right:16px;bottom:8px;height:50px;border-radius:20px;display:flex;align-items:center;padding:3px;z-index:30;background:transparent}
+.tab{flex:1;height:44px;border-radius:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;position:relative;cursor:pointer;color:var(--n60);transition:color .22s;border:0;background:transparent;z-index:2}
+.tab svg{width:21px;height:21px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round;transition:transform .3s cubic-bezier(.34,1.56,.64,1),stroke .22s}
+.tab.on{color:#fff}
+.tab.on svg{transform:scale(1.12);stroke:#fff}
+.tab .tl{font-size:9px;font-weight:800;letter-spacing:.02em;opacity:0;transform:translateY(4px);transition:all .2s;position:absolute;top:30px;white-space:nowrap}
+.tab.on .tl{opacity:1;transform:none}
+/* 仅胶囊区域有液态玻璃遮罩，尺寸与 tab 按钮完全贴合 */
+.capsule{position:absolute;top:3px;bottom:3px;width:calc(100% / 3);left:3px;border-radius:16px;z-index:1;
+  backdrop-filter:blur(var(--blur-l2)) saturate(1.42) brightness(1.08);-webkit-backdrop-filter:blur(var(--blur-l2)) saturate(1.42) brightness(1.08);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.52) 0%, rgba(255,255,255,.22) 100%),
+    linear-gradient(135deg, var(--p40), var(--p80));
+  background-blend-mode: screen, normal;
+  border:1px solid rgba(255,255,255,.5);
+  box-shadow:
+    inset 0 1.5px 0 rgba(255,255,255,.72),
+    inset 0 -1px 0 rgba(255,255,255,.14),
+    0 4px 12px rgba(47,76,143,.22);
+  transition:transform .34s cubic-bezier(.34,1.35,.6,1);will-change:transform}
+.capsule::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:1;
+  background:linear-gradient(180deg,rgba(255,255,255,.62) 0%,rgba(255,255,255,.24) 28%,rgba(255,255,255,0) 100%)}
+.capsule::after{content:"";position:absolute;inset:2px;border-radius:14px;background:radial-gradient(circle at 30% 22%,rgba(255,255,255,.48),transparent 45%)}
+.tabbar[data-tab="1"] .capsule{transform:translateX(0)}
+.tabbar[data-tab="2"] .capsule{transform:translateX(100%)}
+.tabbar[data-tab="3"] .capsule{transform:translateX(200%)}
+
+/* ============ 我的 / 设置 通用 ============ */
+.scr-head{display:flex;align-items:center;gap:10px;padding:0 4px;margin-bottom:2px}
+.scr-head .back{width:36px;height:36px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;color:var(--ink)}
+.scr-head h2{font-size:22px;font-weight:900;letter-spacing:-.02em}
+.group{border-radius:20px;padding:12px 14px 10px}
+.g-title{font-size:11px;font-weight:850;color:var(--p40);letter-spacing:.06em;margin-bottom:6px;text-transform:uppercase}
+.grow{display:flex;align-items:center;gap:12px;padding:9px 0;cursor:pointer}
+.grow+.grow{border-top:1px solid rgba(100,116,139,.12)}
+.grow .gi{width:32px;height:32px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:15px;flex:none;
+  color:var(--p40);background:var(--p90);
+  border:1px solid rgba(255,255,255,.45);box-shadow:inset 0 1px 0 rgba(255,255,255,.55);}
+.grow .gt{flex:1;min-width:0}
+.grow .gt b{display:block;font-size:13.5px;font-weight:800}
+.grow .gt span{font-size:11px;color:var(--n60);line-height:1.4;display:block;margin-top:1px}
+.grow .arr{color:var(--n50);font-size:14px}
+/* 若二级菜单需要数量角标，统一风格 */
+.grow .mc{font-size:10px;font-weight:800;color:var(--p40);background:var(--p90);border-radius:8px;padding:2px 8px;flex:none;margin-right:2px}
+
+/* 动态开关 */
+.switch{width:50px;height:30px;border-radius:15px;position:relative;cursor:pointer;flex:none;transition:background .24s cubic-bezier(.4,0,.2,1);background:var(--n92);box-shadow:inset 0 0 0 1px rgba(100,116,139,.4);-webkit-user-select:none;user-select:none}
+.switch::before{content:"";position:absolute;left:3px;top:3px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(15,23,42,.25),inset 0 1px 0 rgba(255,255,255,.9);transition:transform .22s cubic-bezier(.34,1.4,.64,1);z-index:2}
+.switch.on{background:linear-gradient(135deg,var(--p40),var(--p80));box-shadow:inset 0 0 0 1px rgba(255,255,255,.25),0 0 14px rgba(47,76,143,.35)}
+.switch.on::before{transform:translateX(20px)}
+
+/* ============ 我的页面：用户资料 + 二级菜单 ============ */
+.profile-card{border-radius:22px;padding:14px 16px;display:flex;align-items:center;gap:13px;margin-bottom:2px}
+.profile-avatar{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:900;color:#fff;
+  background:linear-gradient(135deg,var(--p40),var(--p80));box-shadow:inset 0 1.5px 0 rgba(255,255,255,.42),0 10px 24px rgba(47,76,143,.32)}
+.profile-info{flex:1;min-width:0}
+.profile-info b{display:block;font-size:16px;font-weight:900;letter-spacing:-.015em}
+.profile-info span{font-size:11px;color:var(--n60);font-weight:600;margin-top:2px;display:block}
+
+.brand-mini{border-radius:18px;padding:11px 14px;display:flex;align-items:center;gap:11px;margin-top:2px}
+.brand-logo-sm{width:32px;height:32px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;color:#fff;
+  background:linear-gradient(135deg,var(--p40),var(--p80));box-shadow:inset 0 1px 0 rgba(255,255,255,.4)}
+.brand-info{flex:1}
+.brand-info b{display:block;font-size:15px;font-weight:850;letter-spacing:-.01em}
+.brand-info span{font-size:11px;color:var(--n60);font-weight:600;margin-top:1px;display:block}
+.badge-ver{font-size:10px;font-weight:800;color:var(--p40);background:var(--p90);border-radius:8px;padding:3px 8px}
+
+/* 设置列表行 */
+.menu-row{padding:10px 0}
+.menu-row .gi{width:30px;height:30px;border-radius:10px;font-size:14px;
+  color:var(--p40);background:var(--p90);
+  border:1px solid rgba(255,255,255,.45);box-shadow:inset 0 1px 0 rgba(255,255,255,.55);}
+.menu-row .gt b{font-size:13.5px;font-weight:800}
+.menu-row .gt span{font-size:11px;color:var(--n60);margin-top:1px;display:block;line-height:1.35}
+.menu-row .mc{font-size:10px;font-weight:800;color:var(--p40);background:var(--p90);border-radius:8px;padding:2px 8px;flex:none;margin-right:2px}
+.menu-row .arr{color:var(--n50);font-size:14px}
+
+/* ============ 主题设置页 ============ */
+.theme-preview{height:110px;border-radius:20px;margin-bottom:14px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,var(--p40),var(--p80));box-shadow:0 16px 46px rgba(47,76,143,.32)}
+.theme-preview::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 30% 25%,rgba(255,255,255,.46),transparent 45%)}
+.theme-preview span{position:relative;z-index:2;color:#fff;font-size:16px;font-weight:900;letter-spacing:.02em}
+.segment{display:flex;gap:6px;margin:8px 0 14px}
+.seg{flex:1;height:36px;border-radius:12px;border:0;background:var(--glass-1);font-size:12px;font-weight:800;color:var(--n60);cursor:pointer;position:relative}
+.seg.on{background:var(--p90);color:var(--p30)}
+.seg.on::after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:inset 0 0 0 1px rgba(47,76,143,.18)}
+.seed-row{display:flex;gap:10px;justify-content:space-between;margin-top:6px}
+.seed{width:36px;height:36px;border-radius:50%;cursor:pointer;border:0;transition:transform .2s;position:relative;flex:none}
+.seed:hover{transform:scale(1.12)}
+.seed.sel::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:2.5px solid var(--p40);opacity:.75}
+.seed.s1{background:#2F4C8F}.seed.s2{background:#101417}.seed.s3{background:#E8583A}.seed.s4{background:#3E7C4F}.seed.s5{background:#7C5CBF}.seed.s6{background:#C45B7E}
+.glabel{font-size:12.5px;font-weight:750;color:var(--n60);margin:14px 0 8px;display:flex;justify-content:space-between}
+.range{width:100%;-webkit-appearance:none;appearance:none;height:6px;border-radius:4px;background:linear-gradient(90deg,var(--p40) var(--v,60%),rgba(100,116,139,.25) var(--v,60%));outline:none}
+.range::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;border:3px solid var(--p40);box-shadow:0 2px 8px rgba(15,23,42,.3);cursor:pointer}
+.color-style-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}
+.cs{height:44px;border-radius:13px;border:0;background:var(--glass-1);font-size:11px;font-weight:800;color:var(--n60);cursor:pointer;position:relative}
+.cs.on{background:var(--p90);color:var(--p30)}
+.cs.on::after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:inset 0 0 0 1px rgba(47,76,143,.18)}
+.about{font-size:11px;color:var(--n60);text-align:center;padding:10px 0 6px}
+
+/* 玻璃层级预览 */
+.glass-demo{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px}
+.gd{height:72px;border-radius:16px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:4px;position:relative}
+.gd b{font-size:12px;font-weight:900;color:var(--ink)}
+.gd span{font-size:9px;font-weight:800;color:var(--n60);text-transform:uppercase;letter-spacing:.04em}
+
+/* ============ 右栏说明 ============ */
+.spec{width:340px;flex:none;padding-top:8px}
+.spec-card{background:rgba(255,255,255,.78);border:1px solid rgba(255,255,255,.7);border-radius:22px;padding:18px;margin-bottom:12px;box-shadow:0 12px 40px rgba(15,23,42,.08);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+.spec-card h3{font-size:15px;font-weight:850;margin-bottom:10px;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+.spec-card h3 .tag{font-size:10px;background:var(--p90);color:var(--p30);border-radius:8px;padding:3px 8px;font-weight:850}
+.spec-card p{font-size:12.5px;color:#475569;line-height:1.65}
+.spec-card ul{list-style:none;margin-top:8px}
+.spec-card li{font-size:12px;color:#475569;padding:5px 0 5px 20px;position:relative;line-height:1.5}
+.spec-card li::before{content:"";position:absolute;left:4px;top:11px;width:7px;height:7px;border-radius:50%;background:var(--p40);opacity:.6}
+.token-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.tok{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:750;color:#475569}
+.tok i{width:22px;height:22px;border-radius:7px;display:inline-block;box-shadow:inset 0 0 0 1px rgba(15,23,42,.08)}
+.foot{font-size:11px;color:var(--n60);text-align:center;margin-top:16px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="page-title">XInvox UI 重构原型</div>
+<div class="page-sub">液态玻璃增强版：高模糊背景色块 + 多层高光/折射 + 主题自适应预览。切换不同种子色可实时看到玻璃在各页面的表现。</div>
+
+<div class="board">
+  <div class="phone">
+    <div class="screen" id="screen">
+      <div class="bg-layer"></div>
+      <div class="dynamic-island"></div>
+
+      <!-- ============ 收件箱 ============ -->
+      <div class="scr active" id="scr-inbox">
+        <div class="hero">
+          <div class="eyebrow">XINVOX QUEUE</div>
+          <div class="h-title">视频收件箱</div>
+          <div class="h-sub">自动捕获、整理并处理 X / Twitter 视频链接</div>
+          <div class="metrics">
+            <div class="metric glass"><span class="glass-shine"></span><b>42</b><span>全部</span></div>
+            <div class="metric glass"><span class="glass-shine"></span><b>9</b><span>待下载</span></div>
+            <div class="metric glass"><span class="glass-shine"></span><b>2</b><span>失败</span></div>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="search glass g2"><span class="glass-shine"></span><span class="mag"></span>搜索作者、文案或链接</div>
+          <div class="sort">排序 ▾</div>
+        </div>
+        <div class="chips">
+          <button class="chip on">全部 <span class="cnt">42</span></button>
+          <button class="chip">待下载 <span class="cnt">9</span></button>
+          <button class="chip">已下载 <span class="cnt">31</span></button>
+          <button class="chip">失败 <span class="cnt">2</span></button>
+        </div>
+        <div class="list">
+          <div class="lcard glass"><span class="glass-shine"></span>
+            <div class="lthumb g1"><span class="sdot ok"></span><span class="avatar"></span><span class="play"></span></div>
+            <div class="lbody">
+              <div class="lrow"><span class="lauthor">@elonmusk</span><span class="pill ok">已下载</span></div>
+              <div class="lcopy">Starship Flight 8 完整回收画面——这可能是人类航天史上最疯狂的一分钟。箭体翻转、着陆点火、机械臂稳稳接住…</div>
+              <div class="lmeta"><span class="curl">x.com/i/status/18942851…</span><span>2 小时前</span></div>
+            </div>
+          </div>
+          <div class="lcard glass"><span class="glass-shine"></span>
+            <div class="lthumb g2"><span class="sdot pend"></span><span class="avatar"></span></div>
+            <div class="lbody">
+              <div class="lrow"><span class="lauthor">@NASA</span><span class="pill pend">待下载</span></div>
+              <div class="lcopy">James Webb 望远镜捕捉到猎户座星云内部的新生恒星簇，红外影像揭示气体与尘埃中的细节结构…</div>
+              <div class="lmeta"><span class="curl">x.com/i/status/18940217…</span><span>5 小时前</span></div>
+            </div>
+          </div>
+          <div class="lcard glass"><span class="glass-shine"></span>
+            <div class="lthumb g3"><span class="sdot fail"></span><span class="avatar"></span></div>
+            <div class="lbody">
+              <div class="lrow"><span class="lauthor">@kittens_club</span><span class="pill fail">失败</span></div>
+              <div class="lcopy">三只小猫第一次见雪的反应合集 🐱❄️ 第 2 只直接原地起飞，最后一只淡定围观全程…</div>
+              <div class="lmeta"><span class="curl">x.com/i/status/18938745…</span><span>1 天前</span></div>
+            </div>
+          </div>
+          <div class="lcard glass"><span class="glass-shine"></span>
+            <div class="lthumb g1"><span class="sdot ok"></span><span class="avatar"></span><span class="play"></span></div>
+            <div class="lbody">
+              <div class="lrow"><span class="lauthor">@veritasium</span><span class="pill ok">已下载</span></div>
+              <div class="lcopy">为什么电池永远造不出完美的？——锂离子电池的物理极限与下一代固态电池的突破方向全解析…</div>
+              <div class="lmeta"><span class="curl">x.com/i/status/18937590…</span><span>2 天前</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ 媒体库占位 ============ -->
+      <div class="scr" id="scr-media">
+        <div class="hero">
+          <div class="eyebrow">MEDIA LIBRARY</div>
+          <div class="h-title">媒体库</div>
+          <div class="h-sub">已下载视频、播放队列与本地文件</div>
+        </div>
+        <div class="group glass" style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px">
+          <span class="glass-shine"></span>
+          <div style="width:72px;height:72px;border-radius:24px;background:linear-gradient(135deg,var(--p40),var(--p80));display:flex;align-items:center;justify-content:center;font-size:32px;color:#fff">▶</div>
+          <div style="font-size:14px;font-weight:800;color:var(--n60)">媒体库原型沿用收件箱卡片风格</div>
+          <div style="font-size:12px;color:var(--n60);text-align:center;max-width:240px">实际实现中保持与收件箱一致的 L1 液态玻璃卡片与 L2 底栏</div>
+        </div>
+      </div>
+
+      <!-- ============ 我的一级菜单 ============ -->
+      <div class="scr" id="scr-mine">
+        <div class="scr-head"><h2>我的</h2></div>
+
+        <!-- 用户资料卡：Edqiu 专属用户展示，不做登录入口 -->
+        <div class="profile-card glass g2">
+          <span class="glass-shine"></span>
+          <div class="profile-avatar">E</div>
+          <div class="profile-info">
+            <b>Edqiu 专属用户</b>
+            <span>本地使用 · 无需登录</span>
+          </div>
+        </div>
+
+        <!-- 设置分组 -->
+        <div class="group glass">
+          <span class="glass-shine"></span>
+          <div class="g-title">设置</div>
+          <div class="grow menu-row" onclick="go('mine-content')">
+            <div class="gi glass">↓</div>
+            <div class="gt"><b>内容管理</b><span>下载中心、回收站、网盘备份</span></div>
+            <span class="mc">3</span>
+            <span class="arr">›</span>
+          </div>
+          <div class="grow menu-row" onclick="go('mine-downloader')">
+            <div class="gi glass">⚙</div>
+            <div class="gt"><b>下载器设置</b><span>下载保存、网络认证、WebDAV、更新</span></div>
+            <span class="mc">4</span>
+            <span class="arr">›</span>
+          </div>
+          <div class="grow menu-row" onclick="go('mine-inbox')">
+            <div class="gi glass">◈</div>
+            <div class="gt"><b>收件箱设置</b><span>外观、存储备份、捕获同步、关于</span></div>
+            <span class="mc">4</span>
+            <span class="arr">›</span>
+          </div>
+        </div>
+
+        <!-- 应用信息小卡 -->
+        <div class="brand-mini glass">
+          <span class="glass-shine"></span>
+          <div class="brand-logo-sm">E</div>
+          <div class="brand-info"><b>EDQIU LOAD</b><span>高效下载 · 智能捕获</span></div>
+          <span class="badge-ver">v1.3.0</span>
+        </div>
+      </div>
+
+      <!-- ============ 二级：内容管理 ============ -->
+      <div class="scr" id="scr-mine-content">
+        <div class="scr-head">
+          <div class="back glass g2" onclick="go('mine')">←</div>
+          <h2>内容管理</h2>
+        </div>
+        <div class="group glass">
+          <span class="glass-shine"></span>
+          <div class="grow"><div class="gi glass">↓</div><div class="gt"><b>下载中心</b><span>查看正在下载与已完成的内容</span></div><span class="arr">›</span></div>
+          <div class="grow"><div class="gi glass">⌫</div><div class="gt"><b>回收站</b><span>30 天内可恢复已删除项目</span></div><span class="arr">›</span></div>
+          <div class="grow"><div class="gi glass">☁</div><div class="gt"><b>网盘备份</b><span>WebDAV / 云盘同步与备份</span></div><span class="arr">›</span></div>
+        </div>
+      </div>
+
+      <!-- ============ 二级：下载器设置 ============ -->
+      <div class="scr" id="scr-mine-downloader">
+        <div class="scr-head">
+          <div class="back glass g2" onclick="go('mine')">←</div>
+          <h2>下载器设置</h2>
+        </div>
+        <div class="group glass">
+          <span class="glass-shine"></span>
+          <div class="grow"><div class="gi glass">💾</div><div class="gt"><b>下载保存</b><span>存储目录、命名规则与文件格式</span></div><span class="arr">›</span></div>
+          <div class="grow"><div class="gi glass">🔒</div><div class="gt"><b>网络与认证</b><span>代理、Cookie、账号登录</span></div><span class="arr">›</span></div>
+          <div class="grow"><div class="gi glass">↻</div><div class="gt"><b>WebDAV 同步</b><span>远程服务器配置与自动同步</span></div><span class="arr">›</span></div>
+          <div class="grow"><div class="gi glass">⚙</div><div class="gt"><b>更新与工具</b><span>版本更新、日志与调试工具</span></div><span class="arr">›</span></div>
+        </div>
+      </div>
+
+      <!-- ============ 二级：收件箱设置 ============ -->
+      <div class="scr" id="scr-mine-inbox">
+        <div class="scr-head">
+          <div class="back glass g2" onclick="go('mine')">←</div>
+          <h2>收件箱设置</h2>
+        </div>
+        <div class="group glass">
+          <span class="glass-shine"></span>
+          <div class="grow" role="button" tabindex="0" onclick="go('theme')" onkeydown="if(event.key==='Enter'||event.key===' ')go('theme')"><div class="gi glass">◈</div><div class="gt"><b>外观</b><span>莫奈取色、液态玻璃、界面缩放</span></div><span class="arr">›</span></div>
+          <div class="grow"><div class="gi glass">◉</div><div class="gt"><b>存储与备份</b><span>数据库清理、导出导入</span></div><span class="arr">›</span></div>
+          <div class="grow"><div class="gi glass">◧</div><div class="gt"><b>捕获与同步</b><span>剪贴板、无障碍、后台更新</span></div><span class="arr">›</span></div>
+          <div class="grow"><div class="gi glass">ⓘ</div><div class="gt"><b>关于与诊断</b><span>版本信息、反馈、隐私政策</span></div><span class="arr">›</span></div>
+        </div>
+      </div>
+
+      <!-- ============ 主题设置 ============ -->
+      <div class="scr" id="scr-theme">
+        <div class="scr-head">
+          <div class="back glass g2" onclick="go('mine-inbox')">←</div>
+          <h2>外观</h2>
+        </div>
+
+        <div class="theme-preview glass"><span>Monet × Liquid Glass</span></div>
+
+        <div class="group glass">
+          <span class="glass-shine"></span>
+          <div class="g-title">动态颜色</div>
+          <div class="grow"><div class="gi glass">◈</div><div class="gt"><b>Monet 动态取色</b><span>从当前壁纸自动提取主题色</span></div><div class="switch on" onclick="this.classList.toggle('on')"></div></div>
+          <div class="grow"><div class="gi glass">◐</div><div class="gt"><b>跟随系统深色模式</b><span>自动切换明暗主题</span></div><div class="switch on" onclick="this.classList.toggle('on')"></div></div>
+        </div>
+
+        <div class="group glass" style="overflow-y:auto;flex:1;scrollbar-width:none">
+          <span class="glass-shine"></span>
+          <div class="g-title">莫奈种子色</div>
+          <div class="seed-row">
+            <button class="seed s1 sel" data-i="0" onclick="setSeed(0)" title="墨蓝"></button>
+            <button class="seed s2" data-i="1" onclick="setSeed(1)" title="曜石黑"></button>
+            <button class="seed s3" data-i="2" onclick="setSeed(2)" title="珊瑚橙"></button>
+            <button class="seed s4" data-i="3" onclick="setSeed(3)" title="抹茶绿"></button>
+            <button class="seed s5" data-i="4" onclick="setSeed(4)" title="薰衣草紫"></button>
+            <button class="seed s6" data-i="5" onclick="setSeed(5)" title="玫瑰粉"></button>
+          </div>
+
+          <div class="glabel"><span>色彩风格</span><span id="styleVal">TonalSpot</span></div>
+          <div class="color-style-grid">
+            <button class="cs on" onclick="setStyle(this,'TonalSpot')">TonalSpot</button>
+            <button class="cs" onclick="setStyle(this,'Vibrant')">Vibrant</button>
+            <button class="cs" onclick="setStyle(this,'Expressive')">Expressive</button>
+            <button class="cs" onclick="setStyle(this,'FruitSalad')">FruitSalad</button>
+            <button class="cs" onclick="setStyle(this,'Fidelity')">Fidelity</button>
+            <button class="cs" onclick="setStyle(this,'Content')">Content</button>
+          </div>
+
+          <div class="glabel"><span>色彩标准</span></div>
+          <div class="segment">
+            <button class="seg on" onclick="setSpec(this,'SPEC_2021')">SPEC 2021</button>
+            <button class="seg" onclick="setSpec(this,'CAM16')">CAM16</button>
+          </div>
+
+          <div class="glabel"><span>液态玻璃强度</span><span id="glassVal">60%</span></div>
+          <input class="range" type="range" min="0" max="100" value="60" id="glassRange" oninput="setGlass(this.value)">
+
+          <div class="grow" style="margin-top:12px"><div class="gi glass">✦</div><div class="gt"><b>液态玻璃效果</b><span>全局玻璃材质开关</span></div><div class="switch on" onclick="toggleGlass(this)"></div></div>
+          <div class="grow"><div class="gi glass">▢</div><div class="gt"><b>悬浮底栏</b><span>底部液态胶囊导航</span></div><div class="switch on" onclick="this.classList.toggle('on')"></div></div>
+          <div class="grow"><div class="gi glass">⌕</div><div class="gt"><b>界面缩放</b><span>当前 100%</span></div><span class="arr">›</span></div>
+
+          <div class="glabel"><span>玻璃层级预览</span></div>
+          <div class="glass-demo">
+            <div class="gd glass"><span class="glass-shine"></span><b>L1</b><span>列表卡片</span></div>
+            <div class="gd glass g2"><span class="glass-shine"></span><b>L2</b><span>底栏/搜索</span></div>
+            <div class="gd glass g3"><span class="glass-shine"></span><b>L3</b><span>浮层/预览</span></div>
+          </div>
+
+          <div class="about">XInvox 1.3.0 · Liquid Glass Build</div>
+        </div>
+      </div>
+
+      <!-- ============ 液态胶囊 Tab Bar：仅选中胶囊有遮罩 ============ -->
+      <div class="tabbar" id="tabbar" data-tab="1">
+        <div class="capsule"></div>
+        <button class="tab on" data-t="1" onclick="go('inbox')">
+          <svg viewBox="0 0 24 24"><path d="M4 4h16v14l-8-4-8 4z"/><path d="M4 8h16"/></svg>
+          <span class="tl">收件箱</span>
+        </button>
+        <button class="tab" data-t="2" onclick="go('media')">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 12l3 3 5-6"/></svg>
+          <span class="tl">媒体库</span>
+        </button>
+        <button class="tab" data-t="3" onclick="go('mine')">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/></svg>
+          <span class="tl">我的</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 右栏说明 ============ -->
+  <div class="spec">
+    <div class="spec-card">
+      <h3>🫧 液态玻璃增强 <span class="tag">Liquid Glass</span></h3>
+      <p>背景层使用大色块 + 高斯模糊，让玻璃卡片产生明显折射。玻璃本身降低透明度、增加多层高光、边缘厚度与下阴影，呈现 iOS 26 风格的液态质感。</p>
+      <div class="token-row">
+        <span class="tok"><i style="background:var(--p40)"></i>primary</span>
+        <span class="tok"><i style="background:var(--p90)"></i>p90</span>
+        <span class="tok"><i style="background:var(--wall1)"></i>wall</span>
+      </div>
+    </div>
+    <div class="spec-card">
+      <h3>🧊 材质分层</h3>
+      <ul>
+        <li>L1 卡片：blur 46px，透明度 28%，顶部高光 58%</li>
+        <li>L2 底栏/搜索：blur 70px，透明度 42%</li>
+        <li>L3 浮层/预览：blur 92px，透明度 62%</li>
+        <li>每层含顶部镜面高光 + 135° 折射光 + 底部二次反光</li>
+      </ul>
+    </div>
+    <div class="spec-card">
+      <h3>💊 悬浮透明 Tab Bar</h3>
+      <p>未选中仅显示透明描边 SVG 图标；选中后胶囊背景滑入。Tab 栏自身使用 L2 玻璃，实时模糊下方滚动内容。</p>
+    </div>
+    <div class="spec-card">
+      <h3>🎨 Monet 取色适配</h3>
+      <ul>
+        <li>6 组种子色实时切换背景色块与主题色</li>
+        <li>玻璃高光保持白色，边缘光自动折射背景主题色</li>
+        <li>主题页新增 L1/L2/L3 玻璃层级预览</li>
+      </ul>
+    </div>
+    <div class="spec-card">
+      <h3>⌨️ 原型操作</h3>
+      <ul>
+        <li>底部胶囊 Tab 切换三屏</li>
+        <li>我的 → 点击菜单进入二级页，← 返回</li>
+        <li>主题设置：切换种子色、风格、标准、玻璃强度</li>
+        <li>观察不同取色下玻璃卡片的折射变化</li>
+      </ul>
+    </div>
+    <div class="foot">设计文档见 docs/superpowers/plans/2026-08-17-ui-liquid-glass-redesign.md</div>
+  </div>
+</div>
+
+<script>
+const SEEDS=[
+  {p30:"#3B5BB5",p40:"#2F4C8F",p80:"#8FA7DE",p90:"#DEE6F8",t40:"#2F6E8F",wall1:"#DCE6F5",wall2:"#F6EDE4",wall3:"#E4EEF2",edgeMix:"rgba(255,255,255,.72)"},
+  {p30:"#252F38",p40:"#3A4854",p80:"#8B99A8",p90:"#E3E8EC",t40:"#3B4A57",wall1:"#DFE4E8",wall2:"#EEF1F3",wall3:"#E6EAEE",edgeMix:"rgba(255,255,255,.70)"},
+  {p30:"#9E3620",p40:"#C0442A",p80:"#F0A08C",p90:"#FDE3DB",t40:"#B5632F",wall1:"#F8E3DA",wall2:"#F3EEE2",wall3:"#F7E8E4",edgeMix:"rgba(255,255,255,.72)"},
+  {p30:"#1F4C2F",p40:"#2E6340",p80:"#8FC49E",p90:"#DFF0E4",t40:"#5C8A3E",wall1:"#E2EFE2",wall2:"#F0F3E6",wall3:"#E4EFE9",edgeMix:"rgba(255,255,255,.72)"},
+  {p30:"#4D3082",p40:"#63439F",p80:"#B6A2E2",p90:"#EAE2F9",t40:"#8A4FB0",wall1:"#E8E2F5",wall2:"#F2EAEF",wall3:"#E9E4F4",edgeMix:"rgba(255,255,255,.74)"},
+  {p30:"#87344F",p40:"#A54463",p80:"#E4A4BC",p90:"#FBE3EC",t40:"#B0564F",wall1:"#F7E2E9",wall2:"#F5EFE6",wall3:"#F6E4EA",edgeMix:"rgba(255,255,255,.72)"}
+];
+let seedIdx=0,glassEnabled=true;
+function setSeed(i){
+  seedIdx=i;const s=SEEDS[i];
+  const r=document.querySelector(':root');
+  for(const k in s)if(k!=='edgeMix')r.style.setProperty('--'+k,s[k]);
+  r.style.setProperty('--edge',s.edgeMix);
+  document.querySelectorAll('.seed').forEach((el,idx)=>el.classList.toggle('sel',idx===i));
+}
+function setGlass(v){
+  document.getElementById('glassVal').textContent=v+'%';
+  const r=document.querySelector(':root');
+  r.style.setProperty('--blur-l1',(26+v*0.46)+'px');
+  r.style.setProperty('--blur-l2',(40+v*0.70)+'px');
+  r.style.setProperty('--blur-l3',(52+v*0.92)+'px');
+  const range=document.getElementById('glassRange');
+  if(range)range.style.setProperty('--v',v+'%');
+}
+function toggleGlass(el){
+  glassEnabled=!glassEnabled;el.classList.toggle('on',glassEnabled);
+  document.querySelectorAll('.glass').forEach(x=>x.style.backdropFilter=glassEnabled?'':"none");
+}
+function setStyle(el,name){
+  document.querySelectorAll('.cs').forEach(x=>x.classList.remove('on'));el.classList.add('on');
+  document.getElementById('styleVal').textContent=name;
+}
+function setSpec(el,name){
+  document.querySelectorAll('.seg').forEach(x=>x.classList.remove('on'));el.classList.add('on');
+}
+function go(scr){
+  document.querySelectorAll('.scr').forEach(el=>el.classList.remove('active'));
+  document.getElementById('scr-'+scr).classList.add('active');
+  const map={inbox:1,media:2,mine:3,theme:3,'mine-content':3,'mine-downloader':3,'mine-inbox':3};
+  const tb=document.getElementById('tabbar');
+  tb.dataset.tab=map[scr];
+  tb.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',+t.dataset.t===map[scr]));
+}
+setGlass(60);
+</script>
+</body>
+</html>

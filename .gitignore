@@ -1,0 +1,46 @@
+# ===== Gradle / 构建产物 =====
+.gradle/
+build/
+app/build/
+.kotlin/
+captures/
+*.iml
+.idea/
+
+# ===== 本机环境配置（含路径，不入库） =====
+local.properties
+
+# ===== 签名密钥（敏感，切勿提交） =====
+keystore.jks
+keystore.properties
+
+# ===== 本地调试 / 中间产物目录 =====
+tmp_adb_db/
+audit-ui-auto/
+snackbar-fix-compare/
+.trae-html-share-packages/
+
+# ===== 根目录调试产物（截图 / UI 转储 / 数据库 / 日志 / APK） =====
+/*.png
+/*.xml
+/*.db
+/*.db-shm
+/*.db-wal
+/*.log
+/*.apk
+/adb-backup/
+/backup-*/
+
+# ===== 工具本地数据 =====
+.workbuddy/
+.superpowers/
+
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== 本地工具目录（不入库） =====
+.claude/
+.workbuddy/
+HANDOFF.md.bak

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>XInvox Market UI Redesign</title>
+  <script src="https://mcp.figma.com/mcp/html-to-design/capture.js" async></script>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;background:#eef3f7;color:#101417;font-family:Inter,"SF Pro Text","Segoe UI",system-ui,-apple-system,sans-serif}
+    .board{display:flex;gap:30px;padding:42px;align-items:flex-start}
+    .frame{width:390px}
+    .screen{width:390px;height:844px;border-radius:36px;overflow:hidden;background:#f8fafc;border:1px solid #d9e3ea;box-shadow:0 28px 80px rgba(15,23,42,.18);position:relative}
+    .top{padding:26px 20px 14px;background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)}
+    .eyebrow{font-size:12px;font-weight:800;color:#64748b;letter-spacing:.08em}
+    .title{font-size:29px;font-weight:900;letter-spacing:-.03em;margin-top:5px}
+    .sub{font-size:13px;color:#64748b;margin-top:5px;line-height:1.45}
+    .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:16px}
+    .metric{background:white;border:1px solid #e2e8f0;border-radius:18px;padding:11px}
+    .metric b{display:block;font-size:21px;letter-spacing:-.03em}
+    .metric span{font-size:11px;color:#64748b}
+    .toolbar{display:flex;gap:10px;padding:0 20px 12px}
+    .search{flex:1;height:44px;border-radius:18px;border:1px solid #dbe3ea;background:white;color:#94a3b8;display:flex;align-items:center;padding:0 14px;font-size:13px}
+    .sort{height:44px;border-radius:16px;background:#101417;color:white;padding:0 15px;display:flex;align-items:center;font-weight:800;font-size:13px}
+    .chips{display:flex;gap:8px;padding:0 20px 14px}
+    .chip{border:1px solid #dbe3ea;background:white;border-radius:999px;padding:8px 11px;font-size:12px;color:#64748b}
+    .chip.on{background:#e8f7f1;color:#087251;border-color:#bfe9d8;font-weight:800}
+    .list{padding:0 16px 92px;display:flex;flex-direction:column;gap:12px}
+    .card{display:flex;gap:12px;padding:12px;background:white;border:1px solid #dfe7ed;border-radius:22px;box-shadow:0 12px 32px rgba(15,23,42,.06)}
+    .thumb{width:92px;height:92px;border-radius:18px;background:linear-gradient(135deg,#0f172a,#3b82f6);position:relative;overflow:hidden}
+    .thumb:after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 20% 20%,rgba(255,255,255,.35),transparent 32%)}
+    .thumb.green{background:linear-gradient(135deg,#111827,#14b8a6)}
+    .thumb.pink{background:linear-gradient(135deg,#581c87,#fb7185)}
+    .avatar{position:absolute;right:7px;bottom:7px;width:30px;height:30px;border-radius:50%;border:2px solid white;background:#38bdf8;z-index:2}
+    .dot{position:absolute;left:8px;top:8px;width:12px;height:12px;border-radius:50%;border:2px solid white;background:#f59e0b;z-index:2}
+    .dot.ok{background:#10b981}.dot.bad{background:#ef4444}
+    .play{position:absolute;left:34px;top:34px;width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.9);z-index:2}
+    .play:after{content:"";position:absolute;left:10px;top:7px;border-left:8px solid #101417;border-top:6px solid transparent;border-bottom:6px solid transparent}
+    .content{flex:1;min-width:0}
+    .row{display:flex;align-items:center;gap:8px}
+    .author{font-size:15px;font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+    .pill{font-size:10px;font-weight:850;border-radius:999px;padding:5px 8px;background:#fff7ed;color:#b45309;white-space:nowrap}
+    .pill.ok{background:#ecfdf5;color:#047857}.pill.bad{background:#fef2f2;color:#b91c1c}
+    .copy{font-size:13px;color:#475569;line-height:1.35;margin-top:8px;height:36px;overflow:hidden}
+    .meta{display:flex;justify-content:space-between;gap:8px;margin-top:10px;font-size:11px;color:#7b8790}
+    .nav{position:absolute;left:20px;right:92px;bottom:22px;height:58px;border-radius:20px;background:rgba(255,255,255,.94);border:1px solid #dbe3ea;display:flex;align-items:center;justify-content:space-around;box-shadow:0 18px 48px rgba(15,23,42,.10)}
+    .nav i{width:22px;height:22px;border-radius:8px;background:#cbd5e1}.nav i.on{background:#101417}
+    .fab{position:absolute;right:20px;bottom:22px;width:58px;height:58px;border-radius:20px;background:#101417;color:white;font-size:30px;display:flex;align-items:center;justify-content:center;box-shadow:0 18px 48px rgba(15,23,42,.20)}
+    .hero{height:278px;background:linear-gradient(135deg,#101417,#2563eb);position:relative}
+    .hero:after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 70% 20%,rgba(45,212,191,.42),transparent 34%)}
+    .back{position:absolute;left:16px;top:16px;width:42px;height:42px;border-radius:15px;background:rgba(255,255,255,.88);z-index:2}
+    .detail{margin:-28px 16px 0;background:white;border-radius:24px;padding:16px;border:1px solid #dfe7ed;box-shadow:0 18px 42px rgba(15,23,42,.10);position:relative}
+    .bigav{width:50px;height:50px;border-radius:50%;border:3px solid white;background:#38bdf8;flex:none}
+    .dt{font-size:20px;font-weight:900;margin-top:10px;line-height:1.25;letter-spacing:-.02em}
+    .section{margin:14px 16px 0;background:white;border:1px solid #dfe7ed;border-radius:22px;padding:16px}
+    .section h3{margin:0 0 10px;color:#087251;font-size:13px}
+    .section p{margin:0;color:#475569;font-size:14px;line-height:1.5}
+    .actions{position:absolute;left:16px;right:16px;bottom:22px;height:64px;border-radius:24px;background:white;border:1px solid #dfe7ed;display:flex;align-items:center;padding:10px;gap:10px;box-shadow:0 18px 48px rgba(15,23,42,.12)}
+    .primary{flex:1;height:44px;border-radius:16px;background:#101417;color:white;display:flex;align-items:center;justify-content:center;font-weight:850}
+    .ib{width:44px;height:44px;border-radius:15px;background:#eef3f6;position:relative}
+    .ib:after{content:"";position:absolute;left:14px;top:14px;width:16px;height:16px;border-radius:5px;background:#64748b}
+    .bulk{position:absolute;left:16px;right:16px;bottom:22px;border-radius:24px;background:#101417;color:white;padding:14px;display:flex;gap:10px;align-items:center;box-shadow:0 18px 48px rgba(15,23,42,.22)}
+    .bulk b{flex:1}.bulk span{background:rgba(255,255,255,.12);border-radius:14px;padding:10px 12px;font-size:12px;font-weight:800}
+    .empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:36px}
+    .emptyicon{width:86px;height:86px;border-radius:28px;background:linear-gradient(135deg,#e8f7f1,#dbeafe);display:flex;align-items:center;justify-content:center;font-size:34px}
+    .empty h2{font-size:25px;margin:18px 0 8px;letter-spacing:-.02em}
+    .empty p{font-size:14px;color:#64748b;line-height:1.5}
+    .empty button{border:0;background:#101417;color:white;border-radius:18px;margin-top:20px;padding:14px 22px;font-weight:850;font-size:14px}
+    .label{font-size:15px;font-weight:900;margin-top:12px}.note{font-size:13px;color:#64748b;line-height:1.5;margin-top:4px}
+  </style>
+</head>
+<body>
+  <div class="board">
+    <div class="frame">
+      <div class="screen">
+        <div class="top">
+          <div class="eyebrow">XINVOX QUEUE</div>
+          <div class="title">视频收件箱</div>
+          <div class="sub">自动捕获、整理并处理 X / Twitter 视频链接，保留作者头像、ID 和文案。</div>
+          <div class="metrics"><div class="metric"><b>42</b><span>全部</span></div><div class="metric"><b>9</b><span>待下载</span></div><div class="metric"><b>2</b><span>失败</span></div></div>
+        </div>
+        <div class="toolbar"><div class="search">搜索作者、文案或链接</div><div class="sort">最新</div></div>
+        <div class="chips"><div class="chip on">全部 42</div><div class="chip">未下载 9</div><div class="chip">已下载 31</div><div class="chip">失败 2</div></div>
+        <div class="list">
+          <div class="card"><div class="thumb"><div class="dot"></div><div class="play"></div><div class="avatar"></div></div><div class="content"><div class="row"><div class="author">Design Daily</div><div class="pill">未下载</div></div><div class="copy">2026 年移动端工具应用的交互趋势总结：更轻、更快、更可控。</div><div class="meta"><span>@designdaily</span><span>刚刚</span></div></div></div>
+          <div class="card"><div class="thumb green"><div class="dot ok"></div><div class="play"></div><div class="avatar"></div></div><div class="content"><div class="row"><div class="author">Creator Lab</div><div class="pill ok">已下载</div></div><div class="copy">A beautiful clip about app workflows and queue design.</div><div class="meta"><span>@creatorlab</span><span>2 小时前</span></div></div></div>
+          <div class="card"><div class="thumb pink"><div class="dot bad"></div><div class="play"></div><div class="avatar"></div></div><div class="content"><div class="row"><div class="author">Tech Shorts</div><div class="pill bad">失败</div></div><div class="copy">下载器重试失败，点击查看原因或重新下载。</div><div class="meta"><span>@techshorts</span><span>昨天</span></div></div></div>
+        </div>
+        <div class="nav"><i class="on"></i><i></i><i></i></div><div class="fab">+</div>
+      </div>
+      <div class="label">Home / Inbox</div>
+      <div class="note">轻量 dashboard + 视频卡片；搜索、排序、筛选、状态、批量入口全部保留。</div>
+    </div>
+    <div class="frame">
+      <div class="screen">
+        <div class="hero"><div class="back"></div></div>
+        <div class="detail"><div class="row"><div class="bigav"></div><div class="content"><div class="author">Design Daily</div><div class="meta"><span>@designdaily</span><span>x.com/status/12345678</span></div></div><div class="pill">未下载</div></div><div class="dt">2026 年移动端工具应用的交互趋势总结</div></div>
+        <div class="section"><h3>视频文案</h3><p>更少装饰、更高识别度、更强操作反馈。工具类 App 应该让用户一眼知道状态，并尽快完成动作。</p></div>
+        <div class="section"><h3>记录</h3><p>捕获时间：刚刚<br>尝试次数：0<br>自动重试：未设置</p></div>
+        <div class="section"><h3>原始链接</h3><p>https://x.com/i/status/1234567890123456789</p></div>
+        <div class="actions"><div class="primary">打开下载器</div><div class="ib"></div><div class="ib"></div><div class="ib"></div></div>
+      </div>
+      <div class="label">Detail</div>
+      <div class="note">媒体预览优先，底部保留下载、复制、打开 X/Twitter、打开文件。</div>
+    </div>
+    <div class="frame">
+      <div class="screen">
+        <div class="top"><div class="eyebrow">BATCH MODE</div><div class="title">批量处理</div><div class="sub">长按进入选择模式，批量复制、下载或删除。</div></div>
+        <div class="list" style="padding-top:12px">
+          <div class="card" style="border-color:#087251;background:#f7fffb"><div class="thumb green"><div class="dot"></div><div class="avatar"></div></div><div class="content"><div class="row"><div class="author">Creator Lab</div><div class="pill">已选</div></div><div class="copy">Batch item selected for download queue.</div><div class="meta"><span>@creatorlab</span><span>2 小时前</span></div></div></div>
+          <div class="card" style="border-color:#087251;background:#f7fffb"><div class="thumb"><div class="dot"></div><div class="avatar"></div></div><div class="content"><div class="row"><div class="author">Design Daily</div><div class="pill">已选</div></div><div class="copy">列表内快速完成高频整理动作。</div><div class="meta"><span>@designdaily</span><span>刚刚</span></div></div></div>
+        </div>
+        <div class="bulk"><b>已选 2</b><span>全选</span><span>复制</span><span>下载</span><span>删除</span></div>
+      </div>
+      <div class="label">Batch State</div>
+      <div class="note">底部上下文操作栏，适合高频整理下载。</div>
+    </div>
+    <div class="frame">
+      <div class="screen">
+        <div class="empty"><div class="emptyicon">✓</div><h2>收件箱还是空的</h2><p>复制或分享 X / Twitter 链接，XInvox 会自动整理作者、头像、文案和下载状态。</p><button>粘贴链接</button></div>
+      </div>
+      <div class="label">Empty State</div>
+      <div class="note">少文案、强引导，直接给出下一步动作。</div>
+    </div>
+  </div>
+</body>
+</html>

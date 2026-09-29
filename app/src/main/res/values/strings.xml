@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Edqiu</string>
+    <string name="tagline">推特视频链接收件箱</string>
+    <string name="capture_activity_label">保存到 Edqiu</string>
+    <string name="share_shortcut_save_link">保存链接</string>
+    <string name="share_shortcut_save_link_long">保存链接到 Edqiu</string>
+</resources>
