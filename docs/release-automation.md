@@ -1,66 +1,62 @@
-# GitHub 自动发版说明
+# 发版流程（GitHub Release）
 
-此项目已新增本地发版脚本，用于把 APK、版本信息和升级说明联动推送到公开仓库：
+本仓库（`Sdhop-let/Edqiu-Downloader`）的发版走 **GitHub Release**：APK 作为 Release 资产上传，
+版本号与源码 tag、文档保持同步。APK 约 84MB，低于 GitHub 普通文件 100MB 限制，无需 Git LFS。
 
-`https://github.com/qiuqiu-fist/Edqiu-application-public-.git`
+> ⚠️ 历史方案已废弃：早期曾通过 `scripts/publish-github-release.ps1` 把 APK 以 Git LFS 形式
+> 推到独立公开仓库（`qiuqiu-fist/Edqiu-application-public-`）。该脚本与
+> `watch-and-publish.ps1` 仅作留存参考，不要再使用。
 
-## 推荐方式：手动发布一次版本
+## 发版步骤
 
-在项目根目录运行：
+1. **更新版本号**（`app/build.gradle.kts`）：
 
-```powershell
-.\scripts\publish-github-release.ps1
-```
+   ```kotlin
+   versionCode = 45        // 每版 +1
+   versionName = "1.6.9"
+   ```
 
-默认行为：
+2. **同步文档**（保证文档与 APK 实时一致）：
+   - `README.md` 顶部「当前版本」行与下载表；
+   - 新建 `docs/RELEASE_NOTES-<版本号>.md` 更新说明。
 
-1. 自动把 `app/build.gradle.kts` 的 `versionCode` 加 1。
-2. 自动把 `versionName` 升级一个 patch 版本，例如 `2.1.2` -> `2.1.3`。
-3. 执行 `:app:assembleDebug` 构建 APK。
-4. 将 APK 复制到公开仓库：
-   - `apk/twitter-downloader-latest.apk`
-   - `releases/v版本号/twitter-downloader-v版本号.apk`
-5. 自动生成升级文档：
-   - `docs/latest-upgrade.md`
-   - `releases/v版本号/UPGRADE.md`
-6. 自动生成 `releases/latest.json`。
-7. 自动 commit 并 push 到 GitHub。
+3. **构建**：
 
-## 指定更新说明
+   ```bash
+   JAVA_HOME="D:\AndroidDev\jdk\jdk21" ./gradlew.bat :app:assembleDebug
+   # 产物：app/build/outputs/apk/debug/app-debug.apk
+   ```
 
-```powershell
-.\scripts\publish-github-release.ps1 -ReleaseNotes "- 修复播放页返回卡顿。`n- 优化一加 15 顶部留白。"
-```
+4. **提交并打 tag**：
 
-## 指定版本升级类型
+   ```bash
+   git add -A
+   git commit -m "v1.6.9：<本版摘要>"
+   git tag v1.6.9
+   ```
 
-```powershell
-.\scripts\publish-github-release.ps1 -Bump patch
-.\scripts\publish-github-release.ps1 -Bump minor
-.\scripts\publish-github-release.ps1 -Bump major
-```
+5. **推送**（需要可访问 github.com，必要时先开代理）：
 
-## 只生成本地提交，不推送
+   ```bash
+   git push origin <分支名>
+   git push origin v1.6.9
+   ```
 
-```powershell
-.\scripts\publish-github-release.ps1 -NoPush
-```
+6. **创建 GitHub Release**（gh CLI，已 `gh auth login`）：
 
-## 可选：监听改动并自动发布
+   ```bash
+   gh release create v1.6.9 \
+     app/build/outputs/apk/debug/app-debug.apk#Edqiu-v1.6.9.apk \
+     --title "Edqiu v1.6.9" \
+     --notes-file docs/RELEASE_NOTES-1.6.9.md
+   ```
 
-如果你确实希望“改动后自动生成版本并推送”，可以运行：
+   `#` 后为资产重命名（下载到的文件名）。Release 页面即用户下载入口，
+   README 的「下载」一节指向 `releases` 页，无需改链接。
 
-```powershell
-.\scripts\watch-and-publish.ps1
-```
+## 一致性检查清单（发版前）
 
-它会监听项目文件变化，并在停止改动 120 秒后自动发布一个 patch 版本。
-
-注意：自动监听会频繁生成版本，适合最终打包阶段；日常开发更推荐使用手动发布脚本。
-
-## Git LFS 说明
-
-APK 超过 GitHub 100 MB 普通文件限制，公开仓库已使用 Git LFS 管理：
-
-- `apk/*.apk`
-- `releases/**/*.apk`
+- [ ] `app/build.gradle.kts` 的 `versionName` = 本次 Release tag（去掉 v 前缀）
+- [ ] `README.md` 版本行、`docs/RELEASE_NOTES-<版本>.md` 已就位
+- [ ] `app-debug.apk` 由**当前提交**的源码构建（提交后如无改动可直接用既有产物）
+- [ ] Release 资产名 = `Edqiu-v<版本号>.apk`
