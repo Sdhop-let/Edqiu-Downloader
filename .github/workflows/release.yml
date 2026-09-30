@@ -26,8 +26,25 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
+      - name: Install Android SDK platform 37
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" > /dev/null || true
+
       - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon
+        run: |
+          set -o pipefail
+          ./gradlew :app:assembleDebug --no-daemon 2>&1 | tee build-log.txt
+
+      - name: Push build log to ci-logs branch (diagnosis)
+        if: failure()
+        run: |
+          tail -c 300000 build-log.txt > trimmed-log.txt || true
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git checkout -B ci-logs "${{ github.sha }}"
+          mv trimmed-log.txt build-log.txt
+          git add build-log.txt
+          git commit -m "ci: build log for run ${{ github.run_id }} [skip ci]"
+          git push origin ci-logs
 
       - name: Pick newest release notes
         run: ls docs/RELEASE_NOTES-*.md | sort -V | tail -1 | xargs -I{} cp {} release-notes.md
