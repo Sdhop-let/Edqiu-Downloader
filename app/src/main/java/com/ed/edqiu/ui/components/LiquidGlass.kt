@@ -30,7 +30,7 @@ import com.ed.edqiu.ui.theme.ThemeEffects
  * 由 [com.ed.edqiu.ui.navigation.AppNav.EdqiuApp]（外层，捕获 GlassBackground + 外层 NavHost）
  * 与 [com.ed.edqiu.navigation.AppNavigation]（内层 shell，捕获页面内容）分层提供，
  * 玻璃组件从 CompositionLocal 就近取用：
- * - 底部导航栏 / 迷你播放条 → 内层 shellBackdrop（折射正下方的列表内容）
+ * - 底部导航栏 → 内层 shellBackdrop（折射正下方的列表内容）
  * - 胶囊反馈 → 外层 appBackdrop
  *
  * 玻璃组件必须位于捕获链（Modifier.layerBackdrop 节点）之外，否则会把上一帧
@@ -63,7 +63,7 @@ fun rememberRealGlassAvailable(): Boolean {
  *
  * @param shape 必须 CornerBasedShape（lens 折射要求）
  * @param blurRadius 磨砂强度；传 null（默认）时按全局「模糊强度」滑块取值
- *   （4-20dp，ThemeEffects.GlassFrostStrength），底栏/迷你播放条等所有真玻璃表面统一跟随；
+ *   （4-20dp，ThemeEffects.GlassFrostStrength），底栏等所有真玻璃表面统一跟随；
  *   特殊场景（如视频控制层需要固定观感）可显式传固定值
  * @param lensHeight 边缘折射带高度，需 ≤ 最小圆角半径
  * @param lensAmount 折射位移量

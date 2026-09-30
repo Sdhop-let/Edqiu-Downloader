@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.EaseOutCubic
 import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -13,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.systemGestureExclusion
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
@@ -160,9 +160,10 @@ fun EdqiuApp(container: AppContainer) {
                     snackbarController.observe(scope, snackbarHostState, capsuleController)
                 }
 
-                // ===== 浮层导航状态（2026-09-29 自绘跟手返回）=====
+                // ===== 浮层导航状态（2026-09-29 自绘跟手返回 / 2026-09-30 弹性滑入）=====
                 // 主界面常驻底层；详情/网盘备份/媒体备份为浮层。
-                // 右缘 30dp 内横向拖拽 → 浮层跟手右移 + 主界面卡片态（88%）跟手放大展开
+                // 打开：浮层自右弹性滑入（spring 0.8/300，带回弹），主界面 1/3 速左滑并淡出至 0.3；
+                // 关闭/右缘拖拽：浮层跟手右移，主界面同步滑回。
                 var overlayRoute by remember { mutableStateOf<String?>(null) }
                 var overlayTweetId by remember { mutableStateOf("") }
                 // 0f = 浮层全屏显示（打开态）；1f = 浮层完全屏外（关闭态）
@@ -175,10 +176,12 @@ fun EdqiuApp(container: AppContainer) {
                     overlayRoute = route
                     closeProgress = 1f
                     scope.launch {
+                        // 弹性滑入（收件箱帖子详细页过渡规格）：spring 回弹即
+                        // 「新页面滑入时带有弹性回弹」，感知时长 ≈ 350ms
                         animate(
                             initialValue = 1f,
                             targetValue = 0f,
-                            animationSpec = tween(420, easing = EaseOutCubic)
+                            animationSpec = spring(dampingRatio = 0.8f, stiffness = 300f)
                         ) { v, _ -> closeProgress = v }
                     }
                 }
@@ -217,17 +220,14 @@ fun EdqiuApp(container: AppContainer) {
                                     blurRadius = (frostStrength * frostStrength * 64f).dp
                                 ) {
                                     val p = closeProgress
-                                    // ===== 常驻主界面：返回时呈 ColorOS 桌面卡片式
-                                    // 缩小态（88%）跟手放大展开 + 圆角随手势收拢 =====
+                                    // ===== 常驻主界面：浮层打开时按过渡规格以 1/3 速向左
+                                    // 滑出并淡出（alpha 1→0.3），随右缘拖拽跟手可逆 =====
                                     Box(
                                         Modifier
                                             .fillMaxSize()
                                             .graphicsLayer {
-                                                val s = 0.88f + 0.12f * p
-                                                scaleX = s
-                                                scaleY = s
-                                                shape = RoundedCornerShape((22 * (1f - p)).dp)
-                                                clip = true
+                                                translationX = -(1f - p) * size.width / 3f
+                                                alpha = (0.3f + 0.7f * p).coerceIn(0f, 1f)
                                             }
                                     ) {
                                         AppNavigation(

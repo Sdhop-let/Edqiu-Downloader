@@ -1,8 +1,10 @@
 package com.ed.edqiu.data.repository
 
 import com.ed.edqiu.data.db.SavedLinkDao
+import com.ed.edqiu.data.metadata.CoverStore
 import com.ed.edqiu.data.metadata.MetadataFetcher
 import com.ed.edqiu.data.metadata.TweetMeta
+import android.content.Context
 import android.util.Log
 import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.data.model.ProxySettings
@@ -21,7 +23,9 @@ class SavedLinkRepository(
     private val metadataFetcher: MetadataFetcher,
     private val downloaderClient: DownloaderClient,
     private val linkHistoryRepository: LinkHistoryRepository,
-    private val metadataScope: CoroutineScope? = null
+    private val metadataScope: CoroutineScope? = null,
+    /** 传入时启用封面本地落盘（分享保存当场存预览图，v1.6.8）；null = 关闭（测试兜底）。 */
+    private val appContext: Context? = null
 ) {
 
     fun observeAll(): Flow<List<SavedLink>> = dao.observeAll()
@@ -285,6 +289,34 @@ class SavedLinkRepository(
     }
 
     /**
+     * 存量封面回填（2026-09-30 v1.6.8）：历史入库时只存了远程封面 URL 的记录，
+     * 补一轮「下载到本地 + 落库本地路径」，让旧条目同样免二次联网同步。
+     * 内部不做节流——由调用方（后台同步 Worker / 收件箱刷新）控制频率，每轮限量。
+     */
+    suspend fun backfillLocalCovers(limit: Int = 8) {
+        val context = appContext ?: return
+        dao.getAllSnapshot()
+            .asSequence()
+            .filter { it.status != LinkStatus.DELETED }
+            .filter { it.thumbnailUrl?.startsWith("http") == true }
+            .filter { CoverStore.localCoverPath(context, it.tweetId) == null }
+            .take(limit)
+            .forEach { link ->
+                CoverStore.ensureLocalCover(context, link.tweetId, link.thumbnailUrl)?.let { local ->
+                    dao.applyMeta(
+                        tweetId = link.tweetId,
+                        authorId = null,
+                        authorName = null,
+                        caption = null,
+                        thumbnailUrl = local,
+                        avatarUrl = null,
+                        authorBio = null
+                    )
+                }
+            }
+    }
+
+    /**
      * 清理**已修复 bug 期间**残留的错误数据：旧版本下载器曾用
      * `startActivity(自身 MainActivity)` 触发下载，因 applicationId 与 namespace
      * 不一致而抛 `Unable to find explicit activity class {com.ed.edqiu/com.ed.edqiu.MainActivity}`，
@@ -314,12 +346,20 @@ class SavedLinkRepository(
         val link = dao.getByTweetId(tweetId) ?: return false
         val meta = runCatching { metadataFetcher.fetchFromTwitter(tweetId) }.getOrNull()
             ?: return false
+        // 2026-09-30 v1.6.8 封面同步落盘：分享保存当场把预览图下载到本地，
+        // 落库本地路径——收件箱/媒体库下次进入直接读文件渲染，离线可见、
+        // 不再触发「二次同步预览图」。失败回退远程 URL（coverStore 内部 5s 超时，
+        // 不吃满 CaptureIntentActivity 的 8s 元数据等待窗口）
+        val remoteThumb = meta.thumbnailUrl ?: link.thumbnailUrl
+        val localThumb = if (remoteThumb?.startsWith("http") == true) {
+            appContext?.let { CoverStore.ensureLocalCover(it, tweetId, remoteThumb) }
+        } else null
         dao.applyMeta(
             tweetId = tweetId,
             authorId = meta.authorId ?: link.authorId,
             authorName = meta.authorName ?: link.authorName,
             caption = meta.caption ?: link.caption,
-            thumbnailUrl = meta.thumbnailUrl ?: link.thumbnailUrl,
+            thumbnailUrl = localThumb ?: remoteThumb ?: link.thumbnailUrl,
             avatarUrl = meta.avatarUrl ?: link.avatarUrl,
             authorBio = meta.authorBio ?: link.authorBio
         )

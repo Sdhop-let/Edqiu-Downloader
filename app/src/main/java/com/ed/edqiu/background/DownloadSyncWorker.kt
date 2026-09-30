@@ -29,6 +29,9 @@ class DownloadSyncWorker(
             container.savedLinkRepository.refreshStatuses(monitorUri)
             container.savedLinkRepository.importScannedDownloads(monitorUri)
             container.savedLinkRepository.retryMissingMetadata()
+            // 2026-09-30 v1.6.8：存量条目封面补落盘（每轮 ≤8 条），
+            // 旧记录从远程 URL 升级为本地路径，避免下次进入再联网同步预览图
+            container.savedLinkRepository.backfillLocalCovers()
             // 后台同步顺带恢复上次进程结束后遗留的中断下载任务
             val recovered = container.downloadTaskRepo.recoverInterruptedTasks()
             recovered.forEach { DownloadTaskBus.add(it) }

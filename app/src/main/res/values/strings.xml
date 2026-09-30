@@ -4,4 +4,5 @@
     <string name="capture_activity_label">保存到 Edqiu</string>
     <string name="share_shortcut_save_link">保存链接</string>
     <string name="share_shortcut_save_link_long">保存链接到 Edqiu</string>
+    <string name="splash_titanic_title">Edqiu Download</string>
 </resources>

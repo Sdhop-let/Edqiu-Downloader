@@ -57,12 +57,14 @@
         android:theme="@style/Theme.Edqiu"
         tools:targetApi="31">
 
+        <!-- Titanic 开屏动画（2026-09-30）：LAUNCHER 入口，3s 后进 MainActivity；
+             shortcuts meta-data 必须挂在 LAUNCHER activity 上，随入口一并迁来 -->
         <activity
-            android:name=".MainActivity"
+            android:name=".SplashActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="true"
             android:screenOrientation="portrait"
-            android:theme="@style/Theme.Edqiu">
+            android:theme="@style/Theme.Edqiu.Splash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -71,6 +73,13 @@
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
         </activity>
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Edqiu" />
 
         <activity
             android:name=".capture.CaptureIntentActivity"
