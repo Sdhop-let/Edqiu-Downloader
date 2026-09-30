@@ -46,6 +46,10 @@ jobs:
           git commit -m "ci: build log for run ${{ github.run_id }} [skip ci]"
           git push origin ci-logs
 
+      - name: Show build log tail in run summary (public diagnosis)
+        if: failure()
+        run: tail -120 build-log.txt >> "$GITHUB_STEP_SUMMARY" || true
+
       - name: Pick newest release notes
         run: ls docs/RELEASE_NOTES-*.md | sort -V | tail -1 | xargs -I{} cp {} release-notes.md
 
