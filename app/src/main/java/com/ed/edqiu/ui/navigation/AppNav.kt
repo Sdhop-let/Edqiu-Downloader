@@ -231,6 +231,8 @@ fun EdqiuApp(container: AppContainer) {
                                             }
                                     ) {
                                         AppNavigation(
+                                            // 2026-10：播放器操作反馈接入全局胶囊控制器
+                                            onFeedback = { kind, text -> capsuleController.show(kind, text) },
                                             inboxContent = {
                                                 val vm = viewModel<ListViewModel>(factory = factory)
                                                 ListScreen(
@@ -273,53 +275,54 @@ fun EdqiuApp(container: AppContainer) {
                                                 .fillMaxSize()
                                                 .graphicsLayer { translationX = p * size.width }
                                                 .pointerInput(route) {
-                                                    while (true) {
-                                                        var gestureWasBack = false
-                                                        var released = false
-                                                        val edge = with(density) { 30.dp.toPx() }
-                                                        val slop = with(density) { 12.dp.toPx() }
-                                                        awaitEachGesture {
-                                                            val down = awaitFirstDown(requireUnconsumed = false)
-                                                            if (down.position.x < size.width - edge) {
-                                                                // 非右缘启动：放行给子级（列表/视频滑动）
-                                                                while (true) {
-                                                                    val e = awaitPointerEvent(PointerEventPass.Main)
-                                                                    if (e.changes.all { !it.pressed }) break
-                                                                }
-                                                                return@awaitEachGesture
-                                                            }
-                                                            overlayDragging = true
-                                                            val downId = down.id
-                                                            val startClose = closeProgress
-                                                            val w = size.width.toFloat()
-                                                            var dirDecided = false
-                                                            var released = false
+                                                        while (true) {
                                                             var gestureWasBack = false
-                                                            while (true) {
-                                                                val event = awaitPointerEvent(PointerEventPass.Initial)
-                                                                val change = event.changes.firstOrNull { it.id == downId }
-                                                                if (change == null) continue
-                                                                if (!change.pressed) {
+                                                            var released = false
+                                                            val edge = with(density) { 30.dp.toPx() }
+                                                            val slop = with(density) { 12.dp.toPx() }
+                                                            awaitEachGesture {
+                                                                val down = awaitFirstDown(requireUnconsumed = false)
+                                                                if (down.position.x < size.width - edge) {
+                                                                    // 非右缘启动：放行给子级（列表/视频滑动）
+                                                                    while (true) {
+                                                                        val e = awaitPointerEvent(PointerEventPass.Main)
+                                                                        if (e.changes.all { !it.pressed }) break
+                                                                    }
+                                                                    return@awaitEachGesture
+                                                                }
+                                                                overlayDragging = true
+                                                                val downId = down.id
+                                                                val startClose = closeProgress
+                                                                val w = size.width.toFloat()
+                                                                var dirDecided = false
+                                                                // 注意：这里读写的是外层 while 块的 gestureWasBack/released，
+                                                                // 2026-10 修复：此前在内层重复声明遮蔽了外层变量，
+                                                                // 324 行结算永远读到 false，跟手拖拽关闭手势完全失效
+                                                                while (true) {
+                                                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                                    val change = event.changes.firstOrNull { it.id == downId }
+                                                                    if (change == null) continue
+                                                                    if (!change.pressed) {
+                                                                        change.consume()
+                                                                        released = true
+                                                                        break
+                                                                    }
+                                                                    val dx = change.position.x - down.position.x
+                                                                    val dy = change.position.y - down.position.y
+                                                                    if (!dirDecided) {
+                                                                        if (abs(dx) < slop && abs(dy) < slop) continue
+                                                                        dirDecided = true
+                                                                        if (abs(dy) >= abs(dx)) break
+                                                                        gestureWasBack = true
+                                                                    }
+                                                                    if (!gestureWasBack) break
+                                                                    // 横向返回：跟手驱动（向左拖 = 关闭度增加）
+                                                                    closeProgress =
+                                                                        (startClose - dx / (w * 0.62f)).coerceIn(0f, 1f)
                                                                     change.consume()
-                                                                    released = true
-                                                                    break
                                                                 }
-                                                                val dx = change.position.x - down.position.x
-                                                                val dy = change.position.y - down.position.y
-                                                                if (!dirDecided) {
-                                                                    if (abs(dx) < slop && abs(dy) < slop) continue
-                                                                    dirDecided = true
-                                                                    if (abs(dy) >= abs(dx)) break
-                                                                    gestureWasBack = true
-                                                                }
-                                                                if (!gestureWasBack) break
-                                                                // 横向返回：跟手驱动（向左拖 = 关闭度增加）
-                                                                closeProgress =
-                                                                    (startClose - dx / (w * 0.62f)).coerceIn(0f, 1f)
-                                                                change.consume()
+                                                                overlayDragging = false
                                                             }
-                                                            overlayDragging = false
-                                                        }
                                                         // 受限块外结算动画（此处可调任意 suspend）
                                                         if (gestureWasBack && released && overlayRoute != null) {
                                                             val commit = closeProgress > 0.35f

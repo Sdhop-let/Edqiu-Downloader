@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.TimeUnit
+import com.ed.edqiu.backup.http.runCatchingNotCancelled
 
 /**
  * 备份范围（网盘设置项，见 CloudBackupScreen「备份设置」）。
@@ -64,7 +65,7 @@ object BackupSettings {
 
     fun scope(context: Context, providerId: String): BackupScope {
         val name = prefs(context).getString(scopeKey(providerId), null) ?: return BackupScope.ALL
-        return runCatching { BackupScope.valueOf(name) }.getOrDefault(BackupScope.ALL)
+        return runCatchingNotCancelled { BackupScope.valueOf(name) }.getOrDefault(BackupScope.ALL)
     }
 
     fun setScope(context: Context, providerId: String, scope: BackupScope) {
@@ -103,6 +104,7 @@ object BackupScheduler {
             return
         }
         val constraints = Constraints.Builder()
+            .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
             .setRequiresBatteryNotLow(true)
             .setRequiresStorageNotLow(true)
             .build()
@@ -140,6 +142,9 @@ object BackupFiles {
     private val IMAGE_EXTS = setOf("jpg", "jpeg", "png", "webp", "gif")
     private val ALL_EXTS = VIDEO_EXTS + IMAGE_EXTS
 
+    /** SAF 暂存文件最长保留 24h（上传完成后的暂存副本由该策略兜底清理）。 */
+    private const val STAGING_MAX_AGE_MS: Long = 24 * 60 * 60 * 1000
+
     fun isBackupMedia(name: String): Boolean =
         name.substringAfterLast('.', "").lowercase() in ALL_EXTS
 
@@ -147,13 +152,13 @@ object BackupFiles {
      * 扫描监控目录下全部受支持媒体文件（视频 + 图片），供备份状态页展示。
      * 不做任何去重/账本过滤 —— 展示页需要完整列表来标识「已上传 / 未上传」。
      */
-    fun scanMediaFiles(context: Context, monitorUri: String?): List<File> =
+    fun scanMediaFiles(context: Context, monitorUri: String?): List<BackupEntry> =
         resolveFiles(context, monitorUri)
 
-    fun filterByScope(files: List<File>, scope: BackupScope): List<File> = when (scope) {
-        BackupScope.ALL -> files
-        BackupScope.VIDEO -> files.filter { it.extension.lowercase() in VIDEO_EXTS }
-        BackupScope.IMAGE -> files.filter { it.extension.lowercase() in IMAGE_EXTS }
+    fun filterByScope(entries: List<BackupEntry>, scope: BackupScope): List<BackupEntry> = when (scope) {
+        BackupScope.ALL -> entries
+        BackupScope.VIDEO -> entries.filter { it.file.extension.lowercase() in VIDEO_EXTS }
+        BackupScope.IMAGE -> entries.filter { it.file.extension.lowercase() in IMAGE_EXTS }
     }
 
     /**
@@ -171,20 +176,34 @@ object BackupFiles {
         doneTaskIds: Set<String>,
         failedTaskIds: Set<String> = emptySet(),
         ledger: BackupLedgerRepository? = null,
-    ): List<File> = withContext(Dispatchers.IO) {
+    ): List<BackupEntry> = withContext(Dispatchers.IO) {
         val raw = resolveFiles(context, monitorUri)
         filterByScope(raw, scope)
-            .filter { file ->
-                val taskId = BackupTask.computeId(providerId, file.name)
+            .filter { entry ->
+                val taskId = BackupTask.computeId(providerId, entry.remotePath)
                 if (taskId in doneTaskIds) return@filter false
                 // 已 FAILED 的历史任务不自动重传（避免每个周期把失败大文件整盘重传），由用户手动重试
                 if (taskId in failedTaskIds) return@filter false
                 // 账本增量：文件相对账本未变化（size + mtime 一致）→ 跳过
-                ledger?.isUnchanged(providerId, file.name, file) != true
+                ledger?.isUnchanged(providerId, entry.remotePath, entry.file) != true
             }
     }
 
-    private fun resolveFiles(context: Context, monitorUri: String?): List<File> {
+    /**
+     * 待备份条目：本地文件 + 统一派生的远端文件名。
+     * 2026-10 整改：远端名/任务 id 此前只取 file.name，监控目录子目录下的同名文件会互相
+     * 覆盖任务状态与云端文件。现在子目录文件派生为「目录前缀_文件名」（扁平云端布局不变），
+     * 根目录文件保持原名以兼容既有任务与账本。所有消费方（enqueue/展示/账本）必须用同一派生。
+     */
+    data class BackupEntry(val file: File, val remotePath: String)
+
+    private fun remoteNameFor(root: File, file: File): String {
+        val rel = file.parentFile?.relativeToOrNull(root)?.invariantSeparatorsPath
+        return if (rel.isNullOrBlank() || rel == ".") file.name
+        else rel.replace('/', '_') + "_" + file.name
+    }
+
+    private fun resolveFiles(context: Context, monitorUri: String?): List<BackupEntry> {
         val uri = monitorUri.orEmpty().trim()
         return when {
             uri.isBlank() || uri == DownloadMonitor.INTERNAL_MONITOR_URI ->
@@ -196,51 +215,70 @@ object BackupFiles {
         }
     }
 
-    private fun walkTree(root: File?): List<File> {
+    private fun walkTree(root: File?): List<BackupEntry> {
         if (root == null || !root.isDirectory) return emptyList()
         return root.walkTopDown()
             .filter { it.isFile && isBackupMedia(it.name) }
+            .map { BackupEntry(it, remoteNameFor(root, it)) }
             .toList()
     }
 
     /** SAF 目录：把媒体文件复制到 cache 暂存区后返回本地 File。 */
-    private fun walkSafToCache(context: Context, treeUri: String): List<File> {
+    private fun walkSafToCache(context: Context, treeUri: String): List<BackupEntry> {
         val tree = DocumentFile.fromTreeUri(context, Uri.parse(treeUri)) ?: return emptyList()
         val staging = File(context.cacheDir, "backup_staging").apply { mkdirs() }
-        val result = mutableListOf<File>()
+        // 2026-10 整改：暂存区此前从不清理，持续占用空间——清理 24h 以上的陈旧暂存文件
+        val staleCutoff = System.currentTimeMillis() - STAGING_MAX_AGE_MS
+        staging.listFiles()?.forEach { stale ->
+            if (stale.isFile && stale.lastModified() < staleCutoff) {
+                stale.delete()
+            }
+        }
+        val result = mutableListOf<BackupEntry>()
         tree.listFiles().forEach { child ->
             if (child.isDirectory) {
-                result += walkSafDir(context, child, staging)
+                result += walkSafDir(context, child, staging, "")
             } else if (child.isFile && isBackupMedia(child.name.orEmpty())) {
-                copySafFile(context, child, staging)?.let { result += it }
+                copySafFile(context, child, staging, "")?.let { result += it }
             }
         }
         return result
     }
 
-    private fun walkSafDir(context: Context, dir: DocumentFile, staging: File): List<File> {
-        val result = mutableListOf<File>()
+    private fun walkSafDir(context: Context, dir: DocumentFile, staging: File, relDir: String): List<BackupEntry> {
+        val nextRel = if (relDir.isBlank()) dir.name.orEmpty() else relDir + "/" + dir.name.orEmpty()
+        val result = mutableListOf<BackupEntry>()
         dir.listFiles().forEach { child ->
             when {
-                child.isDirectory -> result += walkSafDir(context, child, staging)
+                child.isDirectory -> result += walkSafDir(context, child, staging, nextRel)
                 child.isFile && isBackupMedia(child.name.orEmpty()) ->
-                    copySafFile(context, child, staging)?.let { result += it }
+                    copySafFile(context, child, staging, nextRel)?.let { result += it }
             }
         }
         return result
     }
 
-    private fun copySafFile(context: Context, child: DocumentFile, staging: File): File? {
+    private fun copySafFile(context: Context, child: DocumentFile, staging: File, relDir: String): BackupEntry? {
         val name = child.name ?: return null
-        val target = File(staging, name)
+        // 暂存文件名与远端名一致：子目录前缀化，避免不同子目录同名文件在暂存区互相覆盖
+        val prefix = if (relDir.isBlank()) "" else relDir.replace('/', '_') + "_"
+        val target = File(staging, prefix + name)
         if (!target.exists() || target.length() != child.length()) {
-            runCatching {
+            runCatchingNotCancelled {
                 context.contentResolver.openInputStream(child.uri)?.use { input ->
                     target.outputStream().use { input.copyTo(it) }
                 }
             }
+            // 2026-10 整改：复制中途磁盘满/Provider 异常会留下半截文件——旧实现只查 length>0
+            // 就上传，坏文件备到云端还记 DONE 永不重传。必须与源文件长度一致才可用。
+            if (target.exists() && target.length() != child.length()) {
+                target.delete()
+                android.util.Log.w("BackupFiles", "SAF 暂存复制不完整（源 ${child.length()}B 实得 ${target.length()}B），已丢弃: $name")
+                return null
+            }
         }
-        return target.takeIf { it.isFile && it.length() > 0L }
+        val staged = target.takeIf { it.isFile && it.length() > 0L } ?: return null
+        return BackupEntry(staged, prefix + name)
     }
 }
 
@@ -266,7 +304,13 @@ class BackupWorker(
             ?: return Result.failure()
 
         createNotificationChannel()
-        setForeground(createForegroundInfo("正在备份到 ${target.displayName}", null))
+        // 2026-10 整改：Android 12+ 后台启动前台服务受限/配额耗尽时 setForeground 直接抛
+        // ForegroundServiceStartNotAllowedException，旧实现裸调用导致本轮自动备份静默失败——
+        // 降级为"无前台通知"继续跑，并把异常记日志。
+        runCatchingNotCancelled { setForeground(createForegroundInfo("正在备份到 ${target.displayName}", null)) }
+            .onFailure {
+                android.util.Log.w("BackupWorker", "setForeground 失败，本轮备份降级为无前台通知模式继续", it)
+            }
 
         val monitorUri = container.settingsRepository.monitorDirUriFlow.first()
         val scope = BackupSettings.scope(applicationContext, targetId)
@@ -277,11 +321,18 @@ class BackupWorker(
             applicationContext, monitorUri, scope, targetId, doneTaskIds, failedTaskIds,
             container.backupLedgerRepository,
         )
+        // 2026-10 P2：抽样对账远端删除（每轮最多 20 个最久未核对任务）
+        container.backupEngine.reconcileRemoteDeletions(targetId)
         if (files.isNotEmpty()) {
             container.backupEngine.enqueue(targetId, files)
         }
 
-        val summary = container.backupEngine.runQueue { task ->
+        // 2026-10 P2：Android 15+ dataSync 前台服务有 6 小时限档——只给本轮 5h 时间预算
+        // （留 1h 余量），预算耗尽队列主动收尾，剩余任务保持 PENDING 等下轮调度
+        val summary = container.backupEngine.runQueue(
+            targetId = targetId,
+            deadlineMillis = System.currentTimeMillis() + FGS_TIME_BUDGET_MS,
+        ) { task ->
             notifyProgress(target.displayName, task)
         }
         return if (summary.isSuccess) Result.success() else Result.retry()
@@ -340,11 +391,12 @@ class BackupWorker(
             .setOnlyAlertOnce(true)
             .setProgress(100, (progress * 100).toInt(), false)
         val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        runCatching { manager.notify(NOTIFICATION_ID, builder.build()) }
+        runCatchingNotCancelled { manager.notify(NOTIFICATION_ID, builder.build()) }
     }
 
     private companion object {
         const val CHANNEL_ID = "backup_progress"
         const val NOTIFICATION_ID = 1001
+        private const val FGS_TIME_BUDGET_MS: Long = 5 * 60 * 60 * 1000L  // 5h：给 6h dataSync 限额留 1h 余量
     }
 }

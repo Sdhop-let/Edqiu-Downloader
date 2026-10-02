@@ -217,9 +217,16 @@ fun GlassPlayerControls(
                 // 图片模式：无进度概念，隐藏滑杆与时间行；仅保留操作入口
                 if (!isImageMode) {
                 // 胶囊滑杆（细化）：thumb 4dp + track 2dp 细线
+                // 2026-10 整改：拖动期间只更新本地 dragProgress（旧实现每帧直接 seek，
+                // 与 350ms 位置轮询互踩造成拖动跳帧/回跳），松手才真正 seek 一次。
+                var dragProgress by remember { mutableStateOf<Float?>(null) }
                 Slider(
-                    value = progress,
-                    onValueChange = onSeek,
+                    value = dragProgress ?: progress,
+                    onValueChange = { dragProgress = it },
+                    onValueChangeFinished = {
+                        dragProgress?.let(onSeek)
+                        dragProgress = null
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(18.dp),

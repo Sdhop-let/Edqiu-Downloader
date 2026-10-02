@@ -46,8 +46,8 @@ object MediaFileTypes {
     }
 
     fun displayLabel(type: MediaType): String = when (type) {
-        MediaType.VIDEO -> "瑙嗛"
-        MediaType.IMAGE -> "鍥剧墖"
+        MediaType.VIDEO -> "视频"
+        MediaType.IMAGE -> "图片"
     }
 }
 

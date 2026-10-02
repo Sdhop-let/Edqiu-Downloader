@@ -37,15 +37,20 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteHistory(entity: DownloadHistoryEntity, deleteLocalFile: Boolean = false) {
         viewModelScope.launch {
-            if (deleteLocalFile) {
-                val deleted = deleteLocalMediaFiles(entity.filePath)
-                if (deleted) {
-                    hiddenHistoryPreferences.unhide(entity.filePath)
+            // 2026-10 整改：文件 exists/delete 与偏好写入移出主线程（旧实现 Main 上做磁盘 IO）
+            val deleted = withContext(Dispatchers.IO) {
+                if (deleteLocalFile) {
+                    val removed = deleteLocalMediaFiles(entity.filePath)
+                    if (removed) {
+                        hiddenHistoryPreferences.unhide(entity.filePath)
+                    } else {
+                        hiddenHistoryPreferences.hide(entity.filePath)
+                    }
+                    removed
                 } else {
                     hiddenHistoryPreferences.hide(entity.filePath)
+                    false
                 }
-            } else {
-                hiddenHistoryPreferences.hide(entity.filePath)
             }
             repository.delete(entity)
         }
@@ -61,7 +66,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     com.ed.edqiu.service.PublishedAtBackfiller.backfillAfterScan(getApplication())
                 }
             }
-            onComplete("宸叉绱㈠綋鍓嶅瓨鍌ㄧ洰褰曚笅鐨勮棰戝拰鍥剧墖鏂囦欢")
+            onComplete("已检索当前存储目录下的视频和图片文件")
         }
     }
 

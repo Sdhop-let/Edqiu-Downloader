@@ -5,7 +5,12 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import com.romainpiel.titanic.library.Titanic
 import com.romainpiel.titanic.library.TitanicTextView
 
@@ -27,7 +32,25 @@ class SplashActivity : ComponentActivity() {
         tv.typeface = Typeface.createFromAsset(assets, "fonts/Satisfy-Regular.ttf")
         titanic.start(tv)
 
-        handler.postDelayed(::enterMain, SPLASH_DURATION_MS)
+        // 点击任意位置可跳过等待（不愿等的用户点一下即进主页）
+        findViewById<android.view.View>(android.R.id.content).setOnClickListener { enterMain() }
+
+        // 2026-10 UX 短板补齐：开屏"就绪即走"——保底展示 MIN_SPLASH_MS 保证品牌曝光，
+        // 引擎（yt-dlp/ffmpeg）就绪即提前进主页；就绪慢/失败则上限 SPLASH_DURATION_MS 兜底。
+        // 旧实现固定睡满 3s，引擎早就绪时纯属干等。
+        lifecycleScope.launch {
+            val start = SystemClock.elapsedRealtime()
+            val appInit = (application as? TwitterDownloaderApp)?.isInitialized
+            while (isActive && !isFinishing) {
+                val elapsed = SystemClock.elapsedRealtime() - start
+                val engineReady = appInit?.value ?: true
+                if (elapsed >= MIN_SPLASH_MS && (engineReady || elapsed >= SPLASH_DURATION_MS)) {
+                    enterMain()
+                    break
+                }
+                delay(80)
+            }
+        }
     }
 
     private fun enterMain() {
@@ -43,6 +66,9 @@ class SplashActivity : ComponentActivity() {
     }
 
     private companion object {
+        /** 上限：引擎未就绪/初始化失败时的兜底展示时长 */
         const val SPLASH_DURATION_MS = 3000L
+        /** 保底展示时长：品牌曝光不打折（就绪即走只提前、不缩短保底） */
+        const val MIN_SPLASH_MS = 1500L
     }
 }

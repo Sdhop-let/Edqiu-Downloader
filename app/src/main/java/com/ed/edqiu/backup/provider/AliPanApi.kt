@@ -9,6 +9,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.coroutines.CancellationException
 
 /**
  * 阿里云盘 openapi 客户端（openapi.alipan.com）。
@@ -54,6 +55,8 @@ class AliPanApi(
             }.toString()
             val res = HttpClient.postJson(OAUTH_TOKEN_URL, body).getOrThrow()
             Result.success(json.decodeFromJsonElement(AliTokenBundle.serializer(), res))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(BackupException("刷新阿里云盘令牌失败：${e.toUserMessage()}", e))
         }
@@ -64,6 +67,8 @@ class AliPanApi(
         return try {
             val res = HttpClient.postJson(GET_DRIVE_INFO_URL, "{}", bearer(accessToken)).getOrThrow()
             Result.success(json.decodeFromJsonElement(AliDriveInfo.serializer(), res))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(BackupException("获取阿里云盘空间信息失败：${e.toUserMessage()}", e))
         }
@@ -117,6 +122,8 @@ class AliPanApi(
             }.toString()
             val res = HttpClient.postJson(CREATE_FILE_URL, body, bearer(accessToken)).getOrThrow()
             Result.success(json.decodeFromJsonElement(AliCreateFileResult.serializer(), res))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(BackupException("创建阿里云盘文件失败：${e.toUserMessage()}", e))
         }
@@ -139,6 +146,8 @@ class AliPanApi(
             }.toString()
             val res = HttpClient.postJson(CREATE_FILE_URL, body, bearer(accessToken)).getOrThrow()
             Result.success(json.decodeFromJsonElement(AliFileItem.serializer(), res))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(BackupException("创建阿里云盘备份目录失败：${e.toUserMessage()}", e))
         }
@@ -156,6 +165,8 @@ class AliPanApi(
             }
             HttpClient.putStream(uploadUrl, bytes, headers = emptyMap(), progress = progress).getOrThrow()
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(BackupException("上传阿里云盘分片失败：${e.toUserMessage()}", e))
         }
@@ -177,6 +188,8 @@ class AliPanApi(
             val res = HttpClient.postJson(LIST_UPLOADED_PARTS_URL, body, bearer(accessToken)).getOrThrow()
             val response = json.decodeFromJsonElement(AliUploadedPartsResponse.serializer(), res)
             Result.success(response.parts)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(BackupException("查询阿里云盘已上传分片失败：${e.toUserMessage()}", e))
         }
@@ -197,6 +210,8 @@ class AliPanApi(
             }.toString()
             HttpClient.postJson(COMPLETE_FILE_URL, body, bearer(accessToken)).getOrThrow()
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(BackupException("完成阿里云盘上传失败：${e.toUserMessage()}", e))
         }
@@ -211,14 +226,27 @@ class AliPanApi(
     ): Result<List<AliFileItem>> {
         return try {
             require(limit in 1..MAX_LIST_LIMIT) { "limit 超出范围" }
-            val body = buildJsonObject {
-                put("drive_id", driveId)
-                put("parent_file_id", parentFileId)
-                put("limit", limit)
-            }.toString()
-            val res = HttpClient.postJson(LIST_FILES_URL, body, bearer(accessToken)).getOrThrow()
-            val response = json.decodeFromJsonElement(AliFileListResponse.serializer(), res)
-            Result.success(response.items)
+            // 2026-10 整改：next_marker 翻页——旧实现固定单页 200 条，大目录 exists() 假阴性
+            val all = mutableListOf<AliFileItem>()
+            var marker = ""
+            var pages = 0
+            while (pages < MAX_LIST_PAGES) {
+                val body = buildJsonObject {
+                    put("drive_id", driveId)
+                    put("parent_file_id", parentFileId)
+                    put("limit", limit)
+                    if (marker.isNotBlank()) put("marker", marker)
+                }.toString()
+                val res = HttpClient.postJson(LIST_FILES_URL, body, bearer(accessToken)).getOrThrow()
+                val response = json.decodeFromJsonElement(AliFileListResponse.serializer(), res)
+                all += response.items
+                pages++
+                marker = response.nextMarker
+                if (marker.isBlank()) break
+            }
+            Result.success(all)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(BackupException("获取阿里云盘目录列表失败：${e.toUserMessage()}", e))
         }
@@ -237,6 +265,8 @@ class AliPanApi(
         const val LIST_FILES_URL = "$BASE_URL/adrive/v1.0/openFile/list"
         const val AUTH_HEADER = "Authorization"
         const val MAX_LIST_LIMIT = 200
+        /** 目录分页上限：200/页 × 10 页 = 2000 条，防御性封顶。 */
+        private const val MAX_LIST_PAGES = 10
     }
 }
 

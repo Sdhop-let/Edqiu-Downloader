@@ -1,10 +1,20 @@
 ﻿package com.ed.edqiu.data.database
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.ed.edqiu.data.model.MediaType
 
-@Entity(tableName = "download_history")
+// 2026-10 整改：补齐热查询索引（pHash 补算/发布时间回填/URL 配对等周期 Worker 反复全表扫描）
+@Entity(
+    tableName = "download_history",
+    indices = [
+        Index(value = ["filePath"]),
+        Index(value = ["url"]),
+        Index(value = ["publishedAt"]),
+        Index(value = ["phash"]),
+    ]
+)
 data class DownloadHistoryEntity(
     @PrimaryKey
     val id: String,

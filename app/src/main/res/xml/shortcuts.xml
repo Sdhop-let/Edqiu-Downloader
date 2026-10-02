@@ -11,9 +11,12 @@
         android:icon="@mipmap/ic_launcher"
         android:shortcutShortLabel="@string/share_shortcut_save_link"
         android:shortcutLongLabel="@string/share_shortcut_save_link_long">
+        <!-- 2026-10 整改：静态 shortcut 从桌面长按进入时系统不会注入 EXTRA_TEXT，
+             旧目标 CaptureIntentActivity 拿不到文本直接 finish（表现为点击无反应）。
+             改为直接打开主界面（收件箱），由用户粘贴链接保存。 -->
         <intent
-            android:action="android.intent.action.SEND"
-            android:targetClass="com.ed.edqiu.capture.CaptureIntentActivity"
+            android:action="android.intent.action.MAIN"
+            android:targetClass="com.ed.edqiu.MainActivity"
             android:targetPackage="com.ed.Edqiu" />
         <categories android:name="com.ed.edqiu.category.SHARE_LINK" />
     </shortcut>

@@ -68,6 +68,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -103,6 +104,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 private val Accent = Color(0xFF0F766E)
@@ -232,14 +234,22 @@ fun SettingsScreen(
         autoBackupDays = cloudSyncPreferences.autoBackupDays
     }
 
-    LaunchedEffect(proxyEnabled, proxyHost, proxyPort) {
-        proxyPreferences.saveProxySettings(
-            ProxySettings(
-                enabled = proxyEnabled,
-                host = proxyHost.ifBlank { "127.0.0.1" },
-                port = proxyPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 7890
-            )
-        )
+    // 2026-10 P2 整改：旧实现 LaunchedEffect(keys) 每敲一键取消重launch并写一次盘，
+    // 引擎可能读到输入一半的代理地址；改为 snapshotFlow + 600ms 去抖，停手才落盘。
+    LaunchedEffect(proxyType) {
+        snapshotFlow { Triple(proxyEnabled, proxyHost, proxyPort) }
+            .debounce(600)
+            .collect { (enabled, host, port) ->
+                proxyPreferences.saveProxySettings(
+                    ProxySettings(
+                        enabled = enabled,
+                        host = host.ifBlank { "127.0.0.1" },
+                        port = port.toIntOrNull()?.takeIf { it in 1..65535 } ?: 7890,
+                        // 必须回带当前 type：旧实现漏传导致已存 SOCKS5 被默认值 HTTP 静默覆盖
+                        type = proxyType
+                    )
+                )
+            }
     }
 
     fun checkAppUpdate() {
@@ -263,26 +273,33 @@ fun SettingsScreen(
 
     fun downloadAndInstallAppUpdate(info: AppUpdateInfo) {
         if (isDownloadingAppUpdate) return
-        scope.launch {
-            isDownloadingAppUpdate = true
-            appUpdateProgress = 0f
-            AppUpdateService.downloadApk(context, info) { appUpdateProgress = it }
-                .onSuccess { apkFile ->
-                    val installStarted = AppUpdateService.installApk(context, apkFile)
+        isDownloadingAppUpdate = true
+        appUpdateProgress = 0f
+        // 2026-10 P2 整改：下载挂应用级作用域——旧实现挂 rememberCoroutineScope，离开设置页
+        // 协程被取消，APK 下完也不安装且无任何痕迹，与弹窗"后台进行"的文案矛盾。
+        val appContext = context.applicationContext
+        val launchScope = (appContext as? com.ed.edqiu.EdqiuApplication)?.container?.globalIoScope ?: scope
+        launchScope.launch {
+            val result = AppUpdateService.downloadApk(appContext, info) { progress ->
+                appUpdateProgress = progress // Compose snapshot 跨线程写安全；页面销毁后写为无害 no-op
+            }
+            withContext(Dispatchers.Main) {
+                result.onSuccess { apkFile ->
+                    val installStarted = AppUpdateService.installApk(appContext, apkFile)
                     appUpdateInfo = null
                     inlineFeedback = FeedbackMessage(
                         if (installStarted) "系统安装器已打开，请按提示覆盖安装"
-                        else "请允许安装未知来源应用后，再点击立即更新",
+                        else "下载完成，请允许安装未知来源应用后再试",
                         if (installStarted) FeedbackKind.SUCCESS else FeedbackKind.NEUTRAL
                     )
-                }
-                .onFailure { e ->
+                }.onFailure { e ->
                     inlineFeedback = FeedbackMessage(
                         "下载新版本失败：${e.message ?: "网络异常"}",
                         FeedbackKind.ERROR
                     )
                 }
-            isDownloadingAppUpdate = false
+                isDownloadingAppUpdate = false
+            }
         }
     }
 
@@ -604,6 +621,8 @@ fun SettingsScreen(
                             shape = RoundedCornerShape(16.dp),
                             onClick = {
                                 cookiePreferences.clearCookies()
+                                // 2026-10：同步删除落盘的明文 cookie 文件（auth_token/ct0）
+                                com.ed.edqiu.service.YoutubeDLService.cleanupCookieFiles(context)
                                 authToken = ""
                                 ct0 = ""
                                 cookiesConfigured = false
@@ -716,10 +735,8 @@ fun SettingsScreen(
                         Spacer(Modifier.height(12.dp))
                         OutlinedTextField(
                             value = webDavServerUrl,
-                            onValueChange = {
-                                webDavServerUrl = it
-                                cloudSyncPreferences.serverUrl = it
-                            },
+                            // 2026-10 P1 整改：不再逐字符落盘（半成品 URL 会被周期自动备份读到）
+                            onValueChange = { webDavServerUrl = it },
                             label = { Text("WebDAV 地址") },
                             placeholder = { Text("https://example.com/dav") },
                             modifier = Modifier.fillMaxWidth(),
@@ -730,10 +747,7 @@ fun SettingsScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
                                 value = webDavUsername,
-                                onValueChange = {
-                                    webDavUsername = it
-                                    cloudSyncPreferences.username = it
-                                },
+                                onValueChange = { webDavUsername = it },
                                 label = { Text("账号") },
                                 modifier = Modifier.weight(1f),
                                 singleLine = true,
@@ -741,10 +755,7 @@ fun SettingsScreen(
                             )
                             OutlinedTextField(
                                 value = webDavPassword,
-                                onValueChange = {
-                                    webDavPassword = it
-                                    cloudSyncPreferences.password = it
-                                },
+                                onValueChange = { webDavPassword = it },
                                 label = { Text("密码") },
                                 modifier = Modifier.weight(1f),
                                 singleLine = true,
@@ -755,10 +766,7 @@ fun SettingsScreen(
                         Spacer(Modifier.height(8.dp))
                         OutlinedTextField(
                             value = webDavRemotePath,
-                            onValueChange = {
-                                webDavRemotePath = it
-                                cloudSyncPreferences.remotePath = it
-                            },
+                            onValueChange = { webDavRemotePath = it },
                             label = { Text("远程目录") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,

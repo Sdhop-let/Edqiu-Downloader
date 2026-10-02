@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API 31 以下全量备份的排除清单（语义同 data_extraction_rules.xml）。 -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="backup_credentials.xml" />
+    <exclude domain="sharedpref" path="twitter_cookies.xml" />
+    <exclude domain="sharedpref" path="cloud_sync.xml" />
+    <exclude domain="sharedpref" path="download_path.xml" />
+</full-backup-content>

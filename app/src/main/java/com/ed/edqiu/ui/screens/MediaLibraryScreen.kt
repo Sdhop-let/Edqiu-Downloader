@@ -52,11 +52,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -257,8 +260,11 @@ fun MediaLibraryScreen(
         }
     }
 
-    // P1-4① 重复检测（2026-09-15 批次3）：pHash 汉明距离 ≤4 聚组（纯内存计算）
-    val duplicateGroupsList = remember(allItems) { duplicateGroups(allItems) }
+    // P1-4① 重复检测（2026-09-15 批次3）：pHash 汉明距离 ≤4 聚组
+    // 2026-10 整改：O(n²) 计算移出主线程（remember 直算，几百条起掉帧），异步产出+自动重算
+    val duplicateGroupsList by produceState(emptyList(), allItems) {
+        value = withContext(Dispatchers.Default) { duplicateGroups(allItems) }
+    }
 
     // 同作者序号：为每条媒体分配它在作者内的递增序号；作者总数 ≥2 时显示徽章（区分重复视频）
     val authorSeq: Map<String, Int> = remember(items) {

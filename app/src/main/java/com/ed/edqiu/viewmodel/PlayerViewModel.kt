@@ -118,8 +118,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 // 停止 350ms 高频 update，消除播放器 UI 空转重组（图片查看稳定性）
                 if (!playerReleased && exoPlayer.playWhenReady) {
                     syncPlaybackPosition()
+                    delay(350L)
+                } else {
+                    // 2026-10 整改：空闲态降频（350ms→2s）——进程常驻循环不再持续唤醒 CPU
+                    delay(2_000L)
                 }
-                delay(350L)
             }
         }
     }

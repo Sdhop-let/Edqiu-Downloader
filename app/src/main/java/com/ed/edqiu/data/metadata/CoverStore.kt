@@ -3,6 +3,7 @@ package com.ed.edqiu.data.metadata
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
@@ -24,6 +25,10 @@ import java.net.URL
 object CoverStore {
 
     private const val TAG = "CoverStore"
+
+    /** 下载单飞锁（2026-10 整改）：分享入库与媒体库补拉并发时，两个协程会交叉写同一个
+     *  .part 文件，损坏文件被 rename 成正式封面长期缓存。封面量小频低，全局串行即可。 */
+    private val fetchMutex = kotlinx.coroutines.sync.Mutex()
     private const val DIR_NAME = "covers"
     private val KNOWN_EXTENSIONS = listOf("jpg", "jpeg", "png", "webp", "gif")
     /** localCoverPath 的探测顺序（jpeg 归一为 jpg 存储，这里仍保留 jpeg 兼容旧文件）。 */
@@ -56,7 +61,8 @@ object CoverStore {
         if (tweetId.isBlank()) return null
         val appContext = context.applicationContext
         return withTimeoutOrNull(timeoutMs) {
-            withContext(Dispatchers.IO) {
+            fetchMutex.withLock {
+                withContext(Dispatchers.IO) {
                 localCoverPath(appContext, tweetId)?.let { return@withContext it }
                 if (remoteUrl.isNullOrBlank() || !remoteUrl.startsWith("http")) {
                     return@withContext null
@@ -98,6 +104,7 @@ object CoverStore {
                     Log.w(TAG, "cover download failed for $tweetId: ${it.message}")
                     part.delete()
                 }.getOrNull()
+                }
             }
         }
     }

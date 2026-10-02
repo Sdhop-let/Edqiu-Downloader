@@ -12,7 +12,7 @@ import com.ed.edqiu.data.model.MediaType
 
 @Database(
     entities = [DownloadHistoryEntity::class, DownloadTaskEntity::class, SubscriptionEntity::class],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 @TypeConverters(AppDatabase.Converters::class)
@@ -196,6 +196,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 2026-10 整改（v10）：download_history 补热查询索引——pHash 补算（phash IS NULL）、
+         * 发布时间回填（publishedAt IS NULL）、URL/路径配对（url、filePath）此前全表扫描，
+         * 目录扫描/媒体库进入/各周期 Worker 每轮都触发。
+         */
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("CREATE INDEX IF NOT EXISTS `index_download_history_filePath` ON `download_history` (`filePath`)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS `index_download_history_url` ON `download_history` (`url`)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS `index_download_history_publishedAt` ON `download_history` (`publishedAt`)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS `index_download_history_phash` ON `download_history` (`phash`)")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -205,9 +219,14 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                    MIGRATION_9_10
                 )
-                .fallbackToDestructiveMigration()
+                // 2026-10 安全整改：移除 fallbackToDestructiveMigration()——
+                // 升级路径 schema 漂移时它会把整库（下载历史/任务/订阅）静默删除重建。
+                // 1→9 迁移链完整（含 5_6 重建 download_history 处理旧残留列），升级无需兜底；
+                // 仅降级安装（回滚 APK）时允许重建，与 EdqiuDatabase 政策保持一致。
+                .fallbackToDestructiveMigrationOnDowngrade()
                 .build().also { INSTANCE = it }
             }
         }

@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 2026-10 安全收敛：旧配置把外部存储整根/私有根全暴露（path="."）。
+     实际 getUriForFile 仅三类用途：
+       1. 更新 APK：cacheDir/updates（cache-path）
+       2. 媒体分享/打开：getExternalFilesDir(DIRECTORY_DOWNLOADS)（external-files-path）
+       3. 媒体分享/打开：filesDir/Download（files-path 兜底，外部目录不可用时的落点） -->
 <paths>
-    <external-path name="external_files" path="." />
-    <files-path name="files" path="." />
-    <cache-path name="cache" path="." />
+    <cache-path
+        name="updates"
+        path="updates/" />
+    <external-files-path
+        name="external_downloads"
+        path="Download/" />
+    <files-path
+        name="internal_downloads"
+        path="Download/" />
 </paths>

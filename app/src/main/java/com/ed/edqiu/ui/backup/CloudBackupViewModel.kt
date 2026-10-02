@@ -369,18 +369,31 @@ class CloudBackupViewModel(
 
     // ================= 备份执行 =================
 
+    /** 立即备份防连点（2026-10）：扫描文件期间 running 仍为 false，连点会并发两个队列。 */
+    private val backupInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** 立即备份当前选中网盘（扫描 + 入队 + 串行执行，UI 实时进度）。 */
     fun backupNow() {
         val providerId = _settings.value.selectedProviderId ?: return
+        if (!backupInFlight.compareAndSet(false, true)) return
         viewModelScope.launch {
-            val target = registry.get(providerId)
+            try {
+                backupNowLocked(providerId)
+            } finally {
+                backupInFlight.set(false)
+            }
+        }
+    }
+
+    private suspend fun backupNowLocked(providerId: String) {
+        val target = registry.get(providerId)
             if (target == null) {
                 postMessage("未找到备份目标", FeedbackKind.ERROR)
-                return@launch
+                return
             }
             if (!runCatching { target.isConfigured() }.getOrDefault(false)) {
                 postMessage("「${target.displayName}」尚未配置，请先授权", FeedbackKind.NEUTRAL)
-                return@launch
+                return
             }
             val scope = BackupSettings.scope(context, providerId)
             val tasks = taskStore.load().filter { it.targetId == providerId }
@@ -390,10 +403,10 @@ class CloudBackupViewModel(
             val files = BackupFiles.collect(context, monitorUri, scope, providerId, doneTaskIds, failedTaskIds, ledgerRepository)
             if (files.isEmpty()) {
                 postMessage("没有需要备份的新文件", FeedbackKind.NEUTRAL)
-                return@launch
+                return
             }
             engine.enqueue(providerId, files)
-            engine.runQueue().fold(
+            engine.runQueue(targetId = providerId).fold(
                 onSuccess = { summary ->
                     // 有失败项时用中性图标提示注意，全成功才显示绿色对勾
                     postMessage(
@@ -405,7 +418,6 @@ class CloudBackupViewModel(
                     postMessage("备份失败：${error.message ?: "未知错误"}", FeedbackKind.ERROR)
                 },
             )
-        }
     }
 
     /** 重试当前选中网盘的全部失败任务。 */
@@ -413,7 +425,7 @@ class CloudBackupViewModel(
         val providerId = _settings.value.selectedProviderId ?: return
         viewModelScope.launch {
             engine.retryFailed(providerId)
-            engine.runQueue().fold(
+            engine.runQueue(targetId = providerId).fold(
                 onSuccess = { summary ->
                     postMessage(
                         "重试完成：成功 ${summary.succeeded}，失败 ${summary.failed}，跳过 ${summary.skipped}",

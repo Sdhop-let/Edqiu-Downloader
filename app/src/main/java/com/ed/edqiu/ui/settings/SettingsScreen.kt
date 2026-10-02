@@ -53,7 +53,6 @@ import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Style
-import androidx.compose.material.icons.outlined.SwipeRight
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Vibration
 import androidx.compose.material.icons.outlined.Visibility
@@ -924,7 +923,8 @@ private fun ThemeSettingsSection(
     val liquidGlass by settings.liquidGlassEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
     val highRefreshRate by settings.highRefreshRateFlow.collectAsStateWithLifecycle(initialValue = true)
     val hapticStrength by settings.hapticStrengthFlow.collectAsStateWithLifecycle(initialValue = 2)
-    val predictiveBack by settings.predictiveBackFlow.collectAsStateWithLifecycle(initialValue = true)
+    // 2026-10：「返回手势」假开关已移除（predictiveBackFlow 全工程无消费者，
+    // manifest enableOnBackInvokedCallback=false 固定关闭），不再读取该配置。
     val displayScale by settings.displayScaleFlow.collectAsStateWithLifecycle(initialValue = 0.8f)
     val accent = Color(accentColor)
 
@@ -1091,17 +1091,9 @@ private fun ThemeSettingsSection(
             title = "手势与触感",
             description = "返回手势的跟手动画与按压触感反馈"
         ) {
-            SettingItemRow(
-                icon = Icons.Outlined.SwipeRight,
-                title = "返回手势",
-                subtitle = "返回时播放丝滑深度过渡动画并停留在应用内；关闭后返回由系统接管（可能直接退出）",
-                trailing = {
-                    DynamicSwitch(
-                        checked = predictiveBack,
-                        onCheckedChange = { scope.launch { settings.setPredictiveBack(it) } }
-                    )
-                }
-            )
+            // 2026-10 整改：移除「返回手势」假开关——manifest 已固定 enableOnBackInvokedCallback=false
+            //（ColorOS 17 上真手指侧滑必然叠加系统缩放预览，App 侧无法抑制），predictiveBackFlow
+            // 全工程无消费者，开关实际不产生任何效果，保留只会误导用户。
             ThinDivider()
             // 按压震动档位（2026-09-14）：无感按压的震动强度可调
             // v1.4.12：DropdownMenu 改行内分段控件 —— 下拉菜单空间不足时向上展开会

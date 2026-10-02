@@ -87,7 +87,14 @@ interface DownloadHistoryDao {
     suspend fun getSingleByUrl(url: String): DownloadHistoryEntity?
     @Query("SELECT DISTINCT uploader FROM download_history WHERE uploader IS NOT NULL AND uploader != '' ORDER BY completedAt DESC LIMIT :limit")
     suspend fun getRecentUploaders(limit: Int): List<String>
-    @Query("SELECT * FROM download_history WHERE id LIKE :tweetIdPrefix || '\\_%' OR url LIKE '%' || :tweetId LIMIT 1")
+    // 2026-10 整改：① id LIKE 的 \_ 必须带 ESCAPE '\' 才表示字面下划线（旧写法无 ESCAPE，
+    // \_ 被当作"反斜杠+单字符通配"，该分支永不命中）；② url 匹配改为按 /status/{id} 段匹配，
+    // 覆盖 .../photo/1、.../video/1 等带后缀的多媒体 URL（旧写法要求 URL 以 tweetId 结尾）；
+    // ③ 补 ORDER BY 使 LIMIT 1 结果确定。
+    @Query(
+        "SELECT * FROM download_history WHERE id LIKE :tweetIdPrefix || '\\_%' ESCAPE '\\' " +
+            "OR url LIKE '%/status/' || :tweetId || '%' ORDER BY completedAt DESC LIMIT 1"
+    )
     suspend fun getByTweetId(tweetId: String, tweetIdPrefix: String): DownloadHistoryEntity?
 
     @Query("SELECT filePath FROM download_history")

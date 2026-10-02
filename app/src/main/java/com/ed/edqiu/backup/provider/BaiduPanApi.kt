@@ -19,6 +19,7 @@ import okhttp3.MultipartBody
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import com.ed.edqiu.backup.http.runCatchingNotCancelled
 
 /**
  * 百度开放平台 / PCS API 封装（纯 HTTP 客户端，不持有状态）。
@@ -49,7 +50,7 @@ class BaiduPanApi {
      * @param clientId 百度开放平台应用 client_id
      */
     suspend fun requestDeviceCode(clientId: String): Result<DeviceCodeResponse> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(clientId.isNotBlank()) { "client_id 不能为空" }
             val form = FormBody.Builder()
                 .add("client_id", clientId)
@@ -81,7 +82,7 @@ class BaiduPanApi {
         clientSecret: String,
         deviceCode: String,
     ): Result<BaiduTokenResponse> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(clientId.isNotBlank()) { "client_id 不能为空" }
             require(deviceCode.isNotBlank()) { "device_code 不能为空" }
             val form = FormBody.Builder()
@@ -105,7 +106,7 @@ class BaiduPanApi {
         clientSecret: String,
         refreshToken: String,
     ): Result<BaiduTokenResponse> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(clientId.isNotBlank()) { "client_id 不能为空" }
             require(refreshToken.isNotBlank()) { "refresh_token 不能为空" }
             val form = FormBody.Builder()
@@ -134,7 +135,7 @@ class BaiduPanApi {
         size: Long,
         blockList: List<String>,
     ): Result<PrecreateResponse> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(accessToken.isNotBlank()) { "access_token 不能为空" }
             require(path.startsWith("/apps/")) { "百度网盘路径必须以 /apps/ 开头" }
             require(size >= 0L) { "文件大小不能为负" }
@@ -168,7 +169,7 @@ class BaiduPanApi {
         partSeq: Int,
         bytes: ByteArray,
     ): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(accessToken.isNotBlank()) { "access_token 不能为空" }
             require(uploadId.isNotBlank()) { "uploadid 不能为空" }
             require(partSeq >= 0) { "分片序号不能为负" }
@@ -216,7 +217,7 @@ class BaiduPanApi {
         uploadId: String,
         blockList: List<String>,
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(accessToken.isNotBlank()) { "access_token 不能为空" }
             require(uploadId.isNotBlank()) { "uploadid 不能为空" }
             val blockListJson = blockList.joinToString(prefix = "[", postfix = "]", separator = ",") { "\"$it\"" }
@@ -235,7 +236,7 @@ class BaiduPanApi {
 
     /** 创建目录（确保 /apps/Edqiu 存在用）。 */
     suspend fun createDir(accessToken: String, path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(accessToken.isNotBlank()) { "access_token 不能为空" }
             require(path.startsWith("/apps/")) { "百度网盘路径必须以 /apps/ 开头" }
             val form = FormBody.Builder()
@@ -257,7 +258,7 @@ class BaiduPanApi {
      * @return 存在时返回首个条目 JSON；不存在（errno -9 / 31066）返回 null；其余错误返回 [Result.failure]
      */
     suspend fun meta(accessToken: String, path: String): Result<JsonElement?> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(accessToken.isNotBlank()) { "access_token 不能为空" }
             val url = HttpUrl.Builder()
                 .scheme("https")
@@ -291,7 +292,8 @@ class BaiduPanApi {
     }
 
     private suspend fun executeForJson(request: Request): JsonElement = withContext(Dispatchers.IO) {
-        HttpClient.client.newCall(request).execute().use { response ->
+        // 2026-10 整改：接入 HttpClient 统一频控退避（429/5xx 自动重试），此前直连无退避
+        HttpClient.executeWithBackoff { request }.use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw BackupException("百度网盘请求失败（HTTP ${response.code}）")

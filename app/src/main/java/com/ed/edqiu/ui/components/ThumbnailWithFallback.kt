@@ -30,8 +30,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
-private val localFrameCache = mutableStateMapOf<String, Bitmap>()
-private val failedLocalFrameKeys = mutableSetOf<String>()
+// 2026-10 整改：全分辨率抽帧 Bitmap 原为无上限 SnapshotStateMap，大媒体库（数百视频）
+// 直接推高内存至 OOM。改为 LruCache（48MB 上限，按 bitmap.byteCount 计量）承载实际位图；
+// frameCachePresence 作为可观察的"存在索引"驱动重组（LruCache 本身不可观察），
+// LruCache 淘汰时在 entryRemoved 回调同步移除索引，索引规模与缓存条目一致。
+private const val FRAME_CACHE_MAX_BYTES = 48 * 1024 * 1024
+
+private val frameLruCache = object : androidx.collection.LruCache<String, Bitmap>(FRAME_CACHE_MAX_BYTES) {
+    override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount.coerceAtLeast(1)
+    override fun entryRemoved(evicted: Boolean, key: String, oldValue: Bitmap, newValue: Bitmap?) {
+        if (evicted) frameCachePresence.remove(key)
+    }
+}
+private val frameCachePresence = mutableStateMapOf<String, Unit>()
+// 抽帧失败的 key 集合：IO 线程写 / 主线程读，改为并发集合（旧 HashSet 存在并发修改风险）
+private val failedLocalFrameKeys: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
 /**
  * Shared thumbnail component with stable local media behavior.
@@ -61,7 +74,7 @@ fun ThumbnailWithFallback(
         if (
             shouldUseLocalFrame &&
             cacheKey.isNotBlank() &&
-            localFrameCache[cacheKey] == null &&
+            frameCachePresence[cacheKey] == null &&
             !failedLocalFrameKeys.contains(cacheKey)
         ) {
             val bitmap = withContext(Dispatchers.IO) {
@@ -80,14 +93,17 @@ fun ThumbnailWithFallback(
             }
 
             if (bitmap != null) {
-                localFrameCache[cacheKey] = bitmap
+                frameLruCache.put(cacheKey, bitmap)
+                frameCachePresence[cacheKey] = Unit
             } else {
                 failedLocalFrameKeys += cacheKey
             }
         }
     }
 
-    val cachedLocalFrame = if (cacheKey.isNotBlank()) localFrameCache[cacheKey] else null
+    val cachedLocalFrame = if (cacheKey.isNotBlank() && frameCachePresence.containsKey(cacheKey)) {
+        frameLruCache.get(cacheKey)
+    } else null
     when {
         isLocalImage -> {
             AsyncImage(

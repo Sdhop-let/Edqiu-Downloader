@@ -140,7 +140,10 @@ fun PlayerScreen(
     // 视频后返回，定位的是切到的那条，不是进入时的卡片）
     onRequestExitLocate: (String) -> Unit = {},
     // 退场动画完成后回调（宿主同帧切 playerVisible=false 收起浮层、卡片信息淡入）
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    // 2026-10 修复：胶囊反馈回调（宿主接线全局 CapsuleFeedbackController）。
+    // 旧实现在本文件自建 controller 但从未挂 Host，播放器内全部操作反馈静默丢失。
+    onFeedback: (FeedbackKind, String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
@@ -353,10 +356,9 @@ fun PlayerScreen(
             }
     }
 
-    // 播放器独立反馈胶囊（2026-09-15）：替代系统 Toast，样式与主 App 玻璃胶囊统一。
-    // 播放器不在主 Scaffold 内，自持一套 controller。
-    val capsule = remember { CapsuleFeedbackController() }
-    val notify: (FeedbackKind, String) -> Unit = { kind, text -> capsule.show(kind, text) }
+    // 播放器操作反馈（2026-10 修复）：走宿主注入的全局胶囊控制器（AppNav 渲染 Host），
+    // 旧实现自建 controller 无 Host 渲染，复制/分享/打开等反馈全部静默丢失。
+    val notify: (FeedbackKind, String) -> Unit = onFeedback
 
     val duration = state.duration.takeIf { it > 0 } ?: ((current?.duration ?: 0L) * 1000L)
     val position = state.position.coerceIn(0L, duration.coerceAtLeast(0L))
@@ -440,7 +442,7 @@ fun PlayerScreen(
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.onSurface)
+                    .background(Color.Black) // 2026-10：黑幕固定黑色（onSurface 在暗色主题是白色）
             )
             // 沉浸式背景层：video 区域外的"画框氛围"
             // 在 SurfaceView 之后渲染（Compose 兄弟元素按声明顺序绘制），
@@ -452,7 +454,7 @@ fun PlayerScreen(
                         Brush.radialGradient(
                             colors = listOf(
                                 MaterialTheme.colorScheme.primary.copy(alpha = 0.22f),
-                                MaterialTheme.colorScheme.onSurface
+                                Color.Black
                             ),
                             radius = 1800f
                         )
@@ -859,7 +861,7 @@ private fun PlayerCoverContent(
     entity: DownloadHistoryEntity?,
     modifier: Modifier = Modifier
 ) {
-    Box(modifier = modifier.background(MaterialTheme.colorScheme.onSurface)) {
+    Box(modifier = modifier.background(Color.Black)) {
         if (entity == null) return@Box
         val thumbFile = entity.thumbnail.takeIf {
             it.isNotBlank() && it.startsWith("/")
@@ -884,7 +886,7 @@ private fun PlayerCoverContent(
             else -> {
                 Text(
                     text = entity.title.ifBlank { entity.filePath.substringAfterLast('/') },
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    color = Color.White.copy(alpha = 0.7f), // 2026-10：黑底上必须用浅色文字
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 2,
                     modifier = Modifier

@@ -16,6 +16,7 @@ import okio.BufferedSink
 import java.io.File
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import com.ed.edqiu.backup.http.runCatchingNotCancelled
 
 /**
  * WebDAV 核心引擎。
@@ -127,7 +128,7 @@ class WebDavEngine {
      * 例如 remotePath=`Edqiu/Sub` 会依次创建 `/Edqiu` 与 `/Edqiu/Sub`。
      */
     suspend fun ensureRemoteDirectories(credential: WebDavCredential): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             val parts = credential.remotePath.split('/').filter { it.isNotBlank() }
             var current = ""
             parts.forEach { part ->
@@ -141,7 +142,7 @@ class WebDavEngine {
 
     /** 创建单个远程目录（MKCOL），宽容处理「已存在」（405/200/204）。 */
     suspend fun mkcol(url: String, credential: WebDavCredential): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching { mkcolInternal(url, credential) }.toUserFriendly()
+        runCatchingNotCancelled { mkcolInternal(url, credential) }.toUserFriendly()
     }
 
     private fun mkcolInternal(url: String, credential: WebDavCredential) {
@@ -156,7 +157,7 @@ class WebDavEngine {
                 }
                 return
             }
-            val body = runCatching { response.body?.string()?.take(300) }.getOrNull()
+            val body = runCatchingNotCancelled { response.body?.string()?.take(300) }.getOrNull()
             when {
                 code == 401 || code == 403 -> {
                     Log.w(TAG, "MKCOL 鉴权失败 HTTP $code for ${safeUrlForLog(url)}")
@@ -183,22 +184,41 @@ class WebDavEngine {
         }
     }
 
-    /** HEAD 判断远程文件是否存在（2xx 视为存在；404 等视为不存在；401/403 抛认证错误）。 */
-    suspend fun exists(url: String, credential: WebDavCredential): Result<Boolean> = withContext(Dispatchers.IO) {
-        runCatching {
+    /**
+     * HEAD 判断远程文件是否存在。
+     * 2026-10 整改：只有 404 才视为「不存在」；5xx/其他 4xx 视为「状态未知」直接报错——
+     * 旧实现把 500/502 等一律按不存在处理，下一个动作是 PUT 覆盖远端同名文件，
+     * 服务端瞬时故障就可能用旧内容覆盖掉远端较新的备份。
+     */
+    suspend fun exists(
+        url: String,
+        credential: WebDavCredential,
+        expectedSize: Long = -1L,
+    ): Result<Boolean> = withContext(Dispatchers.IO) {
+        runCatchingNotCancelled {
             val request = buildRequest(url, "HEAD", credential)
             client.newCall(request).execute().use { response ->
                 val code = response.code
                 when {
-                    code in 200..299 -> true
+                    code in 200..299 -> {
+                        // 2026-10 P0 整改：远端实际大小与期望不符（PUT 半截上传/0 字节占位）
+                        // 视为不存在 → 走 PUT 覆盖重传，防止半截文件被固化成 DONE
+                        val remoteLength = response.header("Content-Length")?.toLongOrNull()
+                        if (expectedSize > 0 && remoteLength != null && remoteLength != expectedSize) {
+                            Log.i(TAG, "HEAD size mismatch (remote=$remoteLength, expected=$expectedSize) for ${safeUrlForLog(url)} → 重传覆盖")
+                            false
+                        } else {
+                            true
+                        }
+                    }
                     code == 401 || code == 403 -> {
                         Log.w(TAG, "HEAD 鉴权失败 HTTP $code for ${safeUrlForLog(url)}")
                         throw BackupException("WebDAV 认证失败（HTTP $code），请检查账号与密码")
                     }
+                    code == 404 -> false
                     else -> {
-                        // 404 → 文件不存在；3xx 跟随重定向后仍非 2xx 归不存在；其余 4xx/5xx 按不存在处理
-                        Log.i(TAG, "HEAD non-2xx HTTP $code for ${safeUrlForLog(url)}（按不存在处理）")
-                        false
+                        Log.w(TAG, "HEAD non-2xx HTTP $code for ${safeUrlForLog(url)}（状态未知，拒绝上传以防覆盖）")
+                        throw BackupException("无法确认远程文件状态（HTTP $code），已暂停上传以防覆盖远端文件，请稍后重试")
                     }
                 }
             }
@@ -219,7 +239,7 @@ class WebDavEngine {
         credential: WebDavCredential,
         progress: (Long) -> Unit = {},
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(file.isFile) { "本地文件不存在：${file.name}" }
             val size = file.length()
             val body = StreamingFileRequestBody(file, size, progress)
@@ -229,7 +249,7 @@ class WebDavEngine {
                 val code = response.code
                 val elapsed = System.currentTimeMillis() - startedAt
                 if (code !in 200..299) {
-                    val body = runCatching { response.body?.string()?.take(300) }.getOrNull()
+                    val body = runCatchingNotCancelled { response.body?.string()?.take(300) }.getOrNull()
                     Log.w(TAG, "PUT failed HTTP $code (size=$size B, ${elapsed}ms) for ${safeUrlForLog(url)} body=$body")
                     val reason = when (code) {
                         401, 403 -> "认证失败，请检查账号与密码"
@@ -255,7 +275,7 @@ class WebDavEngine {
      * - 其他 → 服务不可用。
      */
     suspend fun probe(url: String, credential: WebDavCredential): Result<Boolean> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             val request = buildRequest(url, "OPTIONS", credential)
             client.newCall(request).execute().use { response ->
                 val code = response.code

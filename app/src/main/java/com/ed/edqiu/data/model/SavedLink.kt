@@ -2,6 +2,7 @@ package com.ed.edqiu.data.model
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
@@ -26,7 +27,11 @@ import androidx.room.PrimaryKey
  * @param lastError 最近一次启动失败原因
  * @param nextRetryAt 自动重试时间；null 表示无需或不再自动重试
  */
-@Entity(tableName = "saved_links")
+// 2026-10 整改：重试轮询（status=FAILED AND next_retry_at<=now）此前全表扫描
+@Entity(
+    tableName = "saved_links",
+    indices = [Index(value = ["status", "next_retry_at"])]
+)
 data class SavedLink(
     @PrimaryKey
     val tweetId: String,

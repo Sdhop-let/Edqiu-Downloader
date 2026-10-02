@@ -286,7 +286,7 @@ class PreDownloadManager(
         }
         Log.i(TAG, "syncNewlyDownloadedToCloud() 入队 ${files.size} 个文件到 $providerId")
         backupEngine.enqueue(providerId, files)
-        val summary = backupEngine.runQueue().getOrNull() ?: return@withContext false
+        val summary = backupEngine.runQueue(targetId = providerId).getOrNull() ?: return@withContext false
         Log.i(TAG, "syncNewlyDownloadedToCloud() 完成：成功 ${summary.succeeded} 失败 ${summary.failed} 跳过 ${summary.skipped}")
         summary.failed == 0
     }

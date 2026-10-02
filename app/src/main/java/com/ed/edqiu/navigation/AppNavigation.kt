@@ -178,6 +178,8 @@ fun AppNavigation(
     openCloudBackup: (() -> Unit)? = null,
     onOpenMediaBackup: (() -> Unit)? = null,
     authorsContent: (@Composable (onBack: () -> Unit) -> Unit)? = null,
+    // 2026-10：胶囊反馈回调（宿主全局 CapsuleFeedbackController），接线到 PlayerScreen
+    onFeedback: ((com.ed.edqiu.ui.components.FeedbackKind, String) -> Unit)? = null,
     floatingTabBarEnabled: Boolean = true,
     liquidGlassEnabled: Boolean = true,
     predictiveBackEnabled: Boolean = true
@@ -551,6 +553,8 @@ fun AppNavigation(
                     playerViewModel = playerViewModel,
                     historyViewModel = historyViewModel,
                     autoPlayFilePath = activePlayerPath,
+                    // 2026-10：宿主全局胶囊反馈（未接线时为空回调，行为不变）
+                    onFeedback = onFeedback ?: { _, _ -> },
                     // 进场几何起点（媒体库卡片封面矩形；下载页入口为 null 走中央降级矩形）
                     originBounds = playerOriginBounds,
                     // 退场几何终点（媒体库定位滚动回传，实时跟随更新）

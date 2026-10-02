@@ -2,6 +2,7 @@
 
 import android.content.Context
 import android.os.Environment
+import com.ed.edqiu.data.model.DownloadCancelledException
 import com.ed.edqiu.data.model.DownloadStatus
 import com.ed.edqiu.data.model.DownloadTask
 import com.ed.edqiu.data.model.ProxySettings
@@ -128,7 +129,11 @@ class DownloaderClient(private val context: Context) {
                 }
                 // P0-2 自救热修（2026-09-15 批次2）：三层全挂 → 解析规则大概率整体过时。
                 // 每进程一次：运行时更新 yt-dlp 至最新（新 extractor 常能救回解析），成功清空全部熔断。
-                if (DownloadEngineHealth.shouldAttemptSelfHeal()) {
+                // 2026-10：16KB 内存页设备上更新 yt-dlp 二进制解决不了 ffmpeg 依赖库 4KB 对齐问题，
+                // 自救热修必败，跳过以免白耗流量与时间（安全写法：cast 失败/null 视为非 16KB 设备）
+                if (DownloadEngineHealth.shouldAttemptSelfHeal() &&
+                    (context.applicationContext as? com.ed.edqiu.TwitterDownloaderApp)?.is16kPageDevice != true
+                ) {
                     runCatching { YoutubeDLService.updateYoutubeDL(context) }
                         .onSuccess {
                             DownloadEngineHealth.clearAll()
@@ -167,8 +172,9 @@ class DownloaderClient(private val context: Context) {
                 status = DownloadStatus.DOWNLOADING
             )
             DownloadTaskBus.add(task)
+            DownloadCancellation.register(task.id)
 
-            YoutubeDLService.downloadVideo(
+            val launchResult = YoutubeDLService.downloadVideo(
                 url = url,
                 formatId = "best",
                 outputDir = outputDir.absolutePath,
@@ -179,7 +185,8 @@ class DownloaderClient(private val context: Context) {
                 },
                 proxyUrl = proxyUrl,
                 cookieFilePath = cookieFile,
-                playlistIndex = null
+                playlistIndex = null,
+                processId = task.id
             ).fold(
                 onSuccess = { path ->
                     writeSidecar(File(path), url, tweetId)
@@ -206,12 +213,18 @@ class DownloaderClient(private val context: Context) {
                     )
                 },
                 onFailure = { error ->
+                    val cancelled = error is DownloadCancelledException || DownloadCancellation.isCancelled(task.id)
                     DownloadTaskBus.updateTask(task.id) {
-                        it.copy(status = DownloadStatus.FAILED, errorMessage = error.message ?: "yt-dlp 下载失败")
+                        it.copy(
+                            status = if (cancelled) DownloadStatus.CANCELLED else DownloadStatus.FAILED,
+                            errorMessage = if (cancelled) "下载已取消" else (error.message ?: "yt-dlp 下载失败")
+                        )
                     }
-                    LaunchResult.Failed(error.message ?: "未知错误")
+                    LaunchResult.Failed(if (cancelled) "下载已取消" else (error.message ?: "未知错误"))
                 }
             )
+            DownloadCancellation.unregister(task.id)
+            launchResult
         }.getOrElse { error ->
             LaunchResult.Failed("yt-dlp 回退异常：${error.message ?: "未知错误"}")
         }
@@ -268,6 +281,7 @@ class DownloaderClient(private val context: Context) {
                     status = DownloadStatus.DOWNLOADING
                 )
                 DownloadTaskBus.add(task)
+                DownloadCancellation.register(task.id)
 
                 runCatching {
                     internalDownloader.downloadFile(media.url, target, proxy, taskId = task.id)
@@ -306,10 +320,15 @@ class DownloaderClient(private val context: Context) {
                     }
                 }.onFailure { error ->
                     lastError = error.message
+                    val cancelled = error is DownloadCancelledException || DownloadCancellation.isCancelled(task.id)
                     DownloadTaskBus.updateTask(task.id) {
-                        it.copy(status = DownloadStatus.FAILED, errorMessage = error.message ?: "下载失败")
+                        it.copy(
+                            status = if (cancelled) DownloadStatus.CANCELLED else DownloadStatus.FAILED,
+                            errorMessage = if (cancelled) "下载已取消" else (error.message ?: "下载失败")
+                        )
                     }
                 }
+                DownloadCancellation.unregister(task.id)
             }
 
             if (files.isNotEmpty()) {

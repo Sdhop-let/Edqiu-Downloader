@@ -14,7 +14,7 @@ import com.ed.edqiu.data.model.SavedLink
 
 @Database(
     entities = [SavedLink::class, DeletedLinkHistory::class, BackupLedgerEntity::class],
-    version = 7,
+    version = 9,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -136,13 +136,45 @@ abstract class EdqiuDatabase : RoomDatabase() {
             "ALTER TABLE saved_links ADD COLUMN published_at INTEGER DEFAULT NULL"
         )
 
+        /**
+         * 2026-10 整改：deleted_link_history 补 published_at 列。
+         * v7 只给 saved_links 加了发布时间，回收站表漏加——导致链接删除后再从回收站
+         * 恢复时 publishedAt 永久丢失（toRestoredLink 无值可取）。
+         */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_7_8_SQL.forEach(db::execSQL)
+            }
+        }
+
+        val MIGRATION_7_8_SQL = listOf(
+            "ALTER TABLE deleted_link_history ADD COLUMN published_at INTEGER DEFAULT NULL"
+        )
+
+        /**
+         * 2026-10 整改（v9）：saved_links 补 (status, next_retry_at) 复合索引——
+         * DownloadSyncWorker 每 15 分钟的 retryDueDownloads 重试轮询此前全表扫描。
+         */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_8_9_SQL.forEach(db::execSQL)
+            }
+        }
+
+        val MIGRATION_8_9_SQL = listOf(
+            "CREATE INDEX IF NOT EXISTS `index_saved_links_status_next_retry_at` ON `saved_links` (`status`, `next_retry_at`)"
+        )
+
         fun getDatabase(context: Context): EdqiuDatabase {
             return INSTANCE ?: synchronized(lock) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     EdqiuDatabase::class.java,
                     DB_NAME
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                ).addMigrations(
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+                )
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
                     .also { INSTANCE = it }

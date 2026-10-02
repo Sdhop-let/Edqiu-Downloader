@@ -66,7 +66,11 @@ class SavedLinkRepository(
         val skipped: Int
     )
 
-    private val downloadRequestMutex = Mutex()
+    // 2026-10 整改：全局下载互斥改为按推文粒度——retryDueDownloads 串行重试时，
+    // 用户手动下载另一条推文不再排队数分钟；同一推文的并发请求仍串行（attemptCount 一致性）
+    private val downloadMutexes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+
+    private fun mutexFor(tweetId: String): Mutex = downloadMutexes.getOrPut(tweetId) { Mutex() }
 
     /**
      * 捕获成功回调（自动预下载挂载点）。
@@ -120,10 +124,15 @@ class SavedLinkRepository(
         proxy: ProxySettings? = null,
         /** Worker 续跑路径传 true：不再触发登记钩子（避免自我递归）。 */
         viaQueue: Boolean = false
-    ): DownloadRequestResult = downloadRequestMutex.withLock {
+    ): DownloadRequestResult = mutexFor(tweetId).withLock {
         var link = dao.getByTweetId(tweetId) ?: return DownloadRequestResult.Missing
         if (link.status == LinkStatus.DOWNLOADED) {
             return DownloadRequestResult.AlreadyDownloaded
+        }
+        // 2026-10 整改：DELETED（推文不存在）是永久终态——旧实现不拦截，手动重试/Worker 续跑
+        // 会再跑一遍三层引擎链（纯浪费），失败后还会把 DELETED 复活成 FAILED 重新进入自动重试轮询
+        if (link.status == LinkStatus.DELETED) {
+            return DownloadRequestResult.Gone
         }
 
         if (manual && link.attemptCount >= DownloadRetryPolicy.MAX_ATTEMPTS) {
@@ -256,9 +265,13 @@ class SavedLinkRepository(
      */
     suspend fun importScannedDownloads(monitorUri: String?): Int {
         val scanned = downloadMonitor.scanMonitorAndDownloadDirs(monitorUri)
+        // 2026-10 P1 整改：排除已进回收站的推文——旧实现删除的条目（文件保留在磁盘）
+        // 会被下一轮扫描以 DOWNLOADED 重新插回收件箱，自动"复活"
+        val deletedIds = linkHistoryRepository.deletedTweetIds().toHashSet()
         var imported = 0
         scanned.values.forEach { item ->
             if (dao.exists(item.tweetId)) return@forEach
+            if (item.tweetId in deletedIds) return@forEach
             val insertedRowId = dao.insert(
                 SavedLink(
                     tweetId = item.tweetId,

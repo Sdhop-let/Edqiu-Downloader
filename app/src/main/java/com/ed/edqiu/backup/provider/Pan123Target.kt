@@ -89,10 +89,10 @@ class Pan123Target(
 
     override suspend fun prepareRemote(): Result<Unit> = engine.ensureRemoteDirectories(credential())
 
-    override suspend fun exists(remotePath: String): Result<Boolean> {
+    override suspend fun exists(remotePath: String, expectedSize: Long): Result<Boolean> {
         val credential = credential()
         val url = engine.buildRemoteUrl(credential, remotePath)
-        return engine.exists(url, credential)
+        return engine.exists(url, credential, expectedSize)
     }
 
     override suspend fun uploadFile(

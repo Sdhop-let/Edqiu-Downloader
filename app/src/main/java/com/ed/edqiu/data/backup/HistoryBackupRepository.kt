@@ -276,7 +276,7 @@ class HistoryBackupRepository(
         const val MIME_TYPE = "application/json"
         const val DEFAULT_RETENTION = 7
         const val DEFAULT_MAX_AGE_MILLIS: Long = 7L * 24 * 60 * 60 * 1000
-        private const val DATABASE_VERSION = 3
+        private const val DATABASE_VERSION = 8 // 2026-10：随 xinvox.db v8 对齐（仅元数据，Codec 只校验 formatVersion）
         private const val PRE_RESTORE_DIRECTORY = "pre_restore_backups"
         private const val PRE_RESTORE_RETENTION = 3
         private val BACKUP_FILE_PATTERN = Regex("(?i)(?:xinvox|esqp|edqiu)-backup-\\d{8}-\\d{6}\\.json")

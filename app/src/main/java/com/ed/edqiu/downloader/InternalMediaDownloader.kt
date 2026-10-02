@@ -4,10 +4,12 @@ import android.content.Context
 import android.os.Environment
 import android.util.Log
 import com.ed.edqiu.data.metadata.CoverStore
+import com.ed.edqiu.data.model.DownloadCancelledException
 import com.ed.edqiu.data.model.DownloadStatus
 import com.ed.edqiu.data.model.DownloadTask
 import com.ed.edqiu.data.model.MediaType
 import com.ed.edqiu.data.model.ProxySettings
+import com.ed.edqiu.data.repository.DownloadCancellation
 import com.ed.edqiu.data.repository.DownloadTaskBus
 import com.ed.edqiu.domain.TweetIdExtractor
 import kotlinx.coroutines.Dispatchers
@@ -157,10 +159,11 @@ class InternalMediaDownloader(private val context: Context) {
                         )
                     }
                 }.onFailure { error ->
+                    val cancelled = error is DownloadCancelledException || DownloadCancellation.isCancelled(task.id)
                     DownloadTaskBus.updateTask(task.id) {
                         it.copy(
-                            status = DownloadStatus.FAILED,
-                            errorMessage = error.message ?: "下载失败"
+                            status = if (cancelled) DownloadStatus.CANCELLED else DownloadStatus.FAILED,
+                            errorMessage = if (cancelled) "下载已取消" else (error.message ?: "下载失败")
                         )
                     }
                     Log.w(TAG, "Failed to download ${target.name}", error)
@@ -304,6 +307,10 @@ class InternalMediaDownloader(private val context: Context) {
                                 while (true) {
                                     val read = input.read(buffer)
                                     if (read == -1) break
+                                    // 用户取消：中止写入（.part 保留供断点续传），由调用方置 CANCELLED
+                                    if (taskId != null && DownloadCancellation.isCancelled(taskId)) {
+                                        throw DownloadCancelledException()
+                                    }
                                     output.write(buffer, 0, read)
                                     written += read
                                     // 进度节流：每 300ms 回写一次，避免高频重组
@@ -328,6 +335,9 @@ class InternalMediaDownloader(private val context: Context) {
                 } finally {
                     connection.disconnect()
                 }
+            } catch (e: DownloadCancelledException) {
+                // 取消不重试、不覆盖 lastError 语义，直接上抛
+                throw e
             } catch (e: Exception) {
                 lastError = e
                 Log.w(TAG, "下载中断（第 $attempt 次尝试）url=$url 已有 ${part.length()} 字节，将尝试续传", e)

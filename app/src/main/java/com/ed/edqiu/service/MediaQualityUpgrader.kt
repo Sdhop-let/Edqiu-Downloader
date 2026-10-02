@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -96,6 +97,9 @@ object MediaQualityUpgrader {
     )
 
     private val _uiState = MutableStateFlow(UpgradeUiState(running = false, tier = Tier.MEDIUM, total = 0, done = 0, upgraded = 0))
+    // 2026-10 整改：重入守卫——进媒体库自动触发与手动按钮可并发进入同一单例，
+    // 两会话互相覆盖 _uiState、SharedPreferences 全量回写后写覆盖先写、同推文重复下载。
+    private val upgradeRunning = java.util.concurrent.atomic.AtomicBoolean(false)
     // UI 端按 running/message 自行过滤展示（pill 只在 running 时显示进度，消息条只在完成时显示 message）
     val uiState: StateFlow<UpgradeUiState?> = _uiState.asStateFlow()
 
@@ -148,6 +152,18 @@ object MediaQualityUpgrader {
      * ④manual=true（用户点按钮）才发完成/空转消息，自动路径静默不打扰。
      */
     suspend fun upgrade(context: Context, manual: Boolean = false): Int = withContext(Dispatchers.IO) {
+        if (!upgradeRunning.compareAndSet(false, true)) {
+            Log.i(TAG, "upgrade() 已有会话在执行，跳过本次触发（重入守卫）")
+            return@withContext 0
+        }
+        try {
+            upgradeSession(context, manual)
+        } finally {
+            upgradeRunning.set(false)
+        }
+    }
+
+    private suspend fun upgradeSession(context: Context, manual: Boolean): Int = withContext(Dispatchers.IO) {
         val dao = AppDatabase.getInstance(context).downloadHistoryDao()
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val checkedIds = prefs.getStringSet(KEY_CHECKED_IDS, emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -231,8 +247,7 @@ object MediaQualityUpgrader {
             ?: Tier.fromName(prefs.getString(KEY_TIER, null))
         prefs.edit().putString(KEY_TIER, tier.name).apply()
 
-        var upgraded = 0
-        var processed = 0
+        // 计数统一读 doneCounter / upgradedCounter（2026-10：并发协程中普通 var 自增会丢失更新）
         val checkedBatch = java.util.Collections.synchronizedSet(mutableSetOf<String>())
         // 2026-09-16 失败重试机制：API 拉取失败/下载失败不再一次进永久黑名单——
         // 首次失败进 retryIds（下轮重试），retry 中再失败才 checkedIds 永久跳过；
@@ -317,13 +332,11 @@ object MediaQualityUpgrader {
                                 }
                         }
                         if (ok) {
-                            upgraded++
                             upgradedCounter.incrementAndGet()
                             successBatch += tweetId
                         } else {
                             failedBatch += tweetId
                         }
-                        processed++
                         doneCounter.incrementAndGet()
                         report()
                     }
@@ -344,8 +357,10 @@ object MediaQualityUpgrader {
             .putStringSet(KEY_RETRY_IDS, retryIds)
             .apply()
 
-        Log.i(TAG, "Upgrade round done: tier=${tier.name}, total=$total, upgraded=$upgraded, processed=$processed")
-        RoundOutcome(processed = processed, upgraded = upgraded)
+        val roundProcessed = doneCounter.get()
+        val roundUpgraded = upgradedCounter.get()
+        Log.i(TAG, "Upgrade round done: tier=${tier.name}, total=$total, upgraded=$roundUpgraded, processed=$roundProcessed")
+        RoundOutcome(processed = roundProcessed, upgraded = roundUpgraded)
     }
 
     // ---------------- 检测 ----------------
@@ -454,6 +469,13 @@ object MediaQualityUpgrader {
         entity: DownloadHistoryEntity,
         tweetId: String
     ): Boolean {
+        // 2026-10：16KB 内存页设备 ffmpeg 不可用（libwebp* 未适配），HLS 升级整体跳过
+        val app = context.applicationContext as? com.ed.edqiu.TwitterDownloaderApp
+        if (app?.is16kPageDevice == true) {
+            _uiState.value = _uiState.value.copy(running = false, message = "16KB 内存页机型暂不支持 HLS 高画质升级（ffmpeg 依赖未适配）")
+            Log.w(TAG, "skip HLS upgrade on 16KB-page device")
+            return false
+        }
         val proxyUrl = com.ed.edqiu.data.preferences.ProxyPreferences(context)
             .getProxySettings().toProxyUrl()
         val cookiePreferences = com.ed.edqiu.data.preferences.CookiePreferences(context)
@@ -480,9 +502,12 @@ object MediaQualityUpgrader {
         }
 
         val newFile = File(newPath)
+        // 同路径防护：再次升级 HLS 时 yt-dlp 会按同一输出模板覆盖同路径文件，
+        // 此时绝不能删除 entity.filePath（删的就是刚下载的新文件本身）
+        val samePath = newFile.absolutePath == entity.filePath
         if (!newFile.exists() || newFile.length() <= File(entity.filePath).length()) {
             // 异常小的产物不替换
-            if (newFile.exists() && newFile.absolutePath != entity.filePath) newFile.delete()
+            if (newFile.exists() && !samePath) newFile.delete()
             return false
         }
 
@@ -497,14 +522,20 @@ object MediaQualityUpgrader {
             newSidecar.writeText(json.toString())
         }
 
-        dao.updateMediaFile(
-            oldPath = entity.filePath,
-            newPath = newFile.absolutePath,
-            fileSize = newFile.length(),
-            quality = "best"
-        )
-        File(entity.filePath).delete()
-        oldSidecar.delete()
+        // 2026-10 P2 整改：终态迁移不可取消——取消落在挂起点会把"新文件已落盘、DB 仍指旧
+        // 文件"的中间态固化（孤儿新文件被扫描成重复条目）；NonCancellable 保证三步原子完成
+        withContext(kotlinx.coroutines.NonCancellable) {
+            dao.updateMediaFile(
+                oldPath = entity.filePath,
+                newPath = newFile.absolutePath,
+                fileSize = newFile.length(),
+                quality = "best"
+            )
+            if (!samePath) {
+                File(entity.filePath).delete()
+                oldSidecar.delete()
+            }
+        }
         Log.i(TAG, "HLS upgraded: ${File(entity.filePath).name} -> ${newFile.name}")
         return true
     }
@@ -529,9 +560,15 @@ object MediaQualityUpgrader {
         val newQuality = if (isVideo) bitrateToQuality(remote.bestVideoBitrate) else "original"
         val newName = sanitize("${uploader}_${tweetId}_${mediaIndex}_${kind}_${newQuality}.$ext")
         val newFile = File(dir, newName)
-        if (newFile.exists()) {
-            Log.i(TAG, "Target already exists, skip: ${newFile.name}")
+        if (newFile.absolutePath == entity.filePath) {
+            // 目标与当前记录同路径（已是目标画质），无可升级
             return false
+        }
+        if (newFile.exists()) {
+            // 2026-10 整改：目标已存在多为上次中断残留的孤儿文件（DB 仍指向旧文件）——
+            // 旧实现直接放弃导致该条目永久无法升级；删除残留后重新下载
+            Log.i(TAG, "Target exists (stale orphan), overwrite: ${newFile.name}")
+            newFile.delete()
         }
 
         val proxy = null // 升级下载跟随系统网络（用户代理场景多走 VPN 隧道，无需显式 HTTP 代理）
@@ -557,16 +594,18 @@ object MediaQualityUpgrader {
             newSidecar.writeText(json.toString())
         }
 
-        // DB 指向新文件（同 tweetId 记录整体迁移）
-        dao.updateMediaFile(
-            oldPath = entity.filePath,
-            newPath = newFile.absolutePath,
-            fileSize = newFile.length(),
-            quality = newQuality
-        )
-        // 删除旧媒体与旧 sidecar（文件可能已被上一轮删除，静默处理）
-        File(entity.filePath).delete()
-        oldSidecar.delete()
+        // 2026-10 P2 整改：同 HLS——终态迁移不可取消；updateMediaFile 按 filePath 匹配，
+        // 用户已删记录时 0 行更新，绝不能再删用户选择保留的文件
+        withContext(kotlinx.coroutines.NonCancellable) {
+            dao.updateMediaFile(
+                oldPath = entity.filePath,
+                newPath = newFile.absolutePath,
+                fileSize = newFile.length(),
+                quality = newQuality
+            )
+            File(entity.filePath).delete()
+            oldSidecar.delete()
+        }
         Log.i(TAG, "Upgraded: ${File(entity.filePath).name} -> ${newFile.name} (bitrate=${remote.bestVideoBitrate})")
         return true
     }

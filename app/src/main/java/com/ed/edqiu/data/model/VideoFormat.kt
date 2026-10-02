@@ -27,10 +27,10 @@ data class VideoFormat(
     val displayText: String
         get() = buildString {
             append(quality.ifBlank { MediaFileTypes.displayLabel(mediaType) })
-            if (mediaType == MediaType.VIDEO && fps > 0) append(" 路 ${fps}fps")
-            if (filesize > 0) append(" 路 ${formatFileSize()}")
+            if (mediaType == MediaType.VIDEO && fps > 0) append(" · ${fps}fps")
+            if (filesize > 0) append(" · ${formatFileSize()}")
             if (mediaType == MediaType.IMAGE && ext.isNotBlank() && !quality.uppercase(Locale.ROOT).contains(ext.uppercase(Locale.ROOT))) {
-                append(" 路 ${ext.uppercase(Locale.ROOT)}")
+                append(" · ${ext.uppercase(Locale.ROOT)}")
             }
         }
 

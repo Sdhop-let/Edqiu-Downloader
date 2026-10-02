@@ -21,7 +21,8 @@ import java.io.File
 object DirectoryScanner {
 
     private const val TAG = "DirectoryScanner"
-    private val TWEET_ID_REGEX = Regex("\\b\\d{11,25}\\b")
+    // 2026-10：\\b 对下划线相邻数字不成立（"user_1698…_1" 提取失败）——改用数字前瞻后顾
+    private val TWEET_ID_REGEX = Regex("(?<!\\d)\\d{11,25}(?!\\d)")
 
     /**
      * Scan download directory and insert any new media files into history database.
@@ -135,7 +136,7 @@ object DirectoryScanner {
             quality = parts.drop(tweetIdIndex + 1)
                 .dropWhile { it.toIntOrNull() != null || it == "fx" || it == "best" || it == "img" }
                 .joinToString("_")
-                .ifBlank { if (fileMediaType == MediaType.IMAGE) "鍥剧墖" else parts.lastOrNull().orEmpty().ifBlank { "unknown" } }
+                .ifBlank { if (fileMediaType == MediaType.IMAGE) "图片" else parts.lastOrNull().orEmpty().ifBlank { "unknown" } }
             url = "https://x.com/i/status/$tweetId"
         } else if (parts.size >= 3) {
             quality = parts.last()
@@ -145,12 +146,16 @@ object DirectoryScanner {
         } else if (parts.size == 2) {
             uploader = parts[0]
             quality = parts[1]
-            tweetId = file.nameWithoutExtension.hashCode().toString()
+            // 2026-10 整改：合成 id 用路径 SHA-1（旧实现 name.hashCode() 跨扫描根同名文件
+            // 生成相同 id，INSERT REPLACE 会静默覆盖另一条记录）
+            tweetId = syntheticFileId(file)
             url = ""
         } else {
             uploader = "unknown"
-            quality = if (fileMediaType == MediaType.IMAGE) "鍥剧墖" else "unknown"
-            tweetId = file.nameWithoutExtension.hashCode().toString()
+            quality = if (fileMediaType == MediaType.IMAGE) "图片" else "unknown"
+            // 2026-10 整改：合成 id 用路径 SHA-1（旧实现 name.hashCode() 跨扫描根同名文件
+            // 生成相同 id，INSERT REPLACE 会静默覆盖另一条记录）
+            tweetId = syntheticFileId(file)
             url = ""
         }
 
@@ -260,6 +265,13 @@ object DirectoryScanner {
         }.getOrDefault(0L)
     }
 
+    /** 无推文 ID 文件的确定性合成 id：file_ + 路径 SHA-1 前 16 位（跨根同名不冲突）。 */
+    private fun syntheticFileId(file: File): String =
+        "file_" + java.security.MessageDigest.getInstance("SHA-1")
+            .digest(file.absolutePath.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+            .take(16)
+
     /**
      * Extract tweet ID from a filename.
      * Returns null if the filename doesn't match the expected format.
@@ -276,15 +288,35 @@ object DirectoryScanner {
         return TWEET_ID_REGEX.find(filename)?.value
     }
 
+    /** 已下载推文 ID 快照缓存（2026-10 整改：旧实现每次调用全量走一遍扫描根）。 */
+    @Volatile
+    private var cachedTweetIds: Set<String>? = null
+    @Volatile
+    private var cachedTweetIdsAt = 0L
+    private const val SNAPSHOT_TTL_MS = 30_000L
+
+    private fun tweetIdSnapshot(context: Context): Set<String> {
+        val now = System.currentTimeMillis()
+        cachedTweetIds?.takeIf { now - cachedTweetIdsAt < SNAPSHOT_TTL_MS }?.let { return it }
+        val ids = scanRoots(context)
+            .asSequence()
+            .filter { it.exists() && it.isDirectory }
+            .flatMap { it.walkTopDown() }
+            .filter { MediaFileTypes.isSupportedMediaFile(it) }
+            .mapNotNull { extractTweetIdFromFilename(it.name) }
+            .toSet()
+        cachedTweetIds = ids
+        cachedTweetIdsAt = now
+        return ids
+    }
+
     /**
      * Check if a URL's tweet ID matches any existing file in the download directory.
+     * 2026-10 整改：30s 快照缓存（DB 查询仍是主判据，此处仅为文件系统兜底），
+     * 旧实现每次调用全量 walk 扫描根（数千文件数百 ms）。
      */
     fun isUrlAlreadyDownloaded(context: Context, url: String): Boolean {
         val tweetId = Regex("/status/(\\d+)").find(url)?.groupValues?.getOrNull(1) ?: return false
-        return scanRoots(context).any { dir ->
-            dir.exists() && dir.walkTopDown().any { file ->
-                MediaFileTypes.isSupportedMediaFile(file) && extractTweetIdFromFilename(file.name) == tweetId
-            }
-        }
+        return tweetId in tweetIdSnapshot(context)
     }
 }

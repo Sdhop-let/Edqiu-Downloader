@@ -18,7 +18,8 @@ object TweetIdExtractor {
     private val STATUS_URL = Pattern.compile(
         """(?i)https?://(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/(?:i/(?:web/)?status|[A-Za-z0-9_]+/status)/(\d{11,25})(?!\d)"""
     )
-    private val RAW_ID = Pattern.compile("""\b\d{11,25}\b""")
+    // 2026-10：\b 在下划线相邻处不成立（Twitter 屏幕名带下划线极常见）——数字边界改前后瞻
+    private val RAW_ID = Pattern.compile("""(?<!\d)\d{11,25}(?!\d)""")
 
     /** 从一段文本中的严格 Twitter/X status URL 提取 tweet ID。 */
     fun fromUrl(url: String): String? = findStatusId(url)

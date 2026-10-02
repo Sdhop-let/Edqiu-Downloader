@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 2026-10 合规补齐：Keystore 密钥不随云备份/D2D 迁移，凭证密文迁到新设备必然解密失败
+     （虽有降级不崩溃，但用户需重新配置所有网盘/登录态）。排除后凭证不迁移、不误迁移。 -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="backup_credentials.xml" />
+        <exclude domain="sharedpref" path="twitter_cookies.xml" />
+        <exclude domain="sharedpref" path="cloud_sync.xml" />
+        <exclude domain="sharedpref" path="download_path.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="backup_credentials.xml" />
+        <exclude domain="sharedpref" path="twitter_cookies.xml" />
+        <exclude domain="sharedpref" path="cloud_sync.xml" />
+        <exclude domain="sharedpref" path="download_path.xml" />
+    </device-transfer>
+</data-extraction-rules>
