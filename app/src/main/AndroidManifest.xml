@@ -3,15 +3,11 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <queries>
-        <package android:name="com.ed.Edqiu" />
+        <!-- 2026-10：移除死配置（自身包查询多余；twitter:// scheme 全工程未构造） -->
         <package android:name="com.ed.twitterdownload" />
         <package android:name="com.ed.edqiu" />
         <package android:name="com.twitter.android" />
         <package android:name="com.x.android" />
-        <intent>
-            <action android:name="android.intent.action.VIEW" />
-            <data android:scheme="twitter" />
-        </intent>
         <provider android:authorities="com.ed.Edqiu.media" />
         <provider android:authorities="com.ed.twitterdownload.media" />
         <provider android:authorities="com.ed.edqiu.media" />
@@ -49,6 +45,8 @@
     <application
         android:name=".EdqiuApplication"
         android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/full_backup_content"
         android:requestLegacyExternalStorage="true"
         android:enableOnBackInvokedCallback="false"
         android:icon="@mipmap/ic_launcher"
@@ -57,12 +55,14 @@
         android:theme="@style/Theme.Edqiu"
         tools:targetApi="31">
 
+        <!-- Titanic 开屏动画（2026-09-30）：LAUNCHER 入口，3s 后进 MainActivity；
+             shortcuts meta-data 必须挂在 LAUNCHER activity 上，随入口一并迁来 -->
         <activity
-            android:name=".MainActivity"
+            android:name=".SplashActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="true"
             android:screenOrientation="portrait"
-            android:theme="@style/Theme.Edqiu">
+            android:theme="@style/Theme.Edqiu.Splash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -72,8 +72,20 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
+        <!-- 2026-10 安全整改：无 intent-filter 无需导出（launcher 入口在 SplashActivity，
+             静态 shortcut 由系统以本应用身份拉起，不受 exported=false 影响） -->
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Edqiu" />
+
+        <!-- 2026-10 UX：锁 configChanges——旧实现旋转/分屏重建会重跑 capture()，
+             已入库的链接第二次返回 Duplicate，用户看到误导性提示 -->
         <activity
             android:name=".capture.CaptureIntentActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:excludeFromRecents="true"
             android:exported="true"
             android:label="@string/capture_activity_label"

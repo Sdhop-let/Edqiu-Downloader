@@ -207,26 +207,34 @@ class ListViewModel(
      * 下载全部待处理（收件箱右上角「下载」按钮）：
      * 批量派发所有 PENDING，弹窗反馈结果；无待处理时也给出明确提示（避免"点了没反应"）。
      */
+    /** 防连点（2026-10）：连点两次会派发同批 id 双份下载，两个进度胶囊互相覆盖。 */
+    private val downloadAllInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun downloadAllPending() {
+        if (!downloadAllInFlight.compareAndSet(false, true)) return
         downloadScope.launch {
-            val ids = repo.pendingTweetIds()
-            if (ids.isEmpty()) {
+            try {
+                val ids = repo.pendingTweetIds()
+                if (ids.isEmpty()) {
+                    batchDownloadStateMutable.value = BatchDownloadUiState(
+                        running = false,
+                        success = false,
+                        message = "没有待处理的链接"
+                    )
+                    return@launch
+                }
+                val tracker = startProgressCapsule(ids)
+                val result = repo.requestDownloads(ids)
+                tracker.cancel()
                 batchDownloadStateMutable.value = BatchDownloadUiState(
                     running = false,
-                    success = false,
-                    message = "没有待处理的链接"
+                    success = result.launched > 0,
+                    message = "成功 ${result.launched} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条"
                 )
-                return@launch
+                if (result.launched > 0) preDownloadManager.syncAfterManualDownload()
+            } finally {
+                downloadAllInFlight.set(false)
             }
-            val tracker = startProgressCapsule(ids)
-            val result = repo.requestDownloads(ids)
-            tracker.cancel()
-            batchDownloadStateMutable.value = BatchDownloadUiState(
-                running = false,
-                success = result.launched > 0,
-                message = "成功 ${result.launched} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条"
-            )
-            if (result.launched > 0) preDownloadManager.syncAfterManualDownload()
         }
     }
 

@@ -11,6 +11,7 @@ import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.RandomAccessFile
 import java.security.MessageDigest
+import com.ed.edqiu.backup.http.runCatchingNotCancelled
 
 /**
  * 通用分片上传框架。
@@ -27,7 +28,7 @@ class ChunkedUploader {
 
     /** 计算整文件 SHA-1（十六进制小写）。 */
     suspend fun computeSha1(file: File): String = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             val digest = MessageDigest.getInstance("SHA-1")
             file.inputStream().use { input ->
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -75,7 +76,7 @@ class ChunkedUploader {
         resumeState: MutableMap<Int, String>,
         progress: (Long) -> Unit,
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             var uploadedBytes = 0L
             chunks.forEach { chunk ->
                 val existingReceipt = resumeState[chunk.seq]
@@ -163,6 +164,11 @@ object NoChunkSizePolicy : ChunkSizePolicy {
  * 分片收据落盘存储（`filesDir/backup_chunks/{taskId}.json`）。
  *
  * 用 Mutex 串行化读写，防止并发覆盖；taskId 为 sha256 十六进制，可安全用作文件名。
+ *
+ * 2026-10 安全整改：收据文件带 [ChunkReceiptsFile.fingerprint]（文件大小+mtime 指纹）与
+ * [ChunkReceiptsFile.uploadId]（上传会话 id）。恢复时调用方必须校验两者匹配才允许跳过
+ * 已上传分片——否则同名文件内容变化 / 新上传会话下会拿旧收据跳过从未上传的分片，
+ * 造成远端坏文件或永久 complete 失败。
  */
 class ChunkReceiptStore(private val context: Context) {
 
@@ -172,38 +178,59 @@ class ChunkReceiptStore(private val context: Context) {
         prettyPrint = true
     }
 
-    /** 保存某任务的全部分片收据（覆盖式）。 */
-    suspend fun save(taskId: String, receipts: Map<Int, String>): Result<Unit> = withContext(Dispatchers.IO) {
+    /** 保存某任务的全部分片收据（覆盖式），附带文件指纹与上传会话 id。 */
+    suspend fun save(
+        taskId: String,
+        receipts: Map<Int, String>,
+        fingerprint: String? = null,
+        uploadId: String? = null,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         mutex.withLock {
-            runCatching {
+            runCatchingNotCancelled {
                 require(taskId.isNotBlank()) { "taskId 不能为空" }
                 val data = ChunkReceiptsFile(
                     taskId = taskId,
                     receipts = receipts,
+                    fingerprint = fingerprint,
+                    uploadId = uploadId,
                     updatedAt = System.currentTimeMillis(),
                 )
-                receiptFile(taskId).writeText(json.encodeToString(ChunkReceiptsFile.serializer(), data))
+                // 原子写：先写临时文件再 rename，进程被杀不会留下截断 JSON
+                val file = receiptFile(taskId)
+                val tmp = File(file.parentFile, file.name + ".tmp")
+                tmp.writeText(json.encodeToString(ChunkReceiptsFile.serializer(), data))
+                if (!tmp.renameTo(file)) {
+                    file.outputStream().use { output -> tmp.inputStream().use { it.copyTo(output) } }
+                    tmp.delete()
+                }
             }
         }
     }
 
     /** 读取某任务的已上传分片收据；不存在或解析失败返回空 Map。 */
-    suspend fun load(taskId: String): Map<Int, String> = withContext(Dispatchers.IO) {
+    suspend fun load(taskId: String): Map<Int, String> = loadMeta(taskId)?.receipts ?: emptyMap()
+
+    /**
+     * 读取收据及元数据（指纹 + 上传会话 id）；文件不存在/损坏返回 null。
+     * 调用方在跳过分片前必须校验 [ChunkReceiptMeta.fingerprint] 与 [ChunkReceiptMeta.uploadId]。
+     */
+    suspend fun loadMeta(taskId: String): ChunkReceiptMeta? = withContext(Dispatchers.IO) {
         mutex.withLock {
-            runCatching {
+            runCatchingNotCancelled {
                 val file = receiptFile(taskId)
                 if (!file.exists()) {
-                    return@withLock emptyMap()
+                    return@withLock null
                 }
-                json.decodeFromString(ChunkReceiptsFile.serializer(), file.readText()).receipts
-            }.getOrDefault(emptyMap())
+                val parsed = json.decodeFromString(ChunkReceiptsFile.serializer(), file.readText())
+                ChunkReceiptMeta(receipts = parsed.receipts, fingerprint = parsed.fingerprint, uploadId = parsed.uploadId)
+            }.getOrNull()
         }
     }
 
     /** 删除某任务的收据文件（上传完成后清理）。 */
     suspend fun delete(taskId: String): Result<Unit> = withContext(Dispatchers.IO) {
         mutex.withLock {
-            runCatching {
+            runCatchingNotCancelled {
                 val file = receiptFile(taskId)
                 if (file.exists()) {
                     file.delete()
@@ -219,10 +246,19 @@ class ChunkReceiptStore(private val context: Context) {
         File(context.filesDir, "backup_chunks").apply { if (!exists()) mkdirs() }
 }
 
-/** 收据文件结构（kotlinx-serialization 落盘）。 */
+/** 收据 + 恢复前必须校验的元数据（文件指纹 / 上传会话 id）。 */
+data class ChunkReceiptMeta(
+    val receipts: Map<Int, String>,
+    val fingerprint: String?,
+    val uploadId: String?,
+)
+
+/** 收据文件结构（kotlinx-serialization 落盘；新增字段带默认值，旧文件可兼容解析）。 */
 @Serializable
 private data class ChunkReceiptsFile(
     val taskId: String,
     val receipts: Map<Int, String> = emptyMap(),
+    val fingerprint: String? = null,
+    val uploadId: String? = null,
     val updatedAt: Long = 0L,
 )

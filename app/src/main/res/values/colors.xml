@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#FFFFFF</color>
+
+    <!-- Titanic 开屏（2026-09-30）：白底 + 品牌蓝文字，白色波浪带扫过才可见 -->
+    <color name="splash_background">#FFFFFF</color>
+    <color name="splash_text">#2563EB</color>
 </resources>

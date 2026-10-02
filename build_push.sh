@@ -6,7 +6,7 @@ set -e
 BASE="D:/Edqiu/repo"
 PY="C:/Users/LENOVO/.workbuddy/binaries/python/versions/3.13.12/python.exe"
 GRADLE="C:/Users/LENOVO/gradle-8.7-ea/gradle-8.7/bin/gradle.bat"
-export JAVA_HOME="C:/temp/jdk21/jdk-21.0.6+7"
+export JAVA_HOME="D:/AndroidDev/jdk/jdk21"
 export ANDROID_SDK_ROOT="D:/AndroidDev/sdk"
 export ANDROID_HOME="D:/AndroidDev/sdk"
 

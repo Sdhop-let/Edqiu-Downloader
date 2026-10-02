@@ -9,6 +9,7 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import kotlinx.coroutines.CancellationException
 
 /**
  * 123 网盘 WebView 授权（OAuth 授权码流程）。
@@ -103,6 +104,8 @@ class Pan123WebViewAuth(
         if (url.isNullOrBlank()) return null
         val parsed = try {
             Uri.parse(url)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return null
         }

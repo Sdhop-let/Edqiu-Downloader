@@ -27,7 +27,8 @@ object YoutubeDLService {
             val request = YoutubeDLRequest(url).apply {
                 addOption("--dump-single-json")
                 addOption("--no-warnings")
-                addOption("--no-check-certificate")
+                // 2026-10 安全整改：移除 --no-check-certificate——关闭 TLS 证书校验会让
+                // --cookies 注入的 auth_token 暴露给中间人；yt-dlp 按系统证书链正常校验即可。
                 if (proxyUrl != null) {
                     addOption("--proxy", proxyUrl)
                 }
@@ -53,7 +54,7 @@ object YoutubeDLService {
             Result.success(videoInfo)
         } catch (e: Exception) {
             Log.e(TAG, "getVideoInfo error", e)
-            Result.failure(e)
+            Result.failure(translateLinkerFailure(e))
         }
     }
 
@@ -62,6 +63,8 @@ object YoutubeDLService {
      * Junkfood02 fork callback signature: (progress: Float, eta: Long, line: String) -> Unit
      * @param proxyUrl Optional HTTP proxy URL (e.g. "http://127.0.0.1:7890") for Clash/V2Ray.
      * @param cookieFilePath Optional Netscape cookie file path for Twitter auth.
+     * @param processId Optional process id（取消链路：调用方把 taskId 作为 processId 传入，
+     *   即可用 `cancelDownload(processId)` 销毁 yt-dlp 进程；缺省自动生成，不可取消）。
      */
     suspend fun downloadVideo(
         url: String,
@@ -70,10 +73,11 @@ object YoutubeDLService {
         onProgress: ((Float, Long) -> Unit)? = null,
         proxyUrl: String? = null,
         cookieFilePath: String? = null,
-        playlistIndex: Int? = null
+        playlistIndex: Int? = null,
+        processId: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val processId = UUID.randomUUID().toString()
+            val pid = processId ?: UUID.randomUUID().toString()
             val outputPath = if (playlistIndex != null) {
                 "$outputDir/%(uploader)s/%(title)s_%(playlist_index)s.%(ext)s"
             } else {
@@ -89,8 +93,6 @@ object YoutubeDLService {
                 } else {
                     addOption("--no-playlist")
                 }
-                addOption("--no-check-certificate")
-                addOption("--no-continue")
                 if (proxyUrl != null) {
                     addOption("--proxy", proxyUrl)
                 }
@@ -101,7 +103,7 @@ object YoutubeDLService {
 
             val result = YoutubeDL.getInstance().execute(
                 request,
-                processId,
+                pid,
                 { progress, eta, _ ->
                     onProgress?.invoke(progress, eta)
                 }
@@ -117,7 +119,7 @@ object YoutubeDLService {
             Result.success(filePath)
         } catch (e: Exception) {
             Log.e(TAG, "downloadVideo error", e)
-            Result.failure(e)
+            Result.failure(translateLinkerFailure(e))
         }
     }
 
@@ -166,7 +168,6 @@ object YoutubeDLService {
                 addOption("--dump-single-json")
                 addOption("--playlist-items", "1:$limit")
                 addOption("--no-warnings")
-                addOption("--no-check-certificate")
                 if (proxyUrl != null) addOption("--proxy", proxyUrl)
                 if (cookieFilePath != null) addOption("--cookies", cookieFilePath)
             }
@@ -188,8 +189,22 @@ object YoutubeDLService {
             }
         } catch (e: Exception) {
             Log.e(TAG, "getUserTimelineTweetIds error for $screenName", e)
-            Result.failure(e)
+            Result.failure(translateLinkerFailure(e))
         }
+    }
+
+    /**
+     * 16KB 内存页设备（Android 15+ 部分机型）上，ffmpeg 依赖载荷内 libwebp* 等 .so 为
+     * 4KB 对齐、libavcodec 直接依赖它们，加载即 linker 失败且报错晦涩难懂——
+     * 识别这类失败并翻译为用户可读信息（原异常保留为 cause，日志行为不变）。
+     */
+    private fun translateLinkerFailure(e: Exception): Exception {
+        val msg = generateSequence(e as Throwable) { it.cause }.joinToString(" | ") { it.message.orEmpty() }
+        val linkerHit = listOf("libavcodec", "libwebp", "dlopen failed", "library not found", "cannot locate")
+            .any { msg.contains(it, ignoreCase = true) }
+        return if (linkerHit)
+            Exception("此设备为 16KB 内存页机型，当前 ffmpeg 依赖库未适配（上游问题），已自动改用直连引擎或稍后重试", e)
+        else e
     }
 
     private fun parseFormats(json: org.json.JSONObject): List<VideoFormat> {
@@ -264,7 +279,7 @@ object YoutubeDLService {
 
                 mediaItems += VideoFormat(
                     formatId = formatId,
-                    quality = "瑙嗛${mediaIndex.toString().padStart(2, '0')} 路 $quality",
+                    quality = "视频${mediaIndex.toString().padStart(2, '0')} · $quality",
                     ext = ext,
                     filesize = bestFormat?.filesize ?: 0,
                     vcodec = bestFormat?.vcodec ?: "",
@@ -324,19 +339,32 @@ object YoutubeDLService {
         }
     }
 
+    /**
+     * 从 yt-dlp 输出提取最终文件路径。
+     * 优先级：[Merger]（合并产物）→ "has already been downloaded"（秒传/已存在）→
+     * 首个 [download] Destination（单格式下载的最终文件）。
+     * 注意合并下载时首个 Destination 是视频单流中间文件（合并后即被 yt-dlp 删除），
+     * 旧实现先命中它导致返回已删除路径、下载误判失败（2026-10 修复）。
+     */
     private fun extractFilePath(output: String, baseDir: String): String {
         val lines = output.lines()
         for (line in lines) {
             val trimmed = line.trim()
-            if (trimmed.startsWith("[download] Destination:")) {
-                return trimmed.removePrefix("[download] Destination:").trim()
-            }
-            if (trimmed.contains("has already been downloaded")) {
-                return trimmed.substringAfter("[download] ").substringBefore(" has already").trim()
-            }
             if (trimmed.startsWith("[Merger] Merging formats into")) {
                 return trimmed.removePrefix("[Merger] Merging formats into").trim()
                     .removeSurrounding("\"")
+            }
+        }
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (trimmed.contains("has already been downloaded")) {
+                return trimmed.substringAfter("[download] ").substringBefore(" has already").trim()
+            }
+        }
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (trimmed.startsWith("[download] Destination:")) {
+                return trimmed.removePrefix("[download] Destination:").trim()
             }
         }
         return "$baseDir/downloaded_video.mp4"
@@ -366,9 +394,33 @@ object YoutubeDLService {
             appendLine(".twitter.com\tTRUE\t/\tTRUE\t0\tct0\t$ct0")
         }
 
-        cookieFile.writeText(content)
+        // 2026-10 整改：原子写（tmp+rename）——并发下载同时触发写入时读者不会读到半截文件
+        // 2026-10：tmp 名带时间戳——并发下载同时写 cookie 时不再互踩同一个 tmp
+        val tmp = File(cookieDir, cookieFile.name + "." + System.currentTimeMillis() + ".tmp")
+        tmp.writeText(content)
+        if (!tmp.renameTo(cookieFile)) {
+            cookieFile.outputStream().use { output -> tmp.inputStream().use { it.copyTo(output) } }
+            tmp.delete()
+        }
         Log.d(TAG, "Cookie file written to: ${cookieFile.absolutePath}")
         return cookieFile.absolutePath
+    }
+
+    /**
+     * 清理全部 yt-dlp cookie 落盘文件（2026-10 整改：cookie 文件含明文 auth_token/ct0，
+     * 旧实现常驻 filesDir 从不删除）。两个调用时机：
+     *   1. 用户在设置中清除 Cookie 时；
+     *   2. Application 启动时（清理上次会话残留——每次下载需要 cookie 时都会重新写入）。
+     */
+    fun cleanupCookieFiles(context: Context) {
+        runCatching {
+            val cookieDir = File(context.filesDir, "yt-dlp-cookies")
+            cookieDir.listFiles()?.forEach { file ->
+                if (file.isFile && file.delete()) {
+                    Log.i(TAG, "Deleted stale cookie file: ${file.name}")
+                }
+            }
+        }.onFailure { Log.w(TAG, "cleanupCookieFiles failed", it) }
     }
 }
 

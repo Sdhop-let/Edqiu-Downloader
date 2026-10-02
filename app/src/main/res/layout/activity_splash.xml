@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 开屏动画（2026-09-30）：romainpiel/Titanic 水波掠过 "Edqiu Download"。
+     wave.png 的波浪带固定为白色，故白底 + 品牌蓝文字对比最清晰 -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/splash_background">
+
+    <com.romainpiel.titanic.library.TitanicTextView
+        android:id="@+id/splash_titanic_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center"
+        android:maxLines="1"
+        android:autoSizeTextType="uniform"
+        android:autoSizeMinTextSize="32sp"
+        android:autoSizeMaxTextSize="64sp"
+        android:textSize="52sp"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:text="@string/splash_titanic_title"
+        android:textColor="@color/splash_text" />
+
+</FrameLayout>

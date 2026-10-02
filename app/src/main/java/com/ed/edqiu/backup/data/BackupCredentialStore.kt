@@ -6,6 +6,8 @@ import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import java.security.KeyStore
+import com.ed.edqiu.backup.http.runCatchingNotCancelled
+import kotlinx.coroutines.CancellationException
 
 /**
  * 凭证加密存储接口。
@@ -54,6 +56,8 @@ class EncryptedCredentialStore(context: Context) : CredentialStore {
     private fun createEncryptedPrefs(context: Context): SharedPreferences {
         return try {
             doCreate(context)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "加密凭证密钥失配，降级重建空存储", e)
             context.deleteSharedPreferences(PREFS_FILE_NAME)
@@ -80,6 +84,8 @@ class EncryptedCredentialStore(context: Context) : CredentialStore {
         try {
             KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
                 .deleteEntry(MASTER_KEY_ALIAS)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "删除 master key 失败（忽略）", e)
         }
@@ -93,7 +99,7 @@ class EncryptedCredentialStore(context: Context) : CredentialStore {
     }
 
     override fun read(providerId: String): Map<String, String> {
-        return runCatching {
+        return runCatchingNotCancelled {
             val prefix = keyPrefix(providerId)
             prefs.all
                 .filterKeys { it.startsWith(prefix) }

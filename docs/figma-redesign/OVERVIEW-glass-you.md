@@ -7,7 +7,7 @@
 | 文件 | 内容 |
 |---|---|
 | `docs/superpowers/specs/2026-08-01-liquid-glass-monet-design.md` | 完整设计系统文档（10 章：理念/色彩/材质/底栏/开关/播放器/页面映射/技术映射/无障碍/验收） |
-| `figma-redesign/liquid-glass-prototype.html` | 390×844 高保真交互原型（三屏 + 莫奈取色模拟 + 毛玻璃强度调节） |
+| `docs/figma-redesign/liquid-glass-prototype.html` | 390×844 高保真交互原型（三屏 + 莫奈取色模拟 + 毛玻璃强度调节） |
 
 ## 核心设计语言：Glass You
 

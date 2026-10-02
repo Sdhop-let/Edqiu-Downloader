@@ -34,8 +34,14 @@ interface BackupTarget {
     /** 准备远程目录（MKCOL / mkdir / 确保 /apps/Edqiu 存在）。 */
     suspend fun prepareRemote(): Result<Unit>
 
-    /** 判断远程路径是否已存在（用于跳过已备份文件）。 */
-    suspend fun exists(remotePath: String): Result<Boolean>
+    /**
+     * 判断远程路径是否已存在（用于跳过已备份文件）。
+     *
+     * @param expectedSize 本地文件期望大小；>0 且远端可取到实际大小时，实现方应比较——
+     *   不一致视为"不存在"（覆盖重传）。防 WebDAV PUT 半截上传被固化成 DONE（2026-10 P0 整改）。
+     *   原子完成协议（百度 create/阿里 complete）可忽略该参数。
+     */
+    suspend fun exists(remotePath: String, expectedSize: Long = -1L): Result<Boolean>
 
     /**
      * 上传单个文件。

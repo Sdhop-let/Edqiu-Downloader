@@ -10,6 +10,7 @@ import com.ed.edqiu.data.repository.SavedLinkRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -30,6 +31,8 @@ object SubscriptionManager {
     private const val PREFS = "subscription_poller"
     private const val KEY_LAST_POLL = "last_poll"
     private const val POLL_INTERVAL_MS = 25 * 60_000L
+    /** 单轮订阅检测超时（看门狗，2026-10）：yt-dlp execute 无内建超时。 */
+    private const val POLL_TIMEOUT_MS: Long = 15 * 60_000L
     private const val INITIAL_DELAY_MS = 90_000L
     private const val AUTHORS_PER_POLL = 3
     private const val NEW_PER_AUTHOR = 3
@@ -74,14 +77,28 @@ object SubscriptionManager {
     }
 
     /** 应用启动时挂载轮询循环（幂等；AppContainer init 调用）。 */
+    private val pollInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun start(context: Context, scope: CoroutineScope) {
         if (started) return
         started = true
         scope.launch {
             delay(INITIAL_DELAY_MS)
             while (true) {
-                runCatching { poll(context) }
-                    .onFailure { android.util.Log.w("SubscriptionManager", "poll failed", it) }
+                // 2026-10 整改：看门狗——yt-dlp 无超时可能永久挂起，单轮 15 分钟封顶；
+                // 防重入标记避免上一轮挂起时下一轮叠入（线程越积越多）
+                if (pollInFlight.compareAndSet(false, true)) {
+                    try {
+                        val outcome = withTimeoutOrNull(POLL_TIMEOUT_MS) {
+                            runCatching { poll(context) }.getOrDefault(0)
+                        }
+                        if (outcome == null) {
+                            android.util.Log.w("SubscriptionManager", "订阅检测超时（>${POLL_TIMEOUT_MS / 60_000}min），跳过本轮")
+                        }
+                    } finally {
+                        pollInFlight.set(false)
+                    }
+                }
                 delay(POLL_INTERVAL_MS)
             }
         }

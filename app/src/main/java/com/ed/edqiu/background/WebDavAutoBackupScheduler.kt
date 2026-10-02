@@ -70,8 +70,10 @@ class WebDavAutoBackupWorker(
                 Result.success()
             },
             onFailure = { e ->
-                Log.e(TAG, "自动备份失败", e)
-                Result.retry()
+                Log.e(TAG, "自动备份失败 (attempt=$runAttemptCount)", e)
+                // 2026-10 整改：配置性失败（密码改了/服务器下线）旧实现无限退避重试——
+                // 3 次后放弃本轮，等下一个调度周期（下轮配置若修复会自动恢复）
+                if (runAttemptCount < 3) Result.retry() else Result.failure()
             },
         )
     }

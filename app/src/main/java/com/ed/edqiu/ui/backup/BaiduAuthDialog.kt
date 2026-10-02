@@ -188,7 +188,9 @@ private fun QrCodeSection(session: DeviceCodeSession) {
                 }.also { webViewRef = it }
             },
             update = { view ->
-                if (view.url != qrUrl) view.loadUrl(qrUrl)
+                // 2026-10 P2 整改：只在首次加载——旧实现按 url 不等强制重载，重组期间
+                // 二维码页一旦重定向会被反复拉回，页面永远加载不完
+                if (view.url.isNullOrBlank()) view.loadUrl(qrUrl)
             },
             modifier = Modifier.size(240.dp),
         )

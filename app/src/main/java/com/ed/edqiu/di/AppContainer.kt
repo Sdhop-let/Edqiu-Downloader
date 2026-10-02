@@ -62,7 +62,10 @@ class AppContainer(context: Context) {
             metadataFetcher = metadataFetcher,
             downloaderClient = downloaderClient,
             linkHistoryRepository = linkHistoryRepository,
-            metadataScope = globalIoScope
+            metadataScope = globalIoScope,
+            // 2026-09-30 v1.6.8：启用封面本地落盘——分享保存当场存预览图，
+            // 收件箱/媒体库免二次联网同步（离线可见封面）
+            appContext = context.applicationContext
         )
 
     val historyBackupRepository: HistoryBackupRepository =

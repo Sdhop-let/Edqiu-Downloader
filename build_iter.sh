@@ -32,7 +32,7 @@ else:
 PY
 )"
 DST_HOME="D:/AndroidDev/gradle/home_fresh$T"
-export JAVA_HOME="C:/temp/jdk21/jdk-21.0.6+7"
+export JAVA_HOME="D:/AndroidDev/jdk/jdk21"
 export ANDROID_SDK_ROOT="D:/AndroidDev/sdk"
 export ANDROID_HOME="D:/AndroidDev/sdk"
 

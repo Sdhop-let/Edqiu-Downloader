@@ -69,9 +69,11 @@ class BaiduDeviceCodeAuth(
             val result = api.pollDeviceToken(clientId, clientSecret, session.deviceCode)
             val token = result.getOrNull()
             if (token == null) {
-                return Result.failure(
-                    result.exceptionOrNull() ?: BackupException("百度网盘授权失败，请重试")
-                )
+                // 2026-10 整改：没拿到业务响应（网络抖动/超时）视为瞬时故障，继续轮询到
+                // 二维码过期为止——旧实现一次失败就终止整个授权，用户需要从头扫码
+                android.util.Log.w("BaiduDeviceCodeAuth", "poll transient failure: ${result.exceptionOrNull()?.message}")
+                onProgress(BaiduAuthProgress.Waiting("网络波动，继续等待扫码授权…"))
+                continue
             }
             if (token.error.isNullOrBlank() && token.accessToken.isNotBlank()) {
                 val bundle = BaiduTokenBundle(

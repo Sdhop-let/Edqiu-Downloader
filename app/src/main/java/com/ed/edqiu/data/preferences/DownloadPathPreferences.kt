@@ -50,6 +50,14 @@ class DownloadPathPreferences(context: Context) {
     }
 
     fun displayDownloadDir(context: Context): String {
+        // 2026-10 口径统一：SAF 自定义目录场景下 yt-dlp 无法直接写入，实际解析/写入的是
+        // 应用下载目录，自定义树是下载完成后的同步副本——显示两者，消除“显示路径≠扫描路径”的误解。
+        if (useCustomPath && customTreeUri.isNotBlank()) {
+            val resolved = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)?.absolutePath
+                ?: context.filesDir.absolutePath
+            val tree = resolveCustomTreeDisplayName()
+            return if (tree.isBlank()) resolved else "$tree（同步副本）· 实际写入：$resolved"
+        }
         if (useCustomPath && customDisplayPath.isNotBlank()) return customDisplayPath
         return resolveDownloadDir(context)
     }

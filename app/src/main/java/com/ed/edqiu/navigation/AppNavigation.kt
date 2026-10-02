@@ -2,14 +2,16 @@
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.EaseOutCubic
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
@@ -20,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
@@ -36,7 +39,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,8 +46,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavType
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -68,11 +76,68 @@ import com.ed.edqiu.ui.components.EdqiuIcons
 import com.ed.edqiu.ui.components.LiquidTab
 import com.ed.edqiu.ui.components.LiquidTabBar
 import com.ed.edqiu.ui.components.LocalAppBackdrop
-import com.ed.edqiu.ui.player.MiniPlayerBar
+import com.ed.edqiu.ui.util.rememberReduceMotion
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
+
+/** 二级页 Shared Axis 过渡曲线（2026-09-30 规格）：spring 回弹 */
+private fun secondarySpringFloat() = spring<Float>(dampingRatio = 0.85f, stiffness = 380f)
+
+/**
+ * 把缩放坐标系（Scaffold graphicsLayer 中心锚点缩放）中的矩形换算回原尺寸坐标。
+ * 2026-09-30 v1.6.9 退场定位用：媒体库卡片在收尾动画期间上报的窗口矩形
+ * 处于 0.92~1 的实时缩放空间内，必须除以当时缩放比展开回 reveal=1 的位置，
+ * 播放层才能精确缩小落到卡片封面上（否则落点整体向屏幕中心偏移最多 ~8%）。
+ */
+private fun Rect.scaleBackAroundScreenCenter(center: Offset, scale: Float): Rect {
+    if (scale <= 0.001f) return this
+    val inv = 1f / scale
+    return Rect(
+        center.x + (left - center.x) * inv,
+        center.y + (top - center.y) * inv,
+        center.x + (right - center.x) * inv,
+        center.y + (bottom - center.y) * inv
+    )
+}
+
+private fun secondarySpringOffset() = spring<IntOffset>(
+    dampingRatio = 0.85f,
+    stiffness = 380f,
+    visibilityThreshold = IntOffset.VisibilityThreshold
+)
+
+/** 二级页前进：详情页自右滑入整屏 + 淡入 */
+private fun secondaryEnter() = slideInHorizontally(secondarySpringOffset()) { it } +
+    fadeIn(secondarySpringFloat())
+
+/** 二级页前进时下层列表页：向左滑出 1/4 屏 + 淡出 */
+private fun secondaryExit() = slideOutHorizontally(secondarySpringOffset()) { -it / 4 } +
+    fadeOut(secondarySpringFloat())
+
+/** 二级页返回（自动反向）：列表页自左 1/4 滑回 + 淡入 */
+private fun secondaryPopEnter() = slideInHorizontally(secondarySpringOffset()) { -it / 4 } +
+    fadeIn(secondarySpringFloat())
+
+/** 二级页返回（自动反向）：详情页向右滑出整屏 + 淡出 */
+private fun secondaryPopExit() = slideOutHorizontally(secondarySpringOffset()) { it } +
+    fadeOut(secondarySpringFloat())
+
+/** Tab 切换进入：水平位移 + 轻微放大（0.95→1）+ 淡入，新页延迟 50ms 与旧页重叠 */
+private fun tabSwitchEnter(fromLeft: Boolean) =
+    slideInHorizontally(tween(300, delayMillis = 50, easing = FastOutSlowInEasing)) {
+        if (fromLeft) -it else it
+    } +
+    scaleIn(tween(300, delayMillis = 50, easing = FastOutSlowInEasing), initialScale = 0.95f) +
+    fadeIn(tween(300, delayMillis = 50, easing = FastOutSlowInEasing))
+
+/** Tab 切换退出：向左/右滑出 + 轻微缩小（1→0.95）+ 淡出 */
+private fun tabSwitchExit(toLeft: Boolean) =
+    slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) {
+        if (toLeft) -it else it
+    } +
+    scaleOut(tween(300, easing = FastOutSlowInEasing), targetScale = 0.95f) +
+    fadeOut(tween(300, easing = FastOutSlowInEasing))
 
 sealed class Screen(val route: String, val label: String, val icon: ImageVector) {
     data object Home : Screen("home", "下载器", Icons.Outlined.Home)
@@ -113,6 +178,8 @@ fun AppNavigation(
     openCloudBackup: (() -> Unit)? = null,
     onOpenMediaBackup: (() -> Unit)? = null,
     authorsContent: (@Composable (onBack: () -> Unit) -> Unit)? = null,
+    // 2026-10：胶囊反馈回调（宿主全局 CapsuleFeedbackController），接线到 PlayerScreen
+    onFeedback: ((com.ed.edqiu.ui.components.FeedbackKind, String) -> Unit)? = null,
     floatingTabBarEnabled: Boolean = true,
     liquidGlassEnabled: Boolean = true,
     predictiveBackEnabled: Boolean = true
@@ -151,9 +218,39 @@ fun AppNavigation(
     val downloadViewModel: DownloadViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val historyViewModel: HistoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val playerViewModel: PlayerViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    // 屏幕中心（Scaffold 缩放锚点）：退场定位矩形的缩放换算基准
+    val locateConfiguration = LocalConfiguration.current
+    val locateDensity = LocalDensity.current
+    val screenCenter = remember(locateConfiguration, locateDensity) {
+        with(locateDensity) {
+            Offset(
+                locateConfiguration.screenWidthDp.dp.toPx() / 2f,
+                locateConfiguration.screenHeightDp.dp.toPx() / 2f
+            )
+        }
+    }
 
     var playerFilePath by rememberSaveable { mutableStateOf<String?>(null) }
     var playerVisible by rememberSaveable { mutableStateOf(false) }
+    // 2026-09-30 v1.6.8 播放返回定位：退场时 PlayerScreen 回调当前视频路径，
+    // 媒体库滚动定位该视频卡片（滑动切过视频后返回定位切到的那条）。
+    // 打开播放器时必须清空，避免沿用上一次的定位目标
+    var playerLocatePath by remember { mutableStateOf<String?>(null) }
+    // Slidr 背景（2026-09-30）：背景还原进度 0=播放层盖住（页面缩至 0.92+压暗），
+    // 1=播放层完全滑出（页面复原）。由 PlayerScreen 拖拽/滑入滑出实时上报
+    var playerBgReveal by remember { mutableStateOf(1f) }
+    // 容器变形转场（2026-09-30 第二版）：
+    // - originBounds = 进场几何起点（媒体库点击卡片回传的封面矩形）
+    // - targetBounds = 退场几何终点（媒体库定位滚动后回传的目标卡片封面矩形）
+    // - infoHiddenFor/infoRevealed = 退场期间隐藏目标卡片信息区（作者/文案/下载），
+    //   播放层缩小落定后放行 → 卡片信息淡入
+    var playerOriginBounds by remember { mutableStateOf<Rect?>(null) }
+    var playerTargetBounds by remember { mutableStateOf<Rect?>(null) }
+    var infoHiddenFor by remember { mutableStateOf<String?>(null) }
+    var infoRevealed by remember { mutableStateOf(false) }
+    // 2026-09-30 v1.6.9：移除退场后的迷你播放条胶囊（用户反馈不符合预期：
+    // 退出到媒体库后底部多出一条显示标题的胶囊，且仅短暂闪现 620ms 即消失）。
+    // 播放器退场即完全收起，媒体库恢复原样。
 
     LaunchedEffect(externalDownloadRequest?.requestId) {
         if (externalDownloadRequest != null) {
@@ -167,13 +264,6 @@ fun AppNavigation(
         }
     }
 
-    LaunchedEffect(playerVisible, playerFilePath) {
-        if (!playerVisible && playerFilePath != null) {
-            delay(280L) // ≥ 退场动画 240ms，动画播完再清路径，避免组合被硬移除
-            playerFilePath = null
-        }
-    }
-
     val showBottomBar = currentDestination?.route in tabScreens.map { it.route } && playerFilePath == null
     val selectedTabIndex = tabScreens.indexOfFirst { currentDestination?.hierarchy?.any { h -> h.route == it.route } == true }
         .coerceAtLeast(0)
@@ -183,7 +273,7 @@ fun AppNavigation(
     val tabBarClearance = 84.dp
 
     // ---- 液态玻璃（Backdrop 库）：内层 shell 捕获层 ----
-    // shellBackdrop 只记录页面内容（NavHost）；底栏/迷你播放条位于捕获链外，
+    // shellBackdrop 只记录页面内容（NavHost）；底栏位于捕获链外，
     // 真折射采样「正下方的列表内容」。此处覆盖外层 LocalAppBackdrop 值。
     val backdropBase = MaterialTheme.colorScheme.background
     val shellBackdrop = rememberLayerBackdrop {
@@ -195,8 +285,20 @@ fun AppNavigation(
     val tabRouteIndex = remember(tabScreens) {
         tabScreens.map { it.route }.withIndex().associate { (i, r) -> r to i }
     }
+    // 系统「减少动画」（无障碍移除动画/动画时长缩放=0）：全部转场降级为纯淡变
+    val reduceMotion = rememberReduceMotion()
+    val activePlayerPath = playerFilePath
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
+            modifier = Modifier
+                // 容器变形底衬（2026-09-30 第二版）：播放层盖住时页面缩至 0.92，
+                // 拖拽/缩小回卡片时随 playerBgReveal（0→1）复原；Scaffold 铺满全屏，
+                // graphicsLayer 缩放锚点即屏幕中心。块内读状态 = 逐帧更新层参数不触发重组
+                .graphicsLayer {
+                    val scale = androidx.compose.ui.util.lerp(0.92f, 1f, playerBgReveal)
+                    scaleX = scale
+                    scaleY = scale
+                },
             containerColor = Color.Transparent,
             // 内容延伸到状态栏后（每个页面 HeaderPanel 自己加 statusBarsPadding）
             contentWindowInsets = WindowInsets(0),
@@ -226,66 +328,53 @@ fun AppNavigation(
                 modifier = Modifier
                     // 仅保留系统 inset（状态栏/导航栏），不再为 Tab 额外占位
                     .padding(paddingValues)
-                    // 液态玻璃捕获：底栏/迷你条折射的采样源 = 此 NavHost 的页面内容
+                    // 液态玻璃捕获：底栏折射的采样源 = 此 NavHost 的页面内容
                     .layerBackdrop(shellBackdrop),
-                // 转场（2026-09-29 修正）：Tab 间切换与进入二级页恢复原「方向感知滑动+淡变」方案；
-                // 仅二级页返回（tab↔非tab 的 pop，如帖子详情/设置/播放页返回）采用视频复刻的
-                // iOS 式纯位移视差——顶层整页右滑出 + 下层自左 1/5 视差滑回，无透明度变化，
-                // 400ms EaseOutCubic 快出缓停（对齐 2026-09-29 微信视频逐帧实测）
+                // 转场（2026-09-30 统一动画规格；系统「减少动画」全部降级为纯淡变）：
+                // - Tab↔Tab：水平位移 + 轻微缩放（0.95↔1）+ 淡变，300ms FastOutSlowIn，
+                //   新页延迟 50ms 起步形成 ~50ms 轻微重叠；
+                // - Tab↔二级页（Shared Axis X，spring 0.85/380）：前进 = 详情自右滑入+淡入、
+                //   列表左滑 1/4 屏+淡出；返回自动反向。
                 enterTransition = {
                     val from = tabRouteIndex[initialState.destination.route]
                     val to = tabRouteIndex[targetState.destination.route]
                     when {
-                        from == null || to == null -> slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { it / 3 } +
-                            fadeIn(tween(300, easing = FastOutSlowInEasing))
-                        to > from ->
-                            slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { it / 4 } +
-                                fadeIn(tween(300))
-                        else ->
-                            slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { -it / 4 } +
-                                fadeIn(tween(300))
+                        reduceMotion -> fadeIn(tween(150))
+                        from == null || to == null -> secondaryEnter()
+                        to > from -> tabSwitchEnter(fromLeft = false)
+                        else -> tabSwitchEnter(fromLeft = true)
                     }
                 },
                 exitTransition = {
                     val from = tabRouteIndex[initialState.destination.route]
                     val to = tabRouteIndex[targetState.destination.route]
                     when {
-                        from == null || to == null -> slideOutHorizontally(tween(280, easing = FastOutSlowInEasing)) { -it / 5 } +
-                            fadeOut(tween(240, easing = FastOutSlowInEasing))
-                        to > from ->
-                            slideOutHorizontally(tween(220)) { -it / 5 } + fadeOut(tween(220))
-                        else ->
-                            slideOutHorizontally(tween(220)) { it / 5 } + fadeOut(tween(220))
+                        reduceMotion -> fadeOut(tween(150))
+                        from == null || to == null -> secondaryExit()
+                        to > from -> tabSwitchExit(toLeft = true)
+                        else -> tabSwitchExit(toLeft = false)
                     }
                 },
                 popEnterTransition = {
                     val from = tabRouteIndex[initialState.destination.route]
                     val to = tabRouteIndex[targetState.destination.route]
                     when {
-                        // 二级页返回：下层页 ColorOS 桌面卡片式放大展开（跟手 seek 驱动）
-                        from == null || to == null ->
-                            scaleIn(
-                                initialScale = 0.88f,
-                                animationSpec = tween(400, easing = EaseOutCubic)
-                            )
-                        to > from ->
-                            slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { it / 4 } +
-                                fadeIn(tween(300))
-                        else ->
-                            slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { -it / 4 } +
-                                fadeIn(tween(300))
+                        reduceMotion -> fadeIn(tween(150))
+                        // 二级页返回：下层页随 Shared Axis 反向滑回（1/4 视差 + 淡入）
+                        from == null || to == null -> secondaryPopEnter()
+                        to > from -> tabSwitchEnter(fromLeft = false)
+                        else -> tabSwitchEnter(fromLeft = true)
                     }
                 },
                 popExitTransition = {
                     val from = tabRouteIndex[initialState.destination.route]
                     val to = tabRouteIndex[targetState.destination.route]
                     when {
-                        from == null || to == null ->
-                            slideOutHorizontally(tween(400, easing = EaseOutCubic)) { it }
-                        to > from ->
-                            slideOutHorizontally(tween(220)) { -it / 5 } + fadeOut(tween(220))
-                        else ->
-                            slideOutHorizontally(tween(220)) { it / 5 } + fadeOut(tween(220))
+                        reduceMotion -> fadeOut(tween(150))
+                        // 二级页返回：详情页整屏右滑出 + 淡出（前进的自动反向）
+                        from == null || to == null -> secondaryPopExit()
+                        to > from -> tabSwitchExit(toLeft = true)
+                        else -> tabSwitchExit(toLeft = false)
                     }
                 }
             ) {
@@ -303,10 +392,14 @@ fun AppNavigation(
                         historyViewModel = historyViewModel,
                         onBack = { navController.popBackStack() },
                         onNavigateToPlayer = { filePath ->
-                            // 2026-09-14 修复"立即返回后再点无法播放"：快速往返时 PlayerScreen
-                            // 组合未销毁、LaunchedEffect(autoPlayFilePath) 不会重启，
-                            // 必须在此显式触发 playVideo（幂等：播放中→早退，IDLE→重新 prepare）
-                            playerViewModel.playVideo(filePath)
+                            // 2026-09-30 容器变形：入口只定位/预载不起播（autoStart=false），
+                            // 真正 play() 由 PlayerScreen 展开落定后触发，进场期间无声；
+                            // 2026-09-30 v1.6.9：openPlayer 建立类型分流的会话列表
+                            // （视频会话只翻视频 / 图片会话只翻图片）
+                            playerViewModel.openPlayer(filePath)
+                            playerLocatePath = null
+                            playerOriginBounds = null
+                            playerTargetBounds = null
                             playerFilePath = filePath
                             playerVisible = true
                         }
@@ -315,14 +408,29 @@ fun AppNavigation(
                 composable(Screen.Library.route) {
                     MediaLibraryScreen(
                         historyViewModel = historyViewModel,
-                        onNavigateToPlayer = { filePath ->
-                            // 2026-09-14 修复"立即返回后再点无法播放"：快速往返时 PlayerScreen
-                            // 组合未销毁、LaunchedEffect(autoPlayFilePath) 不会重启，
-                            // 必须在此显式触发 playVideo（幂等：播放中→早退，IDLE→重新 prepare）
-                            playerViewModel.playVideo(filePath)
+                        onNavigateToPlayer = { filePath, coverBounds ->
+                            // 2026-09-30 容器变形：卡片封面矩形作为进场几何起点；
+                            // 只预载不起播，play() 在展开落定后触发。
+                            // 2026-09-30 v1.6.9：openPlayer 建立类型分流的会话列表
+                            playerViewModel.openPlayer(filePath)
+                            playerLocatePath = null
+                            playerOriginBounds = coverBounds
+                            playerTargetBounds = null
                             playerFilePath = filePath
                             playerVisible = true
-                        }
+                        },
+                        locateFilePath = playerLocatePath,
+                        // 定位滚动落定后回传目标卡片封面矩形（退场缩小终点）
+                        // 2026-09-30 v1.6.9：上报矩形处于 Scaffold 实时缩放坐标系
+                        //（0.92~1 随背景还原变化），按上报时的缩放比换算回原尺寸坐标，
+                        // 播放层收尾才能精确落在卡片封面上（换算基准=上报时刻的 reveal）
+                        onLocateBounds = { rect ->
+                            val scale = androidx.compose.ui.util.lerp(0.92f, 1f, playerBgReveal)
+                            playerTargetBounds = rect.scaleBackAroundScreenCenter(screenCenter, scale)
+                        },
+                        // 退场期间隐藏目标卡片信息区，落定后淡入（见 PlayerScreen onBack）
+                        infoHiddenFor = infoHiddenFor,
+                        infoRevealed = infoRevealed
                     )
                 }
                 if (inboxContent != null) {
@@ -407,6 +515,16 @@ fun AppNavigation(
             }
         }
 
+        // 背景压暗（容器变形）：播放层盖住时 45% 黑，随缩小回卡片/展开实时还原到全透明
+        if (activePlayerPath != null) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = (1f - playerBgReveal).coerceIn(0f, 1f) * 0.45f }
+                    .background(Color.Black)
+            )
+        }
+
         // 悬浮液态胶囊 Tab 栏：navigationBarsPadding + 8dp 适配不同设备导航栏高度
         // （blurRadius 不再写死 8dp——GlassOverlaySurface 默认值会按全局「模糊强度」滑块取值）
         if (showBottomBar && floatingTabBarEnabled) {
@@ -422,92 +540,53 @@ fun AppNavigation(
             )
         }
 
-        val activePlayerPath = playerFilePath
         if (activePlayerPath != null) {
             AnimatedVisibility(
                 visible = playerVisible,
-                // 播放器进出场（2026-09-29 修正）：返回退出对齐视频复刻规格——整页右滑出
-                // 400ms EaseOutCubic 快出缓停；SurfaceView 约束保留短淡出 160ms
-                // （长 alpha 会撕裂掉帧，onBack 已 pause 冻结画面，淡出配合冻结帧最顺滑）；
-                // 进入保持原自右滑入+淡入不动
-                enter = slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { it } +
-                    fadeIn(tween(200)),
-                exit = slideOutHorizontally(tween(400, easing = EaseOutCubic)) { it } +
-                    fadeOut(tween(160)),
+                // 2026-09-30 第二版：浮层进出场为 None，进场展开/拖拽跟手/
+                // 缩小回卡片全部由 PlayerScreen 内部 geoT 容器变形引擎驱动
+                enter = EnterTransition.None,
+                exit = ExitTransition.None,
                 modifier = Modifier.fillMaxSize()
             ) {
                 PlayerScreen(
                     playerViewModel = playerViewModel,
                     historyViewModel = historyViewModel,
                     autoPlayFilePath = activePlayerPath,
+                    // 2026-10：宿主全局胶囊反馈（未接线时为空回调，行为不变）
+                    onFeedback = onFeedback ?: { _, _ -> },
+                    // 进场几何起点（媒体库卡片封面矩形；下载页入口为 null 走中央降级矩形）
+                    originBounds = playerOriginBounds,
+                    // 退场几何终点（媒体库定位滚动回传，实时跟随更新）
+                    targetBounds = playerTargetBounds,
+                    // 拖拽/缩小进度 → 背景缩放+压暗实时还原
+                    onDragProgress = { playerBgReveal = it },
+                    // 退场定位链路：记录当前视频 → 媒体库滚动定位；
+                    // 同帧隐藏目标卡片信息区（等播放层缩小落定后再淡入）
+                    onRequestExitLocate = { path ->
+                        playerLocatePath = path
+                        infoHiddenFor = path
+                        infoRevealed = false
+                        playerTargetBounds = null
+                    },
                     onBack = {
-                        // 保持播放状态：返回列表后迷你播放条继续播放
+                        // PlayerScreen 缩小落定后才回调：同帧收起浮层与全部会话状态。
+                        // 2026-09-30 v1.6.9：迷你条已移除，退场即完全收起，不留任何悬浮件；
+                        // 背景复原全尺寸、不压暗；放行卡片信息区淡入
                         playerVisible = false
+                        playerFilePath = null
+                        playerBgReveal = 1f
+                        playerLocatePath = null
+                        playerOriginBounds = null
+                        playerTargetBounds = null
+                        infoHiddenFor = null
+                        infoRevealed = true
                     }
                 )
             }
         }
-
-        // 迷你播放条：播放器退出后悬浮于底栏上方
-        // 注意：collectAsState 收在 MiniPlayerHost 内部，避免高频 position 更新
-        // （PlayerViewModel 每 350ms 同步一次）拖垮整个导航树的重组
-        if (activePlayerPath != null) {
-            MiniPlayerHost(
-                playerViewModel = playerViewModel,
-                visible = !playerVisible,
-                onExpand = {
-                    playerViewModel.playVideo(activePlayerPath)
-                    playerFilePath = activePlayerPath
-                    playerVisible = true
-                },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .then(
-                        // 标准底栏模式：迷你条抬到 NavigationBar（80dp）上方；
-                        // 悬浮底栏模式：抬到 50dp 胶囊 + 间隙上方；无底栏：贴底
-                        when {
-                            showBottomBar && !floatingTabBarEnabled ->
-                                Modifier.navigationBarsPadding().padding(bottom = 88.dp)
-                            showBottomBar -> Modifier.padding(bottom = 116.dp)
-                            else -> Modifier.padding(bottom = 24.dp)
-                        }
-                    )
-            )
-        }
     }
     }
-}
-
-/**
- * 迷你播放条宿主：内部收集 playerState。
- *
- * PlayerViewModel 的 position 每 350ms 更新一次，若在 AppNavigation 顶层 collect，
- * 会导致 NavHost / Scaffold / LiquidTabBar 全部随进度条高频重组 —— 点击不跟手的根因。
- * 这里把收集隔离在本组件内，重组只影响迷你条自身。
- */
-@Composable
-private fun MiniPlayerHost(
-    playerViewModel: PlayerViewModel,
-    visible: Boolean,
-    onExpand: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val playerStateValue by playerViewModel.playerState.collectAsState()
-    val miniCurrent = playerStateValue.currentVideo
-    if (!visible || miniCurrent == null) return
-
-    MiniPlayerBar(
-        title = miniCurrent.title?.takeIf { it.isNotBlank() }
-            ?: miniCurrent.filePath.substringAfterLast('/'),
-        subtitle = miniCurrent.uploader?.takeIf { it.isNotBlank() } ?: "播放中",
-        progress = if (playerStateValue.duration > 0) {
-            (playerStateValue.position.toFloat() / playerStateValue.duration).coerceIn(0f, 1f)
-        } else 0f,
-        isPlaying = playerStateValue.isPlaying,
-        onClick = onExpand,
-        onTogglePlay = { playerViewModel.togglePlayPause() },
-        modifier = modifier
-    )
 }
 
 

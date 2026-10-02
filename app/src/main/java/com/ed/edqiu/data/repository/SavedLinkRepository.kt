@@ -1,8 +1,10 @@
 package com.ed.edqiu.data.repository
 
 import com.ed.edqiu.data.db.SavedLinkDao
+import com.ed.edqiu.data.metadata.CoverStore
 import com.ed.edqiu.data.metadata.MetadataFetcher
 import com.ed.edqiu.data.metadata.TweetMeta
+import android.content.Context
 import android.util.Log
 import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.data.model.ProxySettings
@@ -21,7 +23,9 @@ class SavedLinkRepository(
     private val metadataFetcher: MetadataFetcher,
     private val downloaderClient: DownloaderClient,
     private val linkHistoryRepository: LinkHistoryRepository,
-    private val metadataScope: CoroutineScope? = null
+    private val metadataScope: CoroutineScope? = null,
+    /** 传入时启用封面本地落盘（分享保存当场存预览图，v1.6.8）；null = 关闭（测试兜底）。 */
+    private val appContext: Context? = null
 ) {
 
     fun observeAll(): Flow<List<SavedLink>> = dao.observeAll()
@@ -62,7 +66,11 @@ class SavedLinkRepository(
         val skipped: Int
     )
 
-    private val downloadRequestMutex = Mutex()
+    // 2026-10 整改：全局下载互斥改为按推文粒度——retryDueDownloads 串行重试时，
+    // 用户手动下载另一条推文不再排队数分钟；同一推文的并发请求仍串行（attemptCount 一致性）
+    private val downloadMutexes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+
+    private fun mutexFor(tweetId: String): Mutex = downloadMutexes.getOrPut(tweetId) { Mutex() }
 
     /**
      * 捕获成功回调（自动预下载挂载点）。
@@ -116,10 +124,15 @@ class SavedLinkRepository(
         proxy: ProxySettings? = null,
         /** Worker 续跑路径传 true：不再触发登记钩子（避免自我递归）。 */
         viaQueue: Boolean = false
-    ): DownloadRequestResult = downloadRequestMutex.withLock {
+    ): DownloadRequestResult = mutexFor(tweetId).withLock {
         var link = dao.getByTweetId(tweetId) ?: return DownloadRequestResult.Missing
         if (link.status == LinkStatus.DOWNLOADED) {
             return DownloadRequestResult.AlreadyDownloaded
+        }
+        // 2026-10 整改：DELETED（推文不存在）是永久终态——旧实现不拦截，手动重试/Worker 续跑
+        // 会再跑一遍三层引擎链（纯浪费），失败后还会把 DELETED 复活成 FAILED 重新进入自动重试轮询
+        if (link.status == LinkStatus.DELETED) {
+            return DownloadRequestResult.Gone
         }
 
         if (manual && link.attemptCount >= DownloadRetryPolicy.MAX_ATTEMPTS) {
@@ -252,9 +265,13 @@ class SavedLinkRepository(
      */
     suspend fun importScannedDownloads(monitorUri: String?): Int {
         val scanned = downloadMonitor.scanMonitorAndDownloadDirs(monitorUri)
+        // 2026-10 P1 整改：排除已进回收站的推文——旧实现删除的条目（文件保留在磁盘）
+        // 会被下一轮扫描以 DOWNLOADED 重新插回收件箱，自动"复活"
+        val deletedIds = linkHistoryRepository.deletedTweetIds().toHashSet()
         var imported = 0
         scanned.values.forEach { item ->
             if (dao.exists(item.tweetId)) return@forEach
+            if (item.tweetId in deletedIds) return@forEach
             val insertedRowId = dao.insert(
                 SavedLink(
                     tweetId = item.tweetId,
@@ -282,6 +299,34 @@ class SavedLinkRepository(
         dao.getMissingMetadata(limit).forEach { link ->
             fetchAndApplyMetadata(link.tweetId)
         }
+    }
+
+    /**
+     * 存量封面回填（2026-09-30 v1.6.8）：历史入库时只存了远程封面 URL 的记录，
+     * 补一轮「下载到本地 + 落库本地路径」，让旧条目同样免二次联网同步。
+     * 内部不做节流——由调用方（后台同步 Worker / 收件箱刷新）控制频率，每轮限量。
+     */
+    suspend fun backfillLocalCovers(limit: Int = 8) {
+        val context = appContext ?: return
+        dao.getAllSnapshot()
+            .asSequence()
+            .filter { it.status != LinkStatus.DELETED }
+            .filter { it.thumbnailUrl?.startsWith("http") == true }
+            .filter { CoverStore.localCoverPath(context, it.tweetId) == null }
+            .take(limit)
+            .forEach { link ->
+                CoverStore.ensureLocalCover(context, link.tweetId, link.thumbnailUrl)?.let { local ->
+                    dao.applyMeta(
+                        tweetId = link.tweetId,
+                        authorId = null,
+                        authorName = null,
+                        caption = null,
+                        thumbnailUrl = local,
+                        avatarUrl = null,
+                        authorBio = null
+                    )
+                }
+            }
     }
 
     /**
@@ -314,12 +359,20 @@ class SavedLinkRepository(
         val link = dao.getByTweetId(tweetId) ?: return false
         val meta = runCatching { metadataFetcher.fetchFromTwitter(tweetId) }.getOrNull()
             ?: return false
+        // 2026-09-30 v1.6.8 封面同步落盘：分享保存当场把预览图下载到本地，
+        // 落库本地路径——收件箱/媒体库下次进入直接读文件渲染，离线可见、
+        // 不再触发「二次同步预览图」。失败回退远程 URL（coverStore 内部 5s 超时，
+        // 不吃满 CaptureIntentActivity 的 8s 元数据等待窗口）
+        val remoteThumb = meta.thumbnailUrl ?: link.thumbnailUrl
+        val localThumb = if (remoteThumb?.startsWith("http") == true) {
+            appContext?.let { CoverStore.ensureLocalCover(it, tweetId, remoteThumb) }
+        } else null
         dao.applyMeta(
             tweetId = tweetId,
             authorId = meta.authorId ?: link.authorId,
             authorName = meta.authorName ?: link.authorName,
             caption = meta.caption ?: link.caption,
-            thumbnailUrl = meta.thumbnailUrl ?: link.thumbnailUrl,
+            thumbnailUrl = localThumb ?: remoteThumb ?: link.thumbnailUrl,
             avatarUrl = meta.avatarUrl ?: link.avatarUrl,
             authorBio = meta.authorBio ?: link.authorBio
         )

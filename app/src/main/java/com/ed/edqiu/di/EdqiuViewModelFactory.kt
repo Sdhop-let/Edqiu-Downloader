@@ -18,7 +18,6 @@ import com.ed.edqiu.ui.backup.CloudBackupViewModel
 import com.ed.edqiu.ui.backup.MediaBackupViewModel
 import com.ed.edqiu.ui.authors.AuthorsViewModel
 import com.ed.edqiu.ui.detail.DetailViewModel
-import com.ed.edqiu.ui.downloads.DownloadCenterViewModel
 import com.ed.edqiu.ui.history.HistoryViewModel
 import com.ed.edqiu.ui.list.ListViewModel
 import com.ed.edqiu.ui.settings.BackupViewModel
@@ -55,8 +54,6 @@ class EdqiuViewModelFactory(
                 ) as T
             modelClass.isAssignableFrom(DetailViewModel::class.java) ->
                 DetailViewModel(application, savedLinkRepository, settingsRepository, downloadScope) as T
-            modelClass.isAssignableFrom(DownloadCenterViewModel::class.java) ->
-                DownloadCenterViewModel(savedLinkRepository, settingsRepository) as T
             modelClass.isAssignableFrom(HistoryViewModel::class.java) ->
                 HistoryViewModel(linkHistoryRepository) as T
             modelClass.isAssignableFrom(BackupViewModel::class.java) ->

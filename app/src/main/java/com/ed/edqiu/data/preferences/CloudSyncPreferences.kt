@@ -3,10 +3,22 @@
 import android.content.Context
 import android.content.SharedPreferences
 
+/**
+ * 云同步（WebDAV）配置存储。
+ *
+ * 2026-10 安全整改：password（网盘主密码级别凭证）由明文 SharedPreferences 改为
+ * [SecretBox]（AndroidKeyStore + AES/GCM）加密落盘；旧版明文值在首次读取时自动迁移。
+ */
 class CloudSyncPreferences(context: Context) {
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences("cloud_sync", Context.MODE_PRIVATE)
+
+    private val secrets = SecretBox(
+        prefs = prefs,
+        keyAlias = "edqiu_cloud_sync_key",
+        logTag = "CloudSyncPreferences",
+    )
 
     companion object {
         private const val KEY_ENABLED = "sync_enabled"
@@ -35,8 +47,8 @@ class CloudSyncPreferences(context: Context) {
         set(value) = prefs.edit().putString(KEY_USERNAME, value).apply()
 
     var password: String
-        get() = prefs.getString(KEY_PASSWORD, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_PASSWORD, value).apply()
+        get() = secrets.readSecret(KEY_PASSWORD)
+        set(value) = secrets.writeSecret(KEY_PASSWORD, value)
 
     var remotePath: String
         get() = prefs.getString(KEY_REMOTE_PATH, "Edqiu") ?: "Edqiu"

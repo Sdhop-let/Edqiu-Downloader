@@ -70,7 +70,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun resolveUrl() {
         val url = _uiState.value.urlInput.trim()
         if (!isValidTwitterUrl(url)) {
-            _uiState.update { it.copy(error = "璇疯緭鍏ユ湁鏁堢殑鎺ㄦ枃閾炬帴") }
+            _uiState.update { it.copy(error = "请输入有效的推文链接") }
             return
         }
 
@@ -83,7 +83,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         _uiState.update {
                             it.copy(
                                 isResolving = false,
-                                error = "璇ラ摼鎺ュ凡涓嬭浇杩囷紝璇峰嬁閲嶅涓嬭浇",
+                                error = "该链接已下载过，请勿重复下载",
                                 urlInput = ""
                             )
                         }
@@ -93,7 +93,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 .onFailure { e ->
                     _uiState.update {
-                        it.copy(isResolving = false, error = e.message ?: "瑙ｆ瀽澶辫触")
+                        it.copy(isResolving = false, error = e.message ?: "解析失败")
                     }
                 }
         }
@@ -138,7 +138,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun autoResolveAndDownload(url: String, downloadVm: DownloadViewModel) {
         val normalizedUrl = url.trim()
         if (!autoResolvingUrls.add(normalizedUrl)) {
-            _uiState.update { it.copy(autoDownloadMessage = "璇ラ摼鎺ユ鍦ㄥ鐞嗕腑") }
+            _uiState.update { it.copy(autoDownloadMessage = "该链接正在处理中") }
             return
         }
 
@@ -149,7 +149,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         urlInput = normalizedUrl,
                         isResolving = true,
                         error = null,
-                        autoDownloadMessage = "姝ｅ湪鑷姩涓嬭浇妫€娴嬪埌鐨勬帹鏂囧獟浣?.."
+                        autoDownloadMessage = "正在自动下载检测到的推文媒体…"
                     )
                 }
 
@@ -159,7 +159,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             _uiState.update {
                                 it.copy(
                                     isResolving = false,
-                                    autoDownloadMessage = "璇ラ摼鎺ュ凡涓嬭浇杩囷紝璺宠繃鑷姩涓嬭浇"
+                                    autoDownloadMessage = "该链接已下载过，跳过自动下载"
                                 )
                             }
                             return@onSuccess
@@ -172,7 +172,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         _uiState.update {
                             it.copy(
                                 isResolving = false,
-                                error = e.message ?: "鑷姩瑙ｆ瀽澶辫触",
+                                error = e.message ?: "自动解析失败",
                                 autoDownloadMessage = null
                             )
                         }

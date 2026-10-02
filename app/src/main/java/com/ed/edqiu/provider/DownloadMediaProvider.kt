@@ -15,10 +15,28 @@ import java.io.File
 import java.io.FileNotFoundException
 
 /**
- * 浠ュ彧璇绘柟寮忓悜鍚岀鍚嶅簲鐢ㄦ毚闇蹭笅杞藉櫒鐨?Android/data 涓嬭浇鐩綍銆? * Edqiu 閫氳繃璇?Provider 鏋氫妇濯掍綋涓?sidecar锛屼笉闇€瑕佺洿鎺ョ┛閫忕郴缁熺殑 Android/data 闄愬埗銆? */
+ * 以只读方式向同签名应用暴露下载器的 Android/data 下载目录。
+ * Edqiu 通过该 Provider 枚举媒体与 sidecar，不需要直接穿透系统的 Android/data 限制。
+ *
+ * 2026-10 安全加固：manifest 的 signature 自定义权限存在「被抢先安装的恶意应用抢注」
+ * 风险（抢注者自动成为权限 owner 并持权）。因此在每个入口做运行时双重校验——
+ * 调用方必须与本应用签名一致才放行，权限持有但签名不符一律拒绝。
+ */
 class DownloadMediaProvider : ContentProvider() {
 
     override fun onCreate(): Boolean = true
+
+    /** 调用方可信校验：uid 归属包必须与本应用同签名（自身调用恒通过）。 */
+    private fun isTrustedCaller(): Boolean {
+        val appContext = context ?: return false
+        val callingUid = android.os.Binder.getCallingUid()
+        if (callingUid == android.os.Process.myUid()) return true
+        val pm = appContext.packageManager
+        val callerPackages = pm.getPackagesForUid(callingUid) ?: return false
+        return callerPackages.any { pkg ->
+            pm.checkSignatures(appContext.packageName, pkg) >= android.content.pm.PackageManager.SIGNATURE_MATCH
+        }
+    }
 
     override fun query(
         uri: Uri,
@@ -27,6 +45,7 @@ class DownloadMediaProvider : ContentProvider() {
         selectionArgs: Array<out String>?,
         sortOrder: String?
     ): Cursor {
+        if (!isTrustedCaller()) throw SecurityException("Caller is not trusted: " + callingPackage.orEmpty())
         if (URI_MATCHER.match(uri) != MATCH_FILES) {
             throw IllegalArgumentException("Unsupported URI: $uri")
         }
@@ -64,6 +83,7 @@ class DownloadMediaProvider : ContentProvider() {
     }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
+        if (!isTrustedCaller()) throw SecurityException("Caller is not trusted: " + callingPackage.orEmpty())
         if (URI_MATCHER.match(uri) != MATCH_FILE || mode != "r") {
             throw FileNotFoundException("Unsupported URI or mode: $uri ($mode)")
         }

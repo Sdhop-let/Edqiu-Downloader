@@ -42,6 +42,10 @@ data class DeletedLinkHistory(
     @ColumnInfo(name = "author_bio")
     val authorBio: String? = null,
 
+    /** 推文发布时间（epoch ms，v8 起回收站保留，恢复后媒体库/作者页排序不退化）。 */
+    @ColumnInfo(name = "published_at")
+    val publishedAt: Long? = null,
+
     @ColumnInfo(name = "saved_at")
     val savedAt: Long,
 
@@ -80,6 +84,7 @@ data class DeletedLinkHistory(
         thumbnailUrl = thumbnailUrl,
         avatarUrl = avatarUrl,
         authorBio = authorBio,
+        publishedAt = publishedAt,
         savedAt = savedAt,
         status = status,
         filePath = filePath,
@@ -106,6 +111,7 @@ data class DeletedLinkHistory(
             thumbnailUrl = link.thumbnailUrl,
             avatarUrl = link.avatarUrl,
             authorBio = link.authorBio,
+            publishedAt = link.publishedAt,
             savedAt = link.savedAt,
             status = link.status,
             filePath = link.filePath,

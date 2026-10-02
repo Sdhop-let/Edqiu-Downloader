@@ -1,6 +1,6 @@
 # XInvox UI 重构 · Compose 实现代码
 
-> 对应设计原型：`figma-redesign/prototype-md-2026-08-17.html`  
+> 对应设计原型：`docs/figma-redesign/prototype-md-2026-08-17.html`  
 > 目标：将收件箱、我的、主题设置三屏重构为 Liquid Glass × Monet 风格，并适配一加 15 修长比例。
 
 ## 1. 项目技术栈确认

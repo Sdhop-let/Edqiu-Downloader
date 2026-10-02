@@ -52,10 +52,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,9 +68,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -92,7 +100,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val LIBRARY_PERIODIC_SCAN_INTERVAL_MS = 45_000L
 
@@ -116,7 +128,17 @@ private enum class LibraryFilter(val label: String) {
 @Composable
 fun MediaLibraryScreen(
     historyViewModel: HistoryViewModel,
-    onNavigateToPlayer: (String) -> Unit
+    // 2026-09-30 共享封面过渡：coverBounds = 点击卡片的封面区域（窗口坐标），
+    // 播放器封面据此从卡片位置飞入全屏；null（不可用时）播放器降级为滑入
+    onNavigateToPlayer: (filePath: String, coverBounds: Rect?) -> Unit,
+    // 2026-09-30 v1.6.8 播放返回定位：非空时把列表滚动到该视频的卡片，
+    // 滚动落定后通过 onLocateBounds 上报卡片封面矩形，供退场封面精准落点
+    locateFilePath: String? = null,
+    onLocateBounds: (Rect) -> Unit = {},
+    // 容器变形退场（2026-09-30 第二版）：播放层从全屏缩小到该卡片封面的过程中，
+    // 目标卡片的信息区（作者/文案/下载信息）先隐藏；infoRevealed 置真后淡入
+    infoHiddenFor: String? = null,
+    infoRevealed: Boolean = false
 ) {
     val context = LocalContext.current
     val allItems by historyViewModel.historyList.collectAsState()
@@ -238,8 +260,11 @@ fun MediaLibraryScreen(
         }
     }
 
-    // P1-4① 重复检测（2026-09-15 批次3）：pHash 汉明距离 ≤4 聚组（纯内存计算）
-    val duplicateGroupsList = remember(allItems) { duplicateGroups(allItems) }
+    // P1-4① 重复检测（2026-09-15 批次3）：pHash 汉明距离 ≤4 聚组
+    // 2026-10 整改：O(n²) 计算移出主线程（remember 直算，几百条起掉帧），异步产出+自动重算
+    val duplicateGroupsList by produceState(emptyList(), allItems) {
+        value = withContext(Dispatchers.Default) { duplicateGroups(allItems) }
+    }
 
     // 同作者序号：为每条媒体分配它在作者内的递增序号；作者总数 ≥2 时显示徽章（区分重复视频）
     val authorSeq: Map<String, Int> = remember(items) {
@@ -258,7 +283,48 @@ fun MediaLibraryScreen(
     }
     val groups = remember(items, grouped) { if (grouped) groupLibraryByTweet(items) else emptyList() }
 
+    // ── 播放返回定位（2026-09-30 v1.6.8；2026-09-30 v1.6.9 修复定位失效）──
+    // 卡片封面矩形表（onGloballyPositioned 持续上报，仅可见卡片在表内）
+    val coverBoundsMap = remember { mutableStateMapOf<String, Rect>() }
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    androidx.compose.runtime.LaunchedEffect(locateFilePath, items.size, grouped) {
+        val target = locateFilePath ?: return@LaunchedEffect
+        // LazyColumn 内部索引：头部占 index 0；分组模式还要累加各组头部
+        val lazyIndex = if (grouped) {
+            var acc = 1
+            var found = -1
+            groups.forEach { group ->
+                if (found < 0) {
+                    val pos = group.items.indexOfFirst { it.filePath == target }
+                    if (pos >= 0) found = acc + pos
+                }
+                acc += 1 + group.items.size
+            }
+            found
+        } else {
+            items.indexOfFirst { it.filePath == target }.takeIf { it >= 0 }?.plus(1) ?: -1
+        }
+        if (lazyIndex < 0) return@LaunchedEffect
+        // 2026-09-30 v1.6.9 修复「退场不定位/回缩错卡」：
+        // ① animateScrollToItem 长列表在 460ms 收尾动画内滚不完 → 改瞬时 scrollToItem
+        //   （列表在浮层后面跳变，浮层淡出时已停在目标卡片）；
+        // ② 滚动后 onGloballyPositioned 要到下一帧布局才把矩形写入 coverBoundsMap，
+        //   旧逻辑同步读表拿不到 → targetBounds 恒空 → 回缩落到进场旧卡片。
+        //   现在等矩形表出现「滚动后新值」（跳过订阅时的旧值）再上报。
+        val boundsBeforeScroll = coverBoundsMap[target]
+        runCatching { listState.scrollToItem(lazyIndex) }
+        val boundsAfterScroll = withTimeoutOrNull(400L) {
+            androidx.compose.runtime.snapshotFlow { coverBoundsMap[target] }
+                .drop(1)
+                .filterNotNull()
+                .first()
+        }
+        // 卡片本就停在原位（矩形无变化 → 超时）时用滚动前的现值，它就是最新矩形
+        (boundsAfterScroll ?: boundsBeforeScroll)?.let(onLocateBounds)
+    }
+
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize().background(Color.Transparent),  // 透出 GlassBackground
         contentPadding = PaddingValues(start = 14.dp, top = 14.dp, end = 14.dp, bottom = 112.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -307,7 +373,10 @@ fun MediaLibraryScreen(
                 MediaCard(
                     entity = entity,
                     authorIndex = if ((authorTotal[author] ?: 0) >= 2) (authorSeq[entity.id] ?: 1) else null,
-                    onPlay = { onNavigateToPlayer(entity.filePath) },
+                    onPlay = { coverBounds -> onNavigateToPlayer(entity.filePath, coverBounds) },
+                    onCoverBounds = { coverBoundsMap[entity.filePath] = it },
+                    // 容器变形退场：播放层缩小落定过程中隐藏该卡片信息区，落定后淡入
+                    infoHidden = entity.filePath == infoHiddenFor && !infoRevealed,
                     onShare = {
                         runCatching {
                             val file = File(entity.filePath)
@@ -799,13 +868,31 @@ private fun EmptyLibraryState(onScan: () -> Unit) {
 private fun MediaCard(
     entity: DownloadHistoryEntity,
     authorIndex: Int? = null,
-    onPlay: () -> Unit,
+    onPlay: (coverBounds: Rect?) -> Unit,
     onShare: () -> Unit,
-    onDelete: (deleteLocalFile: Boolean) -> Unit
+    onDelete: (deleteLocalFile: Boolean) -> Unit,
+    // 2026-09-30 v1.6.8：封面矩形变化上报（播放返回定位的落点来源）
+    onCoverBounds: ((Rect) -> Unit)? = null,
+    // 容器变形退场（2026-09-30 第二版）：true = 信息区隐藏（播放层正缩小飞向本卡片），
+    // 翻回 false 时信息区淡入（作者/文案/下载信息「慢慢显示」）
+    infoHidden: Boolean = false
 ) {
     var showDelete by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
+    // 共享封面过渡（2026-09-30）：封面区域在窗口坐标中的边界，点击时传给播放器，
+    // 作为「封面从卡片飞入全屏」的几何起点
+    var coverBounds by remember { mutableStateOf<Rect?>(null) }
     val frameOffset = ((entity.mediaIndex ?: 1).coerceAtLeast(1) * 1.7f).coerceAtMost(12f)
+    // 信息区淡出/淡入：隐藏要快（退场一开始就让位），显示要慢（播放层落定后
+    // 「慢慢显示作者、文案、下载等信息」——340ms + 40ms 延迟，容器变形的收尾呼吸感）
+    val infoAlpha by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (infoHidden) 0f else 1f,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = if (infoHidden) 130 else 340,
+            delayMillis = if (infoHidden) 0 else 40
+        ),
+        label = "mediaCardInfoAlpha"
+    )
 
     // L1 玻璃媒体卡
     GlassSurface(
@@ -813,10 +900,18 @@ private fun MediaCard(
         shape = RoundedCornerShape(20.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onPlay)
+            .clickable(onClick = { onPlay(coverBounds) })
     ) {
         Column {
-            Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .onGloballyPositioned {
+                        coverBounds = it.boundsInWindow()
+                        onCoverBounds?.invoke(it.boundsInWindow())
+                    }
+            ) {
                 ThumbnailWithFallback(
                     thumbnailUrl = entity.thumbnail,
                     videoFilePath = entity.filePath,
@@ -899,7 +994,9 @@ private fun MediaCard(
             }
 
             Column(
-                modifier = Modifier.padding(start = 13.dp, top = 9.dp, end = 13.dp, bottom = 9.dp),
+                modifier = Modifier
+                    .graphicsLayer { alpha = infoAlpha }
+                    .padding(start = 13.dp, top = 9.dp, end = 13.dp, bottom = 9.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Row(

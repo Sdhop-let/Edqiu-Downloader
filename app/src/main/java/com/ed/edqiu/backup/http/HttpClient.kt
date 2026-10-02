@@ -3,6 +3,7 @@ package com.ed.edqiu.backup.http
 import com.ed.edqiu.BuildConfig
 import android.util.Log
 import com.ed.edqiu.backup.model.BackupException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -76,7 +77,7 @@ object HttpClient {
         url: String,
         headers: Map<String, String> = emptyMap(),
     ): Result<JsonElement> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             executeForJson { buildRequest(url = url, headers = headers, method = "GET", body = null) }
         }
     }
@@ -87,7 +88,7 @@ object HttpClient {
         body: String,
         headers: Map<String, String> = emptyMap(),
     ): Result<JsonElement> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             val requestBody = body.toRequestBody(JSON_MEDIA_TYPE.toMediaType())
             executeForJson { buildRequest(url = url, headers = headers, method = "POST", body = requestBody) }
         }
@@ -100,7 +101,7 @@ object HttpClient {
         headers: Map<String, String> = emptyMap(),
         progress: (Long) -> Unit = {},
     ): Result<Int> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             executeWithBackoff {
                 val body = ProgressRequestBody(bytes, progress)
                 buildRequest(url = url, headers = headers, method = "PUT", body = body)
@@ -119,7 +120,7 @@ object HttpClient {
         url: String,
         headers: Map<String, String> = emptyMap(),
     ): Result<Int> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             executeWithBackoff { buildRequest(url = url, headers = headers, method = "HEAD", body = null) }
                 .use { it.code }
         }
@@ -130,7 +131,7 @@ object HttpClient {
         url: String,
         headers: Map<String, String> = emptyMap(),
     ): Result<Int> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             executeWithBackoff { buildRequest(url = url, headers = headers, method = "OPTIONS", body = null) }
                 .use { it.code }
         }
@@ -155,7 +156,9 @@ object HttpClient {
      * 注意：上传类请求（[putStream]）重试时会重新构造 body，progress 回调从 0 重新累计——
      * 分片 ≤ 10MB，影响可忽略；WebDAV 整文件 PUT 走 [WebDavEngine]（HttpURLConnection），不经过此处。
      */
-    private suspend fun executeWithBackoff(buildRequest: () -> Request): Response {
+    // 2026-10 整改：internal 开放——百度/123 的自建 executeForJson 此前绕过频控退避，
+    // 与注释宣称的「429/5xx 自动退避」不符（百度 listall 超频直接失败进引擎级 30s+ 退避）
+    internal suspend fun executeWithBackoff(buildRequest: () -> Request): Response {
         var attempt = 0
         while (true) {
             val response = client.newCall(buildRequest()).execute()
@@ -251,6 +254,16 @@ object HttpClient {
         }
     }
 }
+
+/**
+ * 2026-10 整改：kotlin 的 runCatching 会把 CancellationException 一并捕获为 Result.failure，
+ * 上层引擎随之把「任务被取消」当「上传失败」走重试/退避（污染 errorMessage、消耗重试次数）。
+ * 备份模块内一律用本函数替代 runCatching：取消异常原样上抛，保持协程取消语义。
+ */
+inline fun <T> runCatchingNotCancelled(block: () -> T): Result<T> =
+    runCatching(block).onFailure { error ->
+        if (error is CancellationException) throw error
+    }
 
 /** 将底层异常转换为面向用户的中文消息（供各层复用，如 `exceptionOrNull()?.toUserMessage()`）。 */
 fun Throwable.toUserMessage(): String = when (this) {

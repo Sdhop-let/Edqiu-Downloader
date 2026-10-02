@@ -13,6 +13,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.CancellationException
 
 /**
  * 阿里云盘 WebView 登录 + refresh_token 截取（对应架构文档 N17）。
@@ -102,6 +103,8 @@ class AliPanWebViewAuth(
         if (url.isNullOrBlank()) return null
         val parsed = try {
             Uri.parse(url)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return null
         }
@@ -128,6 +131,8 @@ class AliPanWebViewAuth(
         val tokenText = if (trimmed.startsWith("\"")) {
             try {
                 json.parseToJsonElement(trimmed).jsonPrimitive.content
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 return null
             }
@@ -139,6 +144,8 @@ class AliPanWebViewAuth(
         return try {
             val obj = json.parseToJsonElement(tokenText).jsonObject
             obj["refresh_token"]?.jsonPrimitive?.contentOrNull
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             null
         }

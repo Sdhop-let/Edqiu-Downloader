@@ -31,9 +31,9 @@ data class VideoInfo(
 
     val mediaItemLabel: String
         get() = when {
-            hasImageItems && hasVideoItems -> "濯掍綋"
-            hasImageItems -> "鍥剧墖"
-            else -> "瑙嗛"
+            hasImageItems && hasVideoItems -> "媒体"
+            hasImageItems -> "图片"
+            else -> "视频"
         }
 
     enum class FormatMode {

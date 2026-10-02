@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
+import com.ed.edqiu.backup.http.runCatchingNotCancelled
 
 /**
  * 备份任务持久化接口。
@@ -127,11 +128,29 @@ class JsonBackupTaskStore(private val context: Context) : BackupTaskStore {
         if (loaded) return
         val file = taskFile()
         cache = if (file.exists()) {
-            runCatching {
+            runCatchingNotCancelled {
                 json.decodeFromString(BackupTaskFile.serializer(), file.readText()).tasks
-            }.getOrDefault(emptyList())
+            }.getOrElse { error ->
+                // 损坏文件隔离改名保留现场；绝不能用空 cache 直接 persist 覆盖原文件
+                // （旧实现标记 loaded=true 后，下一次 upsert 会把残文件永久清空）
+                val quarantined = File(file.parentFile, "backup_tasks_corrupt_${System.currentTimeMillis()}.json")
+                runCatchingNotCancelled { file.renameTo(quarantined) }
+                android.util.Log.w(TAG, "备份任务文件损坏，已隔离为 ${quarantined.name}，按空队列恢复", error)
+                emptyList()
+            }
         } else {
             emptyList()
+        }
+        // 2026-10 P1 整改：进程被杀遗留的 UPLOADING 是无主僵尸——executeQueue 只装载
+        // PENDING、retryFailed 只重置 FAILED，本地文件一旦不在扫描结果里就永久"上传中"。
+        // 首次从磁盘装载（loaded 置位前）重置回 PENDING 重新排队；运行中的 load() 走内存
+        // cache 不受影响。
+        cache = cache.map { task ->
+            if (task.status == BackupTaskStatus.UPLOADING) {
+                task.copy(status = BackupTaskStatus.PENDING, updatedAt = System.currentTimeMillis())
+            } else {
+                task
+            }
         }
         loaded = true
     }
@@ -142,9 +161,21 @@ class JsonBackupTaskStore(private val context: Context) : BackupTaskStore {
             tasks = cache,
             updatedAt = System.currentTimeMillis(),
         )
-        taskFile().writeText(json.encodeToString(BackupTaskFile.serializer(), data))
+        // 原子写：先写临时文件再 rename 覆盖，进程被杀/磁盘满不会留下截断 JSON
+        val file = taskFile()
+        val tmp = File(file.parentFile, file.name + ".tmp")
+        tmp.writeText(json.encodeToString(BackupTaskFile.serializer(), data))
+        if (!tmp.renameTo(file)) {
+            // 个别文件系统 rename 覆盖失败：退化为复制
+            file.outputStream().use { output -> tmp.inputStream().use { it.copyTo(output) } }
+            tmp.delete()
+        }
         _tasks.value = cache
     }
 
     private fun taskFile(): File = File(context.filesDir, "backup_tasks.json")
+
+    private companion object {
+        const val TAG = "JsonBackupTaskStore"
+    }
 }

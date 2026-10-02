@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    播放器视图（TextureView 版，2026-09-30）：
+    根因修复「转场小竖屏长方形 / 只有声音没画面」——PlayerView 默认 surface_view
+    是独立合成层打洞渲染，不跟随 graphicsLayer 平移缩放（ColorOS 新机表现：
+    转场错位小矩形、surface 离屏销毁后重建失败）。texture_view 为普通 View 层，
+    完整参与容器变形动画（进入展开 / 退出缩回预览图）。
+-->
+<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:surface_type="texture_view"
+    app:use_controller="false" />

@@ -16,6 +16,10 @@ interface DeletedLinkHistoryDao {
     @Query("SELECT COUNT(*) FROM deleted_link_history")
     fun count(): Flow<Int>
 
+    // 2026-10 P1：扫描导入时排除已归档推文（防删除的条目被重新插回收件箱）
+    @Query("SELECT tweet_id FROM deleted_link_history")
+    suspend fun getDeletedTweetIds(): List<String>
+
     @Query("SELECT * FROM deleted_link_history ORDER BY deleted_at DESC")
     suspend fun getAllSnapshot(): List<DeletedLinkHistory>
 

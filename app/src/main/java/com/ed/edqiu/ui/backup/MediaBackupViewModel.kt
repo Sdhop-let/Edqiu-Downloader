@@ -21,6 +21,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -171,9 +174,16 @@ class MediaBackupViewModel(
     init {
         viewModelScope.launch {
             taskStore.load()
-            tasksFlow.collect { tasks ->
-                rebuildItems(tasks)
-            }
+            tasksFlow
+                // 2026-10 整改：上传期间每个进度 tick（bytesDone 变化）都会流到这里，旧实现
+                // 每个 tick 都触发一次全目录重扫（扫描风暴）。改为只按「任务集 + 状态」签名
+                // 去重 + 500ms 去抖，纯进度变化不再触发扫描；重建时取最新任务快照。
+                .map { tasks -> tasks.joinToString("|") { "${it.taskId}:${it.status.name}" } }
+                .distinctUntilChanged()
+                .debounce(500)
+                .collect {
+                    rebuildItems(tasksFlow.first())
+                }
         }
     }
 
@@ -196,8 +206,8 @@ class MediaBackupViewModel(
     fun uploadItem(item: MediaBackupItem) {
         viewModelScope.launch(Dispatchers.IO) {
             val providerId = ensureProviderReady() ?: return@launch
-            engine.enqueue(providerId, listOf(item.file))
-            engine.runQueue().fold(
+            engine.enqueue(providerId, listOf(BackupFiles.BackupEntry(item.file, item.remotePath)))
+            engine.runQueue(targetId = providerId).fold(
                 onSuccess = { summary ->
                     postMessage("「${item.remotePath}」上传完成：成功 ${summary.succeeded}，失败 ${summary.failed}", FeedbackKind.SUCCESS)
                 },
@@ -220,13 +230,13 @@ class MediaBackupViewModel(
                         BackupScope.IMAGE -> !item.isVideo
                         BackupScope.ALL -> true
                     }
-            }.map { it.file }
+            }.map { BackupFiles.BackupEntry(it.file, it.remotePath) }
             if (targets.isEmpty()) {
                 postMessage("没有需要上传的文件", FeedbackKind.NEUTRAL)
                 return@launch
             }
             engine.enqueue(providerId, targets)
-            engine.runQueue().fold(
+            engine.runQueue(targetId = providerId).fold(
                 onSuccess = { summary ->
                     postMessage("同步完成：成功 ${summary.succeeded}，失败 ${summary.failed}，跳过 ${summary.skipped}", FeedbackKind.SUCCESS)
                 },
@@ -266,8 +276,9 @@ class MediaBackupViewModel(
             val files = BackupFiles.scanMediaFiles(context, monitorUri)
             val doneRemotePaths = runCatching { ledgerRepository.doneRemotePaths(providerId) }.getOrDefault(emptySet())
 
-            val items = files.map { file ->
-                val remotePath = file.name
+            val items = files.map { entry ->
+                val file = entry.file
+                val remotePath = entry.remotePath
                 val taskId = BackupTask.computeId(providerId, remotePath)
                 val task = tasks.find { it.targetId == providerId && it.taskId == taskId }
                 val state = when {

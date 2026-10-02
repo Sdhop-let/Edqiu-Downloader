@@ -20,6 +20,7 @@ import okhttp3.MultipartBody
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import com.ed.edqiu.backup.http.runCatchingNotCancelled
 
 /**
  * 123 网盘开放平台 OpenAPI 客户端（open-api.123pan.com）。
@@ -60,22 +61,18 @@ class Pan123Api {
         code: String,
         redirectUri: String,
     ): Result<Pan123TokenBundle> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(clientId.isNotBlank()) { "client_id 不能为空" }
             require(code.isNotBlank()) { "授权码不能为空" }
-            val url = accessTokenUrl(
-                clientId = clientId,
-                clientSecret = clientSecret,
-                grantType = "authorization_code",
-                code = code,
-                refreshToken = null,
-                redirectUri = redirectUri,
-            )
             val json = executeForJson {
-                Request.Builder().url(url)
-                    .post(ByteArray(0).toRequestBody(null))
-                    .header(HEADER_PLATFORM, PLATFORM_VALUE)
-                    .build()
+                accessTokenRequest(
+                    clientId = clientId,
+                    clientSecret = clientSecret,
+                    grantType = "authorization_code",
+                    code = code,
+                    refreshToken = null,
+                    redirectUri = redirectUri,
+                ).newBuilder().header(HEADER_PLATFORM, PLATFORM_VALUE).build()
             }
             parseTokenBundle(json)
         }.mapError("换取 123 网盘登录凭证")
@@ -87,21 +84,17 @@ class Pan123Api {
         clientSecret: String,
         refreshToken: String,
     ): Result<Pan123TokenBundle> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(refreshToken.isNotBlank()) { "refresh_token 不能为空" }
-            val url = accessTokenUrl(
-                clientId = clientId,
-                clientSecret = clientSecret,
-                grantType = "refresh_token",
-                code = null,
-                refreshToken = refreshToken,
-                redirectUri = null,
-            )
             val json = executeForJson {
-                Request.Builder().url(url)
-                    .post(ByteArray(0).toRequestBody(null))
-                    .header(HEADER_PLATFORM, PLATFORM_VALUE)
-                    .build()
+                accessTokenRequest(
+                    clientId = clientId,
+                    clientSecret = clientSecret,
+                    grantType = "refresh_token",
+                    code = null,
+                    refreshToken = refreshToken,
+                    redirectUri = null,
+                ).newBuilder().header(HEADER_PLATFORM, PLATFORM_VALUE).build()
             }
             parseTokenBundle(json)
         }.mapError("刷新 123 网盘登录状态")
@@ -119,7 +112,7 @@ class Pan123Api {
         etag: String,
         size: Long,
     ): Result<Pan123CreateFileResult> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(accessToken.isNotBlank()) { "access_token 不能为空" }
             val body = buildJsonBody(
                 "parentFileID" to parentFileId,
@@ -159,7 +152,7 @@ class Pan123Api {
         sliceMd5: String,
         bytes: ByteArray,
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(accessToken.isNotBlank()) { "access_token 不能为空" }
             require(preuploadId.isNotBlank()) { "preuploadID 不能为空" }
             val base = server.trim().trimEnd('/').ifBlank { BASE_UPLOAD_URL }
@@ -191,7 +184,7 @@ class Pan123Api {
         server: String,
         preuploadId: String,
     ): Result<Long> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(accessToken.isNotBlank()) { "access_token 不能为空" }
             require(preuploadId.isNotBlank()) { "preuploadID 不能为空" }
             val base = server.trim().trimEnd('/').ifBlank { BASE_UPLOAD_URL }
@@ -207,7 +200,7 @@ class Pan123Api {
                 val data = dataOf(json)
                 val completed = data["completed"]?.jsonPrimitive?.contentOrNull?.toBoolean() ?: false
                 if (completed) {
-                    return@runCatching data["fileID"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+                    return@runCatchingNotCancelled data["fileID"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
                         ?: throw BackupException("123 网盘合并分片响应缺少 fileID")
                 }
                 delay(1_000L)
@@ -222,7 +215,7 @@ class Pan123Api {
         name: String,
         parentId: Long = 0L,
     ): Result<Long> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(accessToken.isNotBlank()) { "access_token 不能为空" }
             val json = executeForJson {
                 val body = buildJsonBody("name" to name, "parentID" to parentId)
@@ -238,45 +231,59 @@ class Pan123Api {
         }.mapError("创建 123 网盘备份目录")
     }
 
-    /** 列出目录内容（exists 判断用）。 */
+    /** 列出目录内容（exists 判断用）。2026-10 整改：lastFileId 翻页，大目录不再只取前 100 条。 */
     suspend fun listFiles(
         accessToken: String,
         parentFileId: Long,
         limit: Int = MAX_LIST_LIMIT,
     ): Result<List<Pan123FileItem>> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(accessToken.isNotBlank()) { "access_token 不能为空" }
-            val url = HttpUrl.Builder()
-                .scheme("https")
-                .host(API_HOST)
-                .addPathSegments("api/v2/file/list")
-                .addQueryParameter("parentFileId", parentFileId.toString())
-                .addQueryParameter("limit", limit.coerceIn(1, MAX_LIST_LIMIT).toString())
-                .build()
-            val json = executeForJson {
-                Request.Builder()
-                    .url(url)
-                    .get()
-                    .headers(authHeaders(accessToken))
+            val pageSize = limit.coerceIn(1, MAX_LIST_LIMIT)
+            val all = mutableListOf<Pan123FileItem>()
+            var lastFileId = -1L
+            var pages = 0
+            while (pages < MAX_LIST_PAGES) {
+                val url = HttpUrl.Builder()
+                    .scheme("https")
+                    .host(API_HOST)
+                    .addPathSegments("api/v2/file/list")
+                    .addQueryParameter("parentFileId", parentFileId.toString())
+                    .addQueryParameter("limit", pageSize.toString())
+                    .apply { if (lastFileId >= 0) addQueryParameter("lastFileId", lastFileId.toString()) }
                     .build()
+                val json = executeForJson {
+                    Request.Builder()
+                        .url(url)
+                        .get()
+                        .headers(authHeaders(accessToken))
+                        .build()
+                }
+                val data = dataOf(json)
+                val page = data["fileList"]?.jsonArray?.map { element ->
+                    val obj = element.jsonObject
+                    Pan123FileItem(
+                        fileId = obj["fileId"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0L,
+                        filename = obj["filename"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                        type = obj["type"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0,
+                        size = obj["size"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0L,
+                        etag = obj["etag"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    )
+                }.orEmpty()
+                all += page
+                pages++
+                // 页面未满 = 最后一页；否则用最后一条的 fileId 继续翻
+                if (page.size < pageSize) break
+                lastFileId = page.lastOrNull()?.fileId ?: break
+                if (lastFileId <= 0) break
             }
-            val data = dataOf(json)
-            data["fileList"]?.jsonArray?.map { element ->
-                val obj = element.jsonObject
-                Pan123FileItem(
-                    fileId = obj["fileId"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0L,
-                    filename = obj["filename"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                    type = obj["type"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0,
-                    size = obj["size"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0L,
-                    etag = obj["etag"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                )
-            }.orEmpty()
+            all
         }.mapError("获取 123 网盘目录列表")
     }
 
     /** 用户信息（testConnection 校验授权有效性）。 */
     suspend fun userInfo(accessToken: String): Result<Pan123UserInfo> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             require(accessToken.isNotBlank()) { "access_token 不能为空" }
             val json = executeForJson {
                 Request.Builder()
@@ -295,25 +302,32 @@ class Pan123Api {
 
     // ---------------- 内部工具 ----------------
 
-    private fun accessTokenUrl(
+    /**
+     * OAuth token 请求（2026-10 安全整改）：凭据从 URL query 移入表单体。
+     * RFC 6749 §4.1.3 规定 token 端点参数放请求体（application/x-www-form-urlencoded）；
+     * client_secret / refresh_token / 授权码放 URL 会进入服务端与中间代理的访问日志。
+     */
+    private fun accessTokenRequest(
         clientId: String,
         clientSecret: String,
         grantType: String,
         code: String?,
         refreshToken: String?,
         redirectUri: String?,
-    ): HttpUrl {
-        val builder = HttpUrl.Builder()
+    ): Request {
+        val form = okhttp3.FormBody.Builder()
+            .add("grant_type", grantType)
+            .add("client_id", clientId)
+            .add("client_secret", clientSecret)
+        code?.let { form.add("code", it) }
+        refreshToken?.let { form.add("refresh_token", it) }
+        redirectUri?.let { form.add("redirect_uri", it) }
+        val url = HttpUrl.Builder()
             .scheme("https")
             .host(API_HOST)
             .addPathSegments("api/v1/oauth2/access_token")
-            .addQueryParameter("client_id", clientId)
-            .addQueryParameter("client_secret", clientSecret)
-            .addQueryParameter("grant_type", grantType)
-        code?.let { builder.addQueryParameter("code", it) }
-        refreshToken?.let { builder.addQueryParameter("refresh_token", it) }
-        redirectUri?.let { builder.addQueryParameter("redirect_uri", it) }
-        return builder.build()
+            .build()
+        return Request.Builder().url(url).post(form.build()).build()
     }
 
     private fun authHeaders(accessToken: String): okhttp3.Headers =
@@ -349,7 +363,8 @@ class Pan123Api {
     private suspend fun executeForJson(buildRequest: () -> Request): JsonElement {
         var attempt = 0
         while (true) {
-            val response = HttpClient.client.newCall(buildRequest()).execute()
+            // 2026-10 整改：HTTP 层（429/5xx）接入 HttpClient 统一退避；业务层 code=429 重试逻辑保留
+            val response = HttpClient.executeWithBackoff(buildRequest)
             var shouldRetry = false
             var result: JsonElement? = null
             response.use {
@@ -422,6 +437,8 @@ class Pan123Api {
         private const val DEFAULT_SCOPE = "user:base,file:all:read,file:all:write"
 
         private const val MAX_LIST_LIMIT = 100
+        /** 目录分页上限：100/页 × 20 页 = 2000 条，防御性封顶（exists() 场景足够）。 */
+        private const val MAX_LIST_PAGES = 20
         private const val MAX_COMPLETE_POLLS = 60
         private const val MAX_RATE_RETRIES = 3
         private const val RATE_BACKOFF_MS = 1_000L

@@ -11,6 +11,12 @@
         <item name="android:enforceNavigationBarContrast">false</item>
     </style>
 
+    <!-- Titanic 开屏（2026-09-30）：白底 windowBackground，冷启动预览即开屏底色，
+         浅色系统栏图标沿用 Theme.Edqiu -->
+    <style name="Theme.Edqiu.Splash" parent="Theme.Edqiu">
+        <item name="android:windowBackground">@color/splash_background</item>
+    </style>
+
     <style name="Theme.Edqiu.Transparent" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>

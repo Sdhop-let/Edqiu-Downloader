@@ -18,6 +18,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
+import com.ed.edqiu.backup.http.runCatchingNotCancelled
+import kotlinx.coroutines.CancellationException
 
 /**
  * 123 网盘官方登录适配器（[BackupTarget] 实现，id = [ProviderId.PAN123_OPEN]）。
@@ -111,7 +113,7 @@ class Pan123OpenTarget(
 
     /** 清除已保存凭证。 */
     suspend fun clearAuth(): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingNotCancelled {
             credentialStore.clear(id)
             cachedBackupDirId = null
         }
@@ -121,7 +123,8 @@ class Pan123OpenTarget(
         callWithAuthRetry { token -> ensureBackupFolder(token).map { } }
     }
 
-    override suspend fun exists(remotePath: String): Result<Boolean> = withContext(Dispatchers.IO) {
+    // expectedSize 忽略：123 complete 是原子完成协议，远端不存在半截文件
+    override suspend fun exists(remotePath: String, expectedSize: Long): Result<Boolean> = withContext(Dispatchers.IO) {
         val name = remotePath.substringAfterLast('/')
         if (name.isBlank()) {
             return@withContext Result.failure(BackupException("远程路径无效：$remotePath"))
@@ -193,6 +196,8 @@ class Pan123OpenTarget(
                     cloudFileId = fileId.toString(),
                 )
             )
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             val wrapped = if (error is BackupException) error else BackupException("上传失败：${error.toUserMessage()}", error)
             Log.w(TAG, "上传失败：${wrapped.message}")

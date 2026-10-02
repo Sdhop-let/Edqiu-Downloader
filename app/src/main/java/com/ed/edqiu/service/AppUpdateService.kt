@@ -101,7 +101,9 @@ object AppUpdateService {
     ): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
             val updateDir = File(context.cacheDir, "updates").apply { mkdirs() }
-            val apkFile = File(updateDir, "twitter-downloader-${info.release}.apk")
+            // release 名直接来自远端 JSON，消毒后再作文件名（防路径分隔符破坏下载/写入）
+            val safeRelease = info.release.replace(Regex("[/\\\\:*?\"<>|]"), "_")
+            val apkFile = File(updateDir, "twitter-downloader-$safeRelease.apk")
             if (apkFile.exists()) apkFile.delete()
 
             val connection = (URL(info.apkUrl).openConnection() as HttpURLConnection).apply {
@@ -130,10 +132,42 @@ object AppUpdateService {
                     }
                 }
                 if (apkFile.length() <= 0L) throw IllegalStateException("Downloaded APK is empty")
+                // 安装前完整性自校验（2026-10 安全整改）：版本不低于当前 + 签名与已装应用一致
+                verifyApkIntegrity(context, apkFile)
                 apkFile
             } finally {
                 connection.disconnect()
             }
+        }
+    }
+
+    /**
+     * APK 安装前完整性自校验（2026-10 安全整改）：
+     * 1. 归档可解析且 versionCode 不低于当前版本（拦截半截包/降级包）；
+     * 2. 签名证书与当前已安装应用一致（拦截第三方重打包/被替换的 release 资产）。
+     * 下载源为 GitHub Releases（HTTPS），本校验提供设备侧最后防线。
+     */
+    private fun verifyApkIntegrity(context: Context, apkFile: File) {
+        val pm = context.packageManager
+        @Suppress("DEPRECATION")
+        val archive = pm.getPackageArchiveInfo(
+            apkFile.absolutePath,
+            android.content.pm.PackageManager.GET_SIGNATURES
+        ) ?: throw IllegalStateException("下载的 APK 无法解析，可能下载不完整，请重试")
+        if (archive.versionCode < BuildConfig.VERSION_CODE) {
+            throw IllegalStateException("下载的 APK 版本（${archive.versionCode}）低于当前版本（${BuildConfig.VERSION_CODE}），已阻止安装")
+        }
+        @Suppress("DEPRECATION")
+        val installed = pm.getPackageInfo(
+            context.packageName,
+            android.content.pm.PackageManager.GET_SIGNATURES
+        )
+        val archiveSignature = archive.signatures?.firstOrNull()?.toByteArray()
+            ?: throw IllegalStateException("下载的 APK 缺少签名信息，已阻止安装")
+        val installedSignature = installed.signatures?.firstOrNull()?.toByteArray()
+            ?: throw IllegalStateException("无法读取当前应用签名，已阻止安装")
+        if (!archiveSignature.contentEquals(installedSignature)) {
+            throw IllegalStateException("下载的 APK 签名与当前应用不一致，已阻止安装")
         }
     }
 
@@ -153,8 +187,14 @@ object AppUpdateService {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(installIntent)
-        return true
+        // 安装器被禁用/无 handler 时 startActivity 抛 ActivityNotFoundException（2026-10 修复）
+        return try {
+            context.startActivity(installIntent)
+            true
+        } catch (e: Exception) {
+            android.util.Log.w("AppUpdateService", "No activity to handle install intent", e)
+            false
+        }
     }
 
     private fun fetchText(url: String): String {

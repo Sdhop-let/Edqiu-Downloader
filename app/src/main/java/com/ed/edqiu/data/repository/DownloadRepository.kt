@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import com.ed.edqiu.data.model.DownloadCancelledException
 import com.ed.edqiu.data.model.DownloadStatus
 import com.ed.edqiu.data.model.DownloadTask
 import com.ed.edqiu.data.model.MediaFileTypes
@@ -77,7 +78,7 @@ class DownloadRepository(private val context: Context) {
             Exception(
                 "fxtwitter: $fxError\nyt-dlp: $ytdlError\n" +
                 if (!cookiePreferences.hasCookies()) {
-                    "鎻愮ず锛氬湪璁剧疆涓～鍏?Twitter cookies 鍙兘瑙ｅ喅 yt-dlp 瑙ｆ瀽闂"
+                    "提示：在设置中填入 Twitter cookies 可能解决 yt-dlp 解析问题"
                 } else ""
             )
         )
@@ -111,6 +112,7 @@ class DownloadRepository(private val context: Context) {
 
         DownloadTaskBus.add(task)
         taskRepo.addTask(task, downloaderType)
+        DownloadCancellation.register(task.id)
 
         // Choose download method based on whether we have a direct URL
         val result = if (format.directUrl != null) {
@@ -127,10 +129,11 @@ class DownloadRepository(private val context: Context) {
                     DownloadTaskBus.updateTask(task.id) {
                         it.copy(progress = progress, etaSeconds = eta)
                     }
-                }
+                },
+                isCancelled = { DownloadCancellation.isCancelled(task.id) }
             )
         } else {
-            // yt-dlp-resolved: use yt-dlp for download
+            // yt-dlp-resolved: use yt-dlp for download（taskId 作为 processId，取消链路可达）
             val cookieFilePath = if (cookiePreferences.hasCookies()) {
                 YoutubeDLService.writeCookieFile(context, cookiePreferences.getAuthToken(), cookiePreferences.getCt0())
             } else null
@@ -146,7 +149,8 @@ class DownloadRepository(private val context: Context) {
                 },
                 proxyUrl = proxyUrl,
                 cookieFilePath = cookieFilePath,
-                playlistIndex = format.mediaIndex
+                playlistIndex = format.mediaIndex,
+                processId = task.id
             )
         }
 
@@ -175,6 +179,14 @@ class DownloadRepository(private val context: Context) {
             onFailure = { Result.failure(it) }
         )
 
+        // 先判定取消，再注销登记（顺序不能反）
+        val success = finalizedResult.isSuccess
+        val cancelled = !success && (
+            finalizedResult.exceptionOrNull() is DownloadCancelledException ||
+                DownloadCancellation.isCancelled(task.id)
+            )
+        DownloadCancellation.unregister(task.id)
+
         finalizedResult.onSuccess { path ->
             DownloadTaskBus.updateTask(task.id) {
                 it.copy(
@@ -185,23 +197,29 @@ class DownloadRepository(private val context: Context) {
                 )
             }
         }.onFailure { error ->
+            // 2026-10 回归修复：此处已在 unregister 之后，再查 isCancelled 恒为 false——
+            // yt-dlp 进程被销毁抛的是库内异常而非 DownloadCancelledException，
+            // 会导致内存 bus 被覆盖成 FAILED 而持久层是 CANCELLED。必须用注销前算好的 cancelled。
             DownloadTaskBus.updateTask(task.id) {
                 it.copy(
-                    status = DownloadStatus.FAILED,
-                    errorMessage = error.message ?: "Unknown error"
+                    status = if (cancelled) DownloadStatus.CANCELLED else DownloadStatus.FAILED,
+                    errorMessage = if (cancelled) "下载已取消" else (error.message ?: "Unknown error")
                 )
             }
         }
 
-        val finalTask = if (finalizedResult.isSuccess) {
-            task.copy(
+        val finalTask = when {
+            success -> task.copy(
                 status = DownloadStatus.COMPLETED,
                 outputPath = finalizedResult.getOrNull().orEmpty(),
                 progress = 100f,
                 completedAt = System.currentTimeMillis()
             )
-        } else {
-            task.copy(
+            cancelled -> task.copy(
+                status = DownloadStatus.CANCELLED,
+                errorMessage = "下载已取消"
+            )
+            else -> task.copy(
                 status = DownloadStatus.FAILED,
                 errorMessage = finalizedResult.exceptionOrNull()?.message ?: "Unknown error"
             )
@@ -218,7 +236,7 @@ class DownloadRepository(private val context: Context) {
         format: VideoFormat,
         thumbnail: String
     ): File {
-        require(mediaFile.exists() && mediaFile.isFile) { "涓嬭浇鏂囦欢涓嶅瓨鍦細${mediaFile.name}" }
+        require(mediaFile.exists() && mediaFile.isFile) { "下载文件不存在：${mediaFile.name}" }
         val tweetId = Regex("/status/(\\d+)").find(sourceUrl)?.groupValues?.getOrNull(1) ?: ""
         val metadata = JSONObject()
             .put("url", sourceUrl)
@@ -256,6 +274,10 @@ class DownloadRepository(private val context: Context) {
     }
 
     fun cancelDownload(taskId: String) {
+        // 先登记取消并销毁 yt-dlp 进程（若在跑），再更新状态——
+        // 旧实现只改状态，下载引擎不受影响，取消完全无效（2026-10 修复）
+        val processId = DownloadCancellation.cancel(taskId)
+        YoutubeDLService.cancelDownload(processId)
         DownloadTaskBus.cancel(taskId)
         ioScope.launch {
             taskRepo.updateTask(taskId) { it.copy(status = DownloadStatus.CANCELLED) }

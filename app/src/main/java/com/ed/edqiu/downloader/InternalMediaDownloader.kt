@@ -3,10 +3,13 @@
 import android.content.Context
 import android.os.Environment
 import android.util.Log
+import com.ed.edqiu.data.metadata.CoverStore
+import com.ed.edqiu.data.model.DownloadCancelledException
 import com.ed.edqiu.data.model.DownloadStatus
 import com.ed.edqiu.data.model.DownloadTask
 import com.ed.edqiu.data.model.MediaType
 import com.ed.edqiu.data.model.ProxySettings
+import com.ed.edqiu.data.repository.DownloadCancellation
 import com.ed.edqiu.data.repository.DownloadTaskBus
 import com.ed.edqiu.domain.TweetIdExtractor
 import kotlinx.coroutines.Dispatchers
@@ -90,6 +93,13 @@ class InternalMediaDownloader(private val context: Context) {
             outputDir.mkdirs()
 
             val downloaded = mutableListOf<DownloadedFile>()
+            // 2026-09-30 v1.6.8 预览图同步落盘：sidecar/收件箱记录的 thumbnail 优先用
+            // 本地封面路径（分享时已落盘），媒体库扫描后免联网同步预览图；
+            // 本地没有则借本次下载的网络窗口顺手补存一份（4s 超时，失败不影响下载）
+            val localCover = CoverStore.localCoverPath(context, tweetId)
+                ?: media.firstNotNullOfOrNull { it.thumbnail }
+                    ?.takeIf { it.startsWith("http") }
+                    ?.let { CoverStore.ensureLocalCover(context, tweetId, it, timeoutMs = 4_000L) }
             media.forEachIndexed { index, item ->
                 val mediaIndex = index + 1
                 val filename = sanitize("${uploader}_${tweetId}_${mediaIndex}_${item.kind}_${item.quality}.${item.ext}")
@@ -98,7 +108,7 @@ class InternalMediaDownloader(private val context: Context) {
                     id = "xinvox_${tweetId}_$mediaIndex",
                     url = normalizedUrl,
                     title = caption ?: normalizedUrl,
-                    thumbnail = item.thumbnail ?: item.url,
+                    thumbnail = localCover ?: item.thumbnail ?: item.url,
                     uploader = uploader,
                     formatId = "fx_internal",
                     quality = item.quality,
@@ -120,7 +130,7 @@ class InternalMediaDownloader(private val context: Context) {
                         uploader = uploader,
                         authorName = authorName,
                         caption = caption,
-                        thumbnail = item.thumbnail ?: item.url,
+                        thumbnail = localCover ?: item.thumbnail ?: item.url,
                         quality = item.quality,
                         mediaIndex = mediaIndex,
                         mediaType = item.kind.uppercase(Locale.ROOT),
@@ -135,7 +145,7 @@ class InternalMediaDownloader(private val context: Context) {
                         authorId = authorId,
                         authorName = authorName,
                         caption = caption,
-                        thumbnailUrl = item.thumbnail ?: item.url,
+                        thumbnailUrl = localCover ?: item.thumbnail ?: item.url,
                         publishedAt = publishedAt
                     )
                 }.onSuccess { file ->
@@ -149,10 +159,11 @@ class InternalMediaDownloader(private val context: Context) {
                         )
                     }
                 }.onFailure { error ->
+                    val cancelled = error is DownloadCancelledException || DownloadCancellation.isCancelled(task.id)
                     DownloadTaskBus.updateTask(task.id) {
                         it.copy(
-                            status = DownloadStatus.FAILED,
-                            errorMessage = error.message ?: "下载失败"
+                            status = if (cancelled) DownloadStatus.CANCELLED else DownloadStatus.FAILED,
+                            errorMessage = if (cancelled) "下载已取消" else (error.message ?: "下载失败")
                         )
                     }
                     Log.w(TAG, "Failed to download ${target.name}", error)
@@ -296,6 +307,10 @@ class InternalMediaDownloader(private val context: Context) {
                                 while (true) {
                                     val read = input.read(buffer)
                                     if (read == -1) break
+                                    // 用户取消：中止写入（.part 保留供断点续传），由调用方置 CANCELLED
+                                    if (taskId != null && DownloadCancellation.isCancelled(taskId)) {
+                                        throw DownloadCancelledException()
+                                    }
                                     output.write(buffer, 0, read)
                                     written += read
                                     // 进度节流：每 300ms 回写一次，避免高频重组
@@ -320,6 +335,9 @@ class InternalMediaDownloader(private val context: Context) {
                 } finally {
                     connection.disconnect()
                 }
+            } catch (e: DownloadCancelledException) {
+                // 取消不重试、不覆盖 lastError 语义，直接上抛
+                throw e
             } catch (e: Exception) {
                 lastError = e
                 Log.w(TAG, "下载中断（第 $attempt 次尝试）url=$url 已有 ${part.length()} 字节，将尝试续传", e)

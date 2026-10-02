@@ -85,6 +85,8 @@ object PublishedAtBackfiller {
     )
 
     private val _uiState = MutableStateFlow(BackfillUiState(running = false, tier = Tier.MEDIUM, total = 0, done = 0, fixed = 0))
+    // 2026-10 整改：重入守卫（同 MediaQualityUpgrader，自动/手动入口可并发）。
+    private val backfillRunning = java.util.concurrent.atomic.AtomicBoolean(false)
     // UI 端按 running/message 自行过滤展示（pill 只在 running 时显示进度，消息条只在完成时显示 message）
     val uiState: StateFlow<BackfillUiState?> = _uiState.asStateFlow()
 
@@ -110,6 +112,18 @@ object PublishedAtBackfiller {
      * 直到候选耗尽 / 无进展 / 达到轮数上限，避免“一轮 200 条后剩余候选无人管”。
      */
     suspend fun backfill(context: Context): Int = withContext(Dispatchers.IO) {
+        if (!backfillRunning.compareAndSet(false, true)) {
+            Log.i(TAG, "backfill() 已有会话在执行，跳过本次触发（重入守卫）")
+            return@withContext 0
+        }
+        try {
+            backfillSession(context)
+        } finally {
+            backfillRunning.set(false)
+        }
+    }
+
+    private suspend fun backfillSession(context: Context): Int = withContext(Dispatchers.IO) {
         val dao = AppDatabase.getInstance(context).downloadHistoryDao()
         val fetcher = MetadataFetcher()
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -162,17 +176,16 @@ object PublishedAtBackfiller {
             ?: Tier.fromName(prefs.getString(KEY_TIER, null))
         prefs.edit().putString(KEY_TIER, tier.name).apply()
 
+        // 探测命中即直接回填（计入本轮）；计数统一读 doneCounter / fixedCounter
+        // （2026-10：并发协程中普通 var 自增会丢失更新）
         var fixed = 0
-        var processed = 0
-        // 探测命中即直接回填（计入本轮）
         if (probePublished != null && probePublished > 0L) {
             dao.backfillPublishedAt(probe.filePath, probePublished)
-            writeBackToSidecar(probe.filePath, probePublished)
+            writeBackToSidecar(probe.filePath, probePublished, probe.tweetIdOf())
             fixed++
         } else {
             probe.tweetIdOf()?.let { failedIds += it }
         }
-        processed++
 
         val batch = candidates.drop(1).take(tier.batchSize - 1)
         val total = batch.size + 1
@@ -199,13 +212,11 @@ object PublishedAtBackfiller {
                         val publishedAt = probeFetch(metadataFetcher, entity.url, entity.filePath)
                         if (publishedAt != null && publishedAt > 0L) {
                             dao.backfillPublishedAt(entity.filePath, publishedAt)
-                            writeBackToSidecar(entity.filePath, publishedAt)
-                            fixed++
+                            writeBackToSidecar(entity.filePath, publishedAt, tweetId)
                             fixedCounter.incrementAndGet()
                         } else {
                             failedBatch += tweetId
                         }
-                        processed++
                         doneCounter.incrementAndGet()
                         report()
                     }
@@ -213,8 +224,10 @@ object PublishedAtBackfiller {
             }
         }
         failedIds += failedBatch
-        Log.i(TAG, "Backfill round done: tier=${tier.name}, total=$total, fixed=$fixed, processed=$processed")
-        BackfillRoundOutcome(processed = processed, fixed = fixed)
+        val roundProcessed = doneCounter.get()
+        val roundFixed = fixedCounter.get()
+        Log.i(TAG, "Backfill round done: tier=${tier.name}, total=$total, fixed=$roundFixed, processed=$roundProcessed")
+        BackfillRoundOutcome(processed = roundProcessed, fixed = roundFixed)
     }
 
     /** 单条补拉：tweetId → FXTwitter 发布时间（epoch ms）；失败返回 null。 */
@@ -234,14 +247,22 @@ object PublishedAtBackfiller {
         TweetIdExtractor.fromUrl(url)
             ?: TweetIdExtractor.fromFileName(File(filePath).name)
 
-    /** 发布时间写回 sidecar（保留其他字段），本地扫描即可持续读到，无需二次联网。 */
-    private fun writeBackToSidecar(mediaPath: String, publishedAt: Long) {
+    /**
+     * 发布时间写回 sidecar（保留其他字段），本地扫描即可持续读到，无需二次联网。
+     * 2026-10 整改：sidecar 不存在需要新建时，用调用方传入的 tweetId 生成完整 URL——
+     * 旧实现写入 "https://x.com/i/status/" 残缺占位，DirectoryScanner 会拿它覆盖
+     * 由文件名推导出的正确 URL，导致该记录重下载/详情跳转永久失效。
+     */
+    private fun writeBackToSidecar(mediaPath: String, publishedAt: Long, tweetId: String?) {
         runCatching {
             val metaFile = File("$mediaPath.meta.json")
             val json = if (metaFile.exists()) {
                 JSONObject(metaFile.readText())
             } else {
-                JSONObject().put("url", "https://x.com/i/status/")
+                JSONObject().apply {
+                    if (!tweetId.isNullOrBlank()) put("url", "https://x.com/i/status/$tweetId")
+                    if (!tweetId.isNullOrBlank()) put("tweetId", tweetId)
+                }
             }
             json.put("publishedAt", publishedAt)
             metaFile.writeText(json.toString())

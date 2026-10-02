@@ -19,6 +19,9 @@ class LinkHistoryRepository(
 
     fun count(): Flow<Int> = historyDao.count()
 
+    /** 已归档（回收站内）的全部 tweetId——扫描导入排除用（2026-10 P1 防删除复活）。 */
+    suspend fun deletedTweetIds(): List<String> = historyDao.getDeletedTweetIds()
+
     suspend fun archiveAndDelete(
         tweetIds: Collection<String>,
         reason: String

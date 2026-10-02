@@ -26,22 +26,26 @@ class MetadataFetcher {
 
     /** 从 fxtwitter 拉取推文元数据。 */
     suspend fun fetchFromTwitter(tweetId: String): TweetMeta? = withContext(Dispatchers.IO) {
+        // 2026-10 整改：连接 finally disconnect + 非 200 分支关闭 errorStream
+        //（旧实现连接不释放，补拉批量 300 条 × 8 并发时 socket 压力被放大）
+        val conn = (URL("https://api.fxtwitter.com/status/$tweetId").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 10_000
+            readTimeout = 10_000
+            setRequestProperty("User-Agent", "Edqiu/1.0")
+        }
         try {
-            val url = URL("https://api.fxtwitter.com/status/$tweetId")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 10_000
-                readTimeout = 10_000
-                setRequestProperty("User-Agent", "Edqiu/1.0")
-            }
             if (conn.responseCode == 200) {
                 val body = conn.inputStream.bufferedReader().use { it.readText() }
                 parseTwitterResponse(body)
             } else {
+                runCatching { conn.errorStream?.close() }
                 null
             }
         } catch (_: Exception) {
             null
+        } finally {
+            conn.disconnect()
         }
     }
 

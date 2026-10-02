@@ -44,10 +44,12 @@ android {
         // - edge-to-edge 强制（API 35+）：XML 透明系统栏 + enableEdgeToEdge + setDecorFitsSystemWindows(false)，无 opt-out 属性；
         // - 预测性返回（API 36+ 默认启用）：manifest 标志 + 双导航 progress 消费 + 无进度兜底动画；
         // - FGS dataSync 超时（API 35+）：备份前台服务由 WorkManager Result.retry 兜底重启；
-        // - 16KB 内存页：全部原生 .so 已验证为 0x4000 对齐（libffmpeg/libpython/libqjs 等）。
+        // - 16KB 内存页：APK 顶层 .so 已实测 0x4000 对齐；但 youtubedl-android 0.18.1 的
+        //   ffmpeg zip 载荷内 libwebp* 等 5 个库仍是 4KB 对齐（libavcodec DT_NEEDED 直接依赖），
+        //   16KB 页设备上 ffmpeg 功能不可用——需升级上游依赖或等待重打包后复测。
         targetSdk = 37
-        versionCode = 44
-        versionName = "1.6.7"
+        versionCode = 46
+        versionName = "1.6.9.1"
 
         // 2026-09-15：只保留 arm64-v8a（Android 16/17 手机端均为 arm64），APK 从 225.9MB 降至约 80MB；
         // ffmpeg/yt-dlp 功能完整保留，x86 系模拟器不再支持

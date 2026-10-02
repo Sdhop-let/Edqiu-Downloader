@@ -51,7 +51,7 @@ object FXTwitterResolver {
             try {
                 val tweetId = extractTweetId(url)
                 if (tweetId == null) {
-                    return@withContext Result.failure(Exception("鏃犳硶浠庨摼鎺ユ彁鍙栨帹鏂嘔D"))
+                    return@withContext Result.failure(Exception("无法从链接提取推文ID"))
                 }
 
                 val apiUrl = "$API_BASE$tweetId"
@@ -79,7 +79,7 @@ object FXTwitterResolver {
                 }
 
                 if (formats.isEmpty()) {
-                    return@withContext Result.failure(Exception("娌℃湁鍙笅杞界殑濯掍綋鏍煎紡"))
+                    return@withContext Result.failure(Exception("娌℃湁鍙笅杞界殑媒体鏍煎紡"))
                 }
 
                 val videoInfo = VideoInfo(
@@ -248,7 +248,7 @@ object FXTwitterResolver {
                 val qualityLabel = bitrateToQualityLabel(bitrate)
                 VideoFormat(
                     formatId = "fx_${index}_${bitrate}",
-                    quality = "瑙嗛${index.toString().padStart(2, '0')} 路 $qualityLabel",
+                    quality = "视频${index.toString().padStart(2, '0')} · $qualityLabel",
                     ext = ext,
                     filesize = 0,
                     vcodec = "h264",
@@ -264,7 +264,7 @@ object FXTwitterResolver {
             MediaType.IMAGE -> {
                 VideoFormat(
                     formatId = "fx_img_$index",
-                    quality = "鍥剧墖${index.toString().padStart(2, '0')} 路 鍘熷浘",
+                    quality = "图片${index.toString().padStart(2, '0')} · 原图",
                     ext = ext,
                     filesize = 0,
                     directUrl = url,

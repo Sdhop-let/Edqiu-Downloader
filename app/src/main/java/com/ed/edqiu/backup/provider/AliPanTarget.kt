@@ -24,6 +24,7 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.math.BigInteger
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 
 /**
  * 阿里云盘适配器（[BackupTarget] 实现，id = [ProviderId.ALIYUN]）。
@@ -101,7 +102,8 @@ class AliPanTarget(
         }
     }
 
-    override suspend fun exists(remotePath: String): Result<Boolean> = withContext(Dispatchers.IO) {
+    // expectedSize 忽略：阿里 completeFile 是原子完成协议，远端不存在半截文件
+    override suspend fun exists(remotePath: String, expectedSize: Long): Result<Boolean> = withContext(Dispatchers.IO) {
         val name = remotePath.substringAfterLast('/')
         if (name.isBlank()) {
             return@withContext Result.failure(BackupException("远程路径无效：$remotePath"))
@@ -183,15 +185,26 @@ class AliPanTarget(
                 throw BackupException("创建上传会话失败：分片上传地址不完整")
             }
 
-            // 断点续传：本地收据 + 服务端已上传分片合并（本地丢失时兜底）
+            // 断点续传（2026-10 整改）：只信「当前上传会话」已确认的分片。
+            // 服务端分片列表可用时以它为准；旧会话的本地收据在 createFile 生成新
+            // upload_id 后作废（否则会跳过新会话从未上传的分片，complete 永久失败）。
+            // 仅当列分片失败（网络抖动）时才回退本地收据，且必须文件指纹 + upload_id 双匹配。
             val taskId = BackupTask.computeId(id, remotePath)
-            val resumeState = chunkReceiptStore.load(taskId).toMutableMap()
+            val fingerprint = "$size:${local.lastModified()}"
+            val resumeState = mutableMapOf<Int, String>()
             val serverParts = api.listUploadedParts(token, driveId, create.fileId, uploadId)
-                .getOrDefault(emptyList())
-            serverParts.forEach { part ->
-                val seq = part.partNumber - 1
-                if (seq >= 0 && !resumeState.containsKey(seq)) {
-                    resumeState[seq] = part.etag.ifBlank { "part${part.partNumber}" }
+            if (serverParts.isSuccess) {
+                serverParts.getOrDefault(emptyList()).forEach { part ->
+                    val seq = part.partNumber - 1
+                    if (seq >= 0) {
+                        resumeState[seq] = part.etag.ifBlank { "part${part.partNumber}" }
+                    }
+                }
+            } else {
+                Log.w(TAG, "列已上传分片失败，回退本地收据（指纹+会话校验）: ${serverParts.exceptionOrNull()?.message}")
+                val saved = chunkReceiptStore.loadMeta(taskId)
+                if (saved != null && saved.fingerprint == fingerprint && saved.uploadId == uploadId) {
+                    resumeState.putAll(saved.receipts)
                 }
             }
 
@@ -209,7 +222,9 @@ class AliPanTarget(
             }
 
             uploader.uploadChunks(chunks, uploadOne, resumeState, onBytes).getOrElse { throw it }
-            chunkReceiptStore.save(taskId, resumeState).getOrElse { throw it }
+            // 收据落盘 best-effort：complete 不依赖本地收据，写盘失败只影响下次崩溃恢复的续传精度
+            chunkReceiptStore.save(taskId, resumeState, fingerprint, uploadId)
+                .onFailure { Log.w(TAG, "分片收据落盘失败（忽略，不影响 complete）：${it.message}") }
 
             api.completeFile(token, driveId, create.fileId, uploadId).getOrElse { throw it }
             chunkReceiptStore.delete(taskId)
@@ -222,6 +237,8 @@ class AliPanTarget(
                     rapidMatched = false,
                 )
             )
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             val wrapped = if (error is BackupException) error else BackupException("上传失败：${error.toUserMessage()}", error)
             Log.w(TAG, "上传失败：${wrapped.message}")
@@ -367,6 +384,8 @@ class AliPanTarget(
                 raf.readFully(buffer)
                 MessageDigest.getInstance("SHA-1").digest(buffer).joinToString("") { "%02x".format(it) }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "计算 proof_code 失败，秒传退化为普通上传", e)
             ""

@@ -74,7 +74,17 @@ fun AnimatedDialog(
     }
 
     Dialog(
-        onDismissRequest = { if (!dismissing) dismissing = true },
+        onDismissRequest = {
+            if (!dismissing) {
+                dismissing = true
+            } else if (dismissRequested) {
+                // 2026-10 P1 整改：退场动画已播完但调用方吞掉了 dismiss（如提交中弹窗
+                // onDismissRequest 被 !submitting 拦截）——旧实现 dismissing 恒 true，
+                // 再次按返回永远无效，用户面对全透明拦截触摸的弹窗只能杀进程。
+                // 允许在退场完成后重复派发，由调用方决定何时真正关闭。
+                onDismissRequest()
+            }
+        },
         properties = properties
     ) {
         Box(

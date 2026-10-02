@@ -2,8 +2,7 @@
 
 import com.ed.edqiu.ui.util.pressableNoRipple
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -68,10 +67,8 @@ import androidx.compose.ui.unit.sp
 import com.ed.edqiu.data.database.DownloadHistoryEntity
 import com.ed.edqiu.ui.components.ThumbnailWithFallback
 import com.ed.edqiu.ui.components.GlassSurface
-import com.ed.edqiu.ui.components.GlassOverlaySurface
 import com.ed.edqiu.ui.components.MediaGlassSurface
 import com.ed.edqiu.ui.components.GlassTier
-import com.ed.edqiu.ui.components.OverlayGlassStyle
 import kotlinx.coroutines.delay
 
 /**
@@ -203,8 +200,11 @@ fun GlassPlayerControls(
 ) {
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn() + slideInVertically { it / 3 },
-        exit = fadeOut() + slideOutVertically { it / 3 },
+        // 2026-09-30 播放页动画规格：控件淡入 tween(220)（配合 PlayerScreen 延迟 200ms 置 visible）
+        enter = fadeIn(tween(durationMillis = 220)) +
+            slideInVertically(tween(durationMillis = 220)) { it / 3 },
+        exit = fadeOut(tween(durationMillis = 160)) +
+            slideOutVertically(tween(durationMillis = 160)) { it / 3 },
         modifier = modifier
     ) {
         MediaGlassSurface(
@@ -217,9 +217,16 @@ fun GlassPlayerControls(
                 // 图片模式：无进度概念，隐藏滑杆与时间行；仅保留操作入口
                 if (!isImageMode) {
                 // 胶囊滑杆（细化）：thumb 4dp + track 2dp 细线
+                // 2026-10 整改：拖动期间只更新本地 dragProgress（旧实现每帧直接 seek，
+                // 与 350ms 位置轮询互踩造成拖动跳帧/回跳），松手才真正 seek 一次。
+                var dragProgress by remember { mutableStateOf<Float?>(null) }
                 Slider(
-                    value = progress,
-                    onValueChange = onSeek,
+                    value = dragProgress ?: progress,
+                    onValueChange = { dragProgress = it },
+                    onValueChangeFinished = {
+                        dragProgress?.let(onSeek)
+                        dragProgress = null
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(18.dp),
@@ -515,89 +522,8 @@ private fun GlassPlaylistThumb(
 }
 
 // ---------- 迷你播放条 ----------
-@Composable
-fun MiniPlayerBar(
-    title: String,
-    subtitle: String,
-    progress: Float,
-    isPlaying: Boolean,
-    onClick: () -> Unit,
-    onTogglePlay: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    // 2026-09-16 液态玻璃升级：Backdrop 真折射深玻璃（Android 13+），透出并折射列表内容；
-    // 低版本/关闭时回退原 MediaGlassSurface 深色玻璃视觉
-    // 2026-09-28：blurRadius 不再写死 10dp，默认按全局「模糊强度」滑块取值（4-20dp）
-    GlassOverlaySurface(
-        shape = RoundedCornerShape(20.dp),
-        style = OverlayGlassStyle.Dark,
-        lensHeight = 10.dp,
-        lensAmount = 12.dp,
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-    ) {
-        Box(modifier = Modifier.height(58.dp)) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pressableNoRipple { onClick() }
-                    .padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Black,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
-                        .pressableNoRipple { onTogglePlay() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "暂停" else "播放",
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-            // 底部进度细线
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
-                    .height(3.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.primary)
-                )
-            }
-        }
-    }
-}
+// 2026-09-30 v1.6.9：MiniPlayerBar 已移除（用户反馈退场后媒体库底部闪现的标题胶囊
+// 不符合预期）。播放器退场即完全收起，不再有迷你续播条。
 
 /** 自动隐藏计时器辅助：3 秒后回调隐藏。 */
 @Composable
