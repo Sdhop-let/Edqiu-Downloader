@@ -37,5 +37,12 @@ data class DownloadHistoryEntity(
     /** 作者头像 URL（FXTwitter author.avatar_url，2026-09-16 播放页真头像；null=字母块回退）。 */
     val avatarUrl: String? = null,
     /** 作者显示名（X 昵称，如 "Elon Musk"；null=用 uploader handle 兜底）。 */
-    val authorName: String? = null
+    val authorName: String? = null,
+    // 2026-10-02 批次B：媒体显示宽高（px）。视频为旋转校正后的显示尺寸（rotation 90/270 已交换），
+    // 图片为原始像素。null=未知（旧记录/来源缺失），由 MediaDimensionsBackfillWorker 回填，
+    // 供播放器「滑动切条时比例变动过渡动画」取比例，避免 UI 层再读文件探测。
+    /** 媒体显示宽（px）；null=未知。 */
+    val mediaWidth: Int? = null,
+    /** 媒体显示高（px）；null=未知。 */
+    val mediaHeight: Int? = null
 )

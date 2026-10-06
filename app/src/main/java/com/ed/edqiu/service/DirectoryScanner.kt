@@ -127,6 +127,10 @@ object DirectoryScanner {
         var publishedAt: Long? = null
         var avatarUrl: String? = null
         var authorName: String? = null
+        // 2026-10-02 批次B：媒体显示宽高透传（仅 sidecar 有值才带；扫描入库本身没有网络元数据，
+        // sidecar 无此字段时保持 null，由 MediaDimensionsBackfillWorker 本地回填）
+        var mediaWidth: Int? = null
+        var mediaHeight: Int? = null
 
         val tweetIdIndex = parts.indexOfFirst { it.length > 10 && it.all(Char::isDigit) }
         if (tweetIdIndex >= 0) {
@@ -192,6 +196,12 @@ object DirectoryScanner {
                 if (json.has("authorName") && !json.isNull("authorName")) {
                     authorName = json.optString("authorName", "").takeIf { it.isNotBlank() }
                 }
+                if (json.has("mediaWidth") && !json.isNull("mediaWidth")) {
+                    json.optInt("mediaWidth", 0).takeIf { it > 0 }?.let { mediaWidth = it }
+                }
+                if (json.has("mediaHeight") && !json.isNull("mediaHeight")) {
+                    json.optInt("mediaHeight", 0).takeIf { it > 0 }?.let { mediaHeight = it }
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to parse sidecar metadata: ${metaFile.name}", e)
             }
@@ -218,7 +228,9 @@ object DirectoryScanner {
             completedAt = file.lastModified(),
             publishedAt = publishedAt,
             avatarUrl = avatarUrl,
-            authorName = authorName
+            authorName = authorName,
+            mediaWidth = mediaWidth,
+            mediaHeight = mediaHeight
         )
     }
 

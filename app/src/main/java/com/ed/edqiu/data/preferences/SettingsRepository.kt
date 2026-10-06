@@ -113,6 +113,16 @@ class SettingsRepository(context: Context) {
     val highRefreshRateFlow: Flow<Boolean> =
         safeData.map { it[HIGH_REFRESH_RATE] ?: true }
 
+    /**
+     * 真双播放器开关（2026-10-03 批次F 定案，默认 ON）：
+     * 滑动翻页时邻页用第二个静音 ExoPlayer 呈现活视频。最终生效 =
+     * 本开关 ∧ FlagshipDetector 硬件达标（RAM ≥ 16GB，见 domain/FlagshipDetector）；
+     * 不达标或关闭时自动回退「邻页真帧预览」（批次E），功能无损。
+     * 设置页「播放与媒体库」分区提供带详细说明的开关。
+     */
+    val dualPlayerFlow: Flow<Boolean> =
+        safeData.map { it[DUAL_PLAYER] ?: true }
+
     /** Apple 风格悬浮底栏（默认 ON） */
     val floatingTabBarFlow: Flow<Boolean> =
         safeData.map { it[FLOATING_TAB_BAR] ?: true }
@@ -227,6 +237,11 @@ class SettingsRepository(context: Context) {
         editSafe { it[HIGH_REFRESH_RATE] = enabled }
     }
 
+    /** 真双播放器开关（见 dualPlayerFlow 注释） */
+    suspend fun setDualPlayer(enabled: Boolean) {
+        editSafe { it[DUAL_PLAYER] = enabled }
+    }
+
     suspend fun setFloatingTabBar(enabled: Boolean) {
         editSafe { it[FLOATING_TAB_BAR] = enabled }
     }
@@ -283,6 +298,7 @@ class SettingsRepository(context: Context) {
         private val HAPTIC_STRENGTH = intPreferencesKey("haptic_strength")
         private val HIGH_REFRESH_RATE = booleanPreferencesKey("high_refresh_rate")
         private val FLOATING_TAB_BAR = booleanPreferencesKey("floating_tab_bar")
+        private val DUAL_PLAYER = booleanPreferencesKey("dual_player")
         private val LIQUID_GLASS_ENABLED = booleanPreferencesKey("liquid_glass_enabled")
         private val PREDICTIVE_BACK = booleanPreferencesKey("predictive_back")
         private val DISPLAY_SCALE = floatPreferencesKey("display_scale")

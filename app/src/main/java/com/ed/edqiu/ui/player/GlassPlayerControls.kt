@@ -188,7 +188,6 @@ fun GlassPlayerControls(
     muted: Boolean,
     isPlaying: Boolean,
     visible: Boolean,
-    isImageMode: Boolean = false,
     onSeek: (Float) -> Unit,
     onSpeed: () -> Unit,
     onMute: () -> Unit,
@@ -214,8 +213,8 @@ fun GlassPlayerControls(
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
-                // 图片模式：无进度概念，隐藏滑杆与时间行；仅保留操作入口
-                if (!isImageMode) {
+                // 2026-10-02 批次A：移除 isImageMode 分支——图片会话不再渲染本控制条
+                //（PlayerScreen 改挂 GlassImageViewerBar），视频路径行为保持不变
                 // 胶囊滑杆（细化）：thumb 4dp + track 2dp 细线
                 // 2026-10 整改：拖动期间只更新本地 dragProgress（旧实现每帧直接 seek，
                 // 与 350ms 位置轮询互踩造成拖动跳帧/回跳），松手才真正 seek 一次。
@@ -257,7 +256,6 @@ fun GlassPlayerControls(
                 }
 
                 Spacer(Modifier.height(6.dp))
-                }
 
                 // 主控制排
                 Row(

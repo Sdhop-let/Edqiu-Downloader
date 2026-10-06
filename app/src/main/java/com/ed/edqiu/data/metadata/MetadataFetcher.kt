@@ -7,6 +7,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -61,6 +62,8 @@ class MetadataFetcher {
             if (resp.code == 200 && resp.tweet != null) {
                 val t = resp.tweet
                 val screenName = t.author?.screenName?.trimStart('@')
+                // 2026-10-02 批次B：主媒体显示宽高（视频优先，缺失再取图片）
+                val dims = firstMediaDimensions(t.media)
                 TweetMeta(
                     tweetId = t.id,
                     authorId = screenName?.takeIf { it.isNotBlank() }?.let { "@$it" },
@@ -70,12 +73,44 @@ class MetadataFetcher {
                     thumbnailUrl = firstMediaThumbnail(t.media),
                     authorBio = t.author?.description?.takeIf { it.isNotBlank() },
                     // FXTwitter 的 created_timestamp 为 epoch 秒
-                    publishedAt = t.createdTimestamp?.takeIf { it > 0L }?.let { it * 1000L }
+                    publishedAt = t.createdTimestamp?.takeIf { it > 0L }?.let { it * 1000L },
+                    mediaWidth = dims?.first,
+                    mediaHeight = dims?.second
                 )
             } else {
                 null
             }
         }.getOrNull()
+    }
+
+    /**
+     * 2026-10-02 批次B：从推文首条媒体提取显示宽高（px）。
+     * 视频取 media.videos[0]（外层无 width/height 时回退其 videos[] 变体子数组），
+     * 图片取 media.photos[0].width/height；宽或高 ≤0 视为无效，返回 null 靠回填 Worker 兜底。
+     */
+    private fun firstMediaDimensions(media: FxMedia?): Pair<Int, Int>? {
+        if (media == null) return null
+        media.videos?.firstPositiveDims(deepIntoVariants = true)?.let { return it }
+        return media.photos?.firstPositiveDims(deepIntoVariants = false)
+    }
+
+    private fun JsonArray.firstPositiveDims(deepIntoVariants: Boolean): Pair<Int, Int>? {
+        for (element in this) {
+            val obj = runCatching { element.jsonObject }.getOrNull() ?: continue
+            obj.positiveDims()?.let { return it }
+            if (deepIntoVariants) {
+                // FXTwitter 视频条目的变体子数组：videos[].width/height（实际分辨率）
+                (obj["videos"] as? JsonArray)?.firstPositiveDims(deepIntoVariants = false)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun JsonObject.positiveDims(): Pair<Int, Int>? {
+        // runCatching：个别字段类型异常（非数值）只降级为缺失，不拖垮整条 TweetMeta 解析
+        val w = runCatching { this["width"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() }.getOrNull() ?: 0
+        val h = runCatching { this["height"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() }.getOrNull() ?: 0
+        return if (w > 0 && h > 0) w to h else null
     }
 
     private fun firstMediaThumbnail(media: FxMedia?): String? {

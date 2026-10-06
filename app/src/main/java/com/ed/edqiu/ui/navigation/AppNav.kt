@@ -170,11 +170,87 @@ fun EdqiuApp(container: AppContainer) {
                 var closeProgress by remember { mutableFloatStateOf(1f) }
                 var overlayDragging by remember { mutableStateOf(false) }
 
+                // 临时诊断 + 自愈探针（2026-10）：三通道对比 + 冻结自愈。
+                // 冻结签名：Snapshot apply 在走（重组/状态推进）而 OnPreDraw 长时间
+                // 为零——ViewRoot 被平台生命周期批处理打进 mStopped=true 拒绝遍历
+                //（view_not_visible），画面停在全量重组风暴前的旧帧。该状态只随
+                // 窗口重建（recreate）恢复，故检测到即自愈重建；导航栈与 VM 均可恢复，
+                // 仅浮层开合状态丢失
+                val probeView = androidx.compose.ui.platform.LocalView.current
+                val probeDraws = remember { java.util.concurrent.atomic.AtomicInteger(0) }
+                val probeApplies = remember { java.util.concurrent.atomic.AtomicInteger(0) }
+                androidx.compose.runtime.DisposableEffect(probeView) {
+                    val l = android.view.ViewTreeObserver.OnPreDrawListener { probeDraws.incrementAndGet(); true }
+                    probeView.viewTreeObserver.addOnPreDrawListener(l)
+                    onDispose { probeView.viewTreeObserver.removeOnPreDrawListener(l) }
+                }
+                androidx.compose.runtime.DisposableEffect(Unit) {
+                    val obs = androidx.compose.runtime.snapshots.Snapshot.registerApplyObserver { _, _ ->
+                        probeApplies.incrementAndGet()
+                    }
+                    onDispose { obs.dispose() }
+                }
+                // 同一进程 30s 内只自愈一次，防连环重建
+                val lastRecreateMs = remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+                LaunchedEffect(Unit) {
+                    var lastApply = -1
+                    var lastDraw = -1
+                    var stallRounds = 0
+                    while (true) {
+                        kotlinx.coroutines.delay(1200)
+                        val a = probeApplies.get()
+                        val d = probeDraws.get()
+                        if (a != lastApply && d == lastDraw) stallRounds++ else stallRounds = 0
+                        if (lastApply >= 0 && stallRounds >= 2 &&
+                            System.currentTimeMillis() - lastRecreateMs.longValue > 30_000
+                        ) {
+                            lastRecreateMs.longValue = System.currentTimeMillis()
+                            android.util.Log.e(
+                                "FreezeProbe",
+                                "render stall: apply=$a draws=$d 3.6s 无绘制 — recreate 自愈"
+                            )
+                            var ctx: android.content.Context? = probeView.context
+                            while (ctx !is android.app.Activity && ctx is android.content.ContextWrapper) {
+                                ctx = ctx.baseContext
+                            }
+                            (ctx as? android.app.Activity)?.recreate()
+                            break
+                        }
+                        lastApply = a
+                        lastDraw = d
+                    }
+                }
+                LaunchedEffect(Unit) {
+                    var ticks = 0
+                    var lastLogMs = 0L
+                    var lastCp = closeProgress
+                    var lastRoute = overlayRoute
+                    var lastStateChangeMs = 0L
+                    while (true) {
+                        androidx.compose.runtime.withFrameNanos { }
+                        ticks++
+                        val now = android.os.SystemClock.uptimeMillis()
+                        if (ticks % 120 == 0 || now - lastLogMs > 3000) {
+                            lastLogMs = now
+                            android.util.Log.d(
+                                "FreezeProbe",
+                                "ticks=$ticks draws=${probeDraws.get()} shown=${probeView.isShown} " +
+                                    "focus=${probeView.hasWindowFocus()} winVis=${probeView.windowVisibility} " +
+                                    "attached=${probeView.isAttachedToWindow} cp=$closeProgress route=$overlayRoute " +
+                                    "dragging=$overlayDragging"
+                            )
+                        }
+                        lastCp = closeProgress
+                        lastRoute = overlayRoute
+                    }
+                }
+
                 fun openOverlay(route: String, tweetId: String = "") {
                     if (overlayRoute != null) return
                     overlayTweetId = tweetId
                     overlayRoute = route
                     closeProgress = 1f
+                    overlayDragging = false
                     scope.launch {
                         // 弹性滑入（收件箱帖子详细页过渡规格）：spring 回弹即
                         // 「新页面滑入时带有弹性回弹」，感知时长 ≈ 350ms
@@ -187,7 +263,14 @@ fun EdqiuApp(container: AppContainer) {
                 }
 
                 fun closeOverlay() {
-                    if (overlayRoute == null || overlayDragging) return
+                    if (overlayRoute == null) return
+                    if (overlayDragging) {
+                        // 拖拽中按返回：直接收起浮层（拖拽协程随浮层离开组合而终止），
+                        // 不再走动画结算，避免与进行中的拖拽协程互相干扰
+                        overlayDragging = false
+                        overlayRoute = null
+                        return
+                    }
                     scope.launch {
                         animate(
                             initialValue = closeProgress,
@@ -198,10 +281,9 @@ fun EdqiuApp(container: AppContainer) {
                     }
                 }
 
-                // BACK 键：浮层显示时动画关闭（拖拽中不响应）
-                BackHandler(enabled = overlayRoute != null && !overlayDragging) {
-                    closeOverlay()
-                }
+                // BACK 键（浮层）：见下方浮层内容内的注册点——2026-10 移入浮层内容，
+                // 保证注册顺序晚于 AppNavigation 的 NavHost 返回 Handler（LIFO 优先），
+                // 且只在浮层存在时注册/启用
 
                 CompositionLocalProvider(LocalSnackbarController provides snackbarController) {
                     val backdropBase = MaterialTheme.colorScheme.background
@@ -219,15 +301,20 @@ fun EdqiuApp(container: AppContainer) {
                                 GlassBackground(
                                     blurRadius = (frostStrength * frostStrength * 64f).dp
                                 ) {
-                                    val p = closeProgress
                                     // ===== 常驻主界面：浮层打开时按过渡规格以 1/3 速向左
-                                    // 滑出并淡出（alpha 1→0.3），随右缘拖拽跟手可逆 =====
+                                    // 滑出并淡出（alpha 1→0.3），随右缘拖拽跟手可逆。
+                                    // 2026-10 冻结修复：closeProgress 改为在 graphicsLayer 块内
+                                    // 延迟读取——旧实现 `val p = closeProgress` 在组合期读值，
+                                    // 浮层动画期间整个 EdqiuApp 子树（含 NavHost/全部页面）每帧
+                                    // 全量重组，与系统窗口可见性提交竞态后把 ViewRoot 打进
+                                    // mStopped=true（view_not_visible），表现即"画面冻在半路"。
+                                    // 层块内读状态 = 逐帧更新层参数且不触发重组
                                     Box(
                                         Modifier
                                             .fillMaxSize()
                                             .graphicsLayer {
-                                                translationX = -(1f - p) * size.width / 3f
-                                                alpha = (0.3f + 0.7f * p).coerceIn(0f, 1f)
+                                                translationX = -(1f - closeProgress) * size.width / 3f
+                                                alpha = (0.3f + 0.7f * closeProgress).coerceIn(0f, 1f)
                                             }
                                     ) {
                                         AppNavigation(
@@ -265,7 +352,8 @@ fun EdqiuApp(container: AppContainer) {
                                             },
                                             floatingTabBarEnabled = floatingTabBar,
                                             liquidGlassEnabled = liquidGlass,
-                                            predictiveBackEnabled = false
+                                            predictiveBackEnabled = false,
+                                            navBackGated = overlayRoute != null
                                         )
                                     }
                                     // ===== 浮层：详情 / 网盘备份 / 媒体备份 =====
@@ -273,69 +361,85 @@ fun EdqiuApp(container: AppContainer) {
                                         Box(
                                             Modifier
                                                 .fillMaxSize()
-                                                .graphicsLayer { translationX = p * size.width }
+                                                .graphicsLayer { translationX = closeProgress * size.width }
                                                 .pointerInput(route) {
-                                                        while (true) {
-                                                            var gestureWasBack = false
-                                                            var released = false
-                                                            val edge = with(density) { 30.dp.toPx() }
-                                                            val slop = with(density) { 12.dp.toPx() }
-                                                            awaitEachGesture {
-                                                                val down = awaitFirstDown(requireUnconsumed = false)
-                                                                if (down.position.x < size.width - edge) {
-                                                                    // 非右缘启动：放行给子级（列表/视频滑动）
-                                                                    while (true) {
-                                                                        val e = awaitPointerEvent(PointerEventPass.Main)
-                                                                        if (e.changes.all { !it.pressed }) break
-                                                                    }
-                                                                    return@awaitEachGesture
-                                                                }
-                                                                overlayDragging = true
-                                                                val downId = down.id
-                                                                val startClose = closeProgress
-                                                                val w = size.width.toFloat()
-                                                                var dirDecided = false
-                                                                // 注意：这里读写的是外层 while 块的 gestureWasBack/released，
-                                                                // 2026-10 修复：此前在内层重复声明遮蔽了外层变量，
-                                                                // 324 行结算永远读到 false，跟手拖拽关闭手势完全失效
-                                                                while (true) {
-                                                                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                                                                    val change = event.changes.firstOrNull { it.id == downId }
-                                                                    if (change == null) continue
-                                                                    if (!change.pressed) {
-                                                                        change.consume()
-                                                                        released = true
-                                                                        break
-                                                                    }
-                                                                    val dx = change.position.x - down.position.x
-                                                                    val dy = change.position.y - down.position.y
-                                                                    if (!dirDecided) {
-                                                                        if (abs(dx) < slop && abs(dy) < slop) continue
-                                                                        dirDecided = true
-                                                                        if (abs(dy) >= abs(dx)) break
-                                                                        gestureWasBack = true
-                                                                    }
-                                                                    if (!gestureWasBack) break
-                                                                    // 横向返回：跟手驱动（向左拖 = 关闭度增加）
-                                                                    closeProgress =
-                                                                        (startClose - dx / (w * 0.62f)).coerceIn(0f, 1f)
-                                                                    change.consume()
-                                                                }
-                                                                overlayDragging = false
+                                                    awaitEachGesture {
+                                                        val edge = 30.dp.toPx()
+                                                        val slop = 12.dp.toPx()
+                                                        val down = awaitFirstDown(requireUnconsumed = false)
+                                                        if (down.position.x < size.width - edge) {
+                                                            // 非右缘启动：放行给子级（列表/视频滑动）
+                                                            while (true) {
+                                                                val e = awaitPointerEvent(PointerEventPass.Main)
+                                                                if (e.changes.all { !it.pressed }) break
                                                             }
-                                                        // 受限块外结算动画（此处可调任意 suspend）
-                                                        if (gestureWasBack && released && overlayRoute != null) {
+                                                            return@awaitEachGesture
+                                                        }
+                                                        overlayDragging = true
+                                                        val downId = down.id
+                                                        val startClose = closeProgress
+                                                        val w = size.width.toFloat()
+                                                        var dirDecided = false
+                                                        // 2026-10 修复：此前这两个变量声明在
+                                                        // awaitEachGesture 外层的 while 里，而
+                                                        // awaitEachGesture 自身永不返回，结算读到的
+                                                        // 永远是初值 false——现随手势块声明
+                                                        var gestureWasBack = false
+                                                        var released = false
+                                                        while (true) {
+                                                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                            val change = event.changes.firstOrNull { it.id == downId }
+                                                            if (change == null) continue
+                                                            if (!change.pressed) {
+                                                                change.consume()
+                                                                released = true
+                                                                break
+                                                            }
+                                                            val dx = change.position.x - down.position.x
+                                                            val dy = change.position.y - down.position.y
+                                                            if (!dirDecided) {
+                                                                if (abs(dx) < slop && abs(dy) < slop) continue
+                                                                dirDecided = true
+                                                                if (abs(dy) >= abs(dx)) break
+                                                                gestureWasBack = true
+                                                            }
+                                                            if (!gestureWasBack) break
+                                                            // 横向返回：跟手驱动（向左拖 = 关闭度增加）
+                                                            closeProgress =
+                                                                (startClose - dx / (w * 0.62f)).coerceIn(0f, 1f)
+                                                            change.consume()
+                                                        }
+                                                        overlayDragging = false
+                                                        // 2026-10 关键修复：awaitEachGesture 把手势循环整个跑在
+                                                        // awaitPointerEventScope 内、协程存活期间永不返回——
+                                                        // 旧版"块外结算"（原 while(true) 后的提交/回弹动画）是
+                                                        // 永远执行不到的死代码：拖拽跟手、松手后页面停在半开
+                                                        // 位置，跟手关闭手势等于失效。结算必须经组合作用域
+                                                        // scope.launch 在事件作用域外执行；仅在浮层仍是拖拽
+                                                        // 发起的路由时才提交关闭
+                                                        if (gestureWasBack && released && overlayRoute == route) {
                                                             val commit = closeProgress > 0.35f
-                                                            animate(
-                                                                initialValue = closeProgress,
-                                                                targetValue = if (commit) 1f else 0f,
-                                                                animationSpec = tween(280, easing = EaseOutCubic)
-                                                            ) { v, _ -> closeProgress = v }
-                                                            if (commit) overlayRoute = null
+                                                            scope.launch {
+                                                                animate(
+                                                                    initialValue = closeProgress,
+                                                                    targetValue = if (commit) 1f else 0f,
+                                                                    animationSpec = tween(280, easing = EaseOutCubic)
+                                                                ) { v, _ -> closeProgress = v }
+                                                                if (commit && overlayRoute == route) overlayRoute = null
+                                                            }
                                                         }
                                                     }
                                                 }
                                         ) {
+                                            // BACK 键（浮层）：注册在浮层内容内——组合顺序晚于
+                                            // AppNavigation 的 NavHost 返回 Handler，LIFO 优先级
+                                            // 保证浮层打开时返回键必先关浮层，绝不穿透弹底层
+                                            // 导航栈（2026-10 修复：此前注册早于 NavHost，真机上
+                                            // 返回被 NavHost 抢走，浮层底下页面被逐层弹空）
+                                            BackHandler(enabled = true) {
+                                                android.util.Log.e("BackDispatch", "OVERLAY BH fired route=$route")
+                                                closeOverlay()
+                                            }
                                             when (route) {
                                                 OVERLAY_BACKUP -> {
                                                     val vm = viewModel<CloudBackupViewModel>(factory = factory)

@@ -1,26 +1,34 @@
 ﻿package com.ed.edqiu.viewmodel
 
 import android.app.Application
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.PlaybackParameters
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import com.ed.edqiu.data.database.DownloadHistoryEntity
 import com.ed.edqiu.data.model.MediaFileTypes
+import com.ed.edqiu.domain.FlagshipDetector
 import com.ed.edqiu.data.repository.HistoryRepository
+import com.ed.edqiu.ui.player.VideoFirstFrameCache
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.abs
 import java.io.File
 
 data class PlayerUiState(
@@ -76,6 +84,23 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         // 首帧之间的黑屏窗口（修复2：滑动下一条先闪屏再变比例再复原）
         override fun onRenderedFirstFrame() {
             _playerState.update { it.copy(hasFirstFrame = true) }
+        }
+
+        // 2026-10-03 批次C：视频实测尺寸回调 —— 播放侧宽高写回（数据自愈）。
+        // unappliedRotationDegrees 为 90/270 时交换宽高得到显示尺寸（与批次B 实体列
+        // mediaWidth/mediaHeight 的口径一致：显示宽高 px；该字段虽被标记 @Deprecated，
+        // 但仍是 API <34 判定未应用旋转的唯一来源，suppress 见方法注解）；实体为 null
+        //（无 currentVideo）或尺寸无效时静默跳过，缺失/偏差的判定与去重见
+        // persistMediaDimensionsIfNeeded。
+        @Suppress("DEPRECATION")
+        override fun onVideoSizeChanged(videoSize: VideoSize) {
+            if (videoSize.width <= 0 || videoSize.height <= 0) return
+            val rotated = videoSize.unappliedRotationDegrees == 90 ||
+                videoSize.unappliedRotationDegrees == 270
+            val displayW = if (rotated) videoSize.height else videoSize.width
+            val displayH = if (rotated) videoSize.width else videoSize.height
+            val filePath = _playerState.value.currentVideo?.filePath ?: return
+            persistMediaDimensionsIfNeeded(filePath, displayW, displayH)
         }
     }
 
@@ -150,6 +175,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
      *   再建会话、再定位；入口条目不在库中（扫描滞后）时补一条最小实体保证有页可站。
      */
     fun openPlayer(entryFilePath: String) {
+        // 2026-10-03 批次F：新会话开始前回收可能残留的预览播放器（跨会话实例隔离）
+        releasePreviewPlayer()
         val entryIsImage = MediaFileTypes.isImageFile(entryFilePath)
         viewModelScope.launch {
             val base = withTimeoutOrNull(1500L) {
@@ -164,7 +191,36 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 listOf(minimalEntity(entryFilePath)) + filtered
             }
+            // 2026-10-03 批次E：会话切换即回收旧会话的首帧缓存（保留新会话条目路径，
+            // 重开同一视频可复用）；上限兜底见 VideoFirstFrameCache.LruCache
+            VideoFirstFrameCache.evictExcept(_playerPlaylist.value.mapTo(mutableSetOf()) { it.filePath })
+            // 2026-10-03 终验排查日志：占位兜底命中时打印入口串与库列表规模
+            if (_playerPlaylist.value.any { it.id == it.filePath }) {
+                android.util.Log.w("PlayerSession", "openPlayer placeholder hit; entry=$entryFilePath, base=${base.size}, filtered=${filtered.size}")
+            }
             playVideo(entryFilePath, autoStart = false)
+            // 2026-10-03 终验修复：库流冷启动超时（首装扫描刚入库时常见）会让会话落入
+            // minimalEntity 占位——信息条显示「未知作者」、宽高写回按占位 id 匹配不到真实行。
+            // 扫描中途的过期快照也可能缺行，所以 10s 窗口内持续监听库流，每次发射都尝试
+            // 就地修补占位页：页序不变、ExoPlayer 不动，仅替换元数据实体。
+            if (_playerPlaylist.value.any { it.id == it.filePath }) {
+                launch {
+                    withTimeoutOrNull(10_000L) {
+                        var repaired = false
+                        videoList.collect { library ->
+                            if (repaired || library.isEmpty()) return@collect
+                            val byPath = library.associateBy { it.filePath }
+                            _playerPlaylist.value = _playerPlaylist.value.map { entity ->
+                                if (entity.id == entity.filePath) byPath[entity.filePath] ?: entity else entity
+                            }
+                            _playerState.value.currentVideo?.filePath?.let { path ->
+                                _playerState.update { it.copy(currentVideo = findEntity(path)) }
+                            }
+                            if (_playerPlaylist.value.none { it.id == it.filePath }) repaired = true
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -280,6 +336,176 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             ?: minimalEntity(filePath)
 
     /**
+     * 2026-10-03 批次C：媒体显示宽高写回（数据自愈）—— 视频与图片共用链路。
+     *
+     * 写入条件：实体宽高为 null（旧记录/来源缺失）或与实测差 ≥2px 才写，同值不重复写。
+     * 顺序：先更新内存（_playerPlaylist + currentVideo 的实体 —— UI 媒体框比例随即
+     * 用上真实比例，PlayerScreen 的比例引擎经 playlist 变化重启后取到新目标），
+     * 再于 IO 协程写库（runCatching 兜底，写库失败不影响播放；与 playerReleased 无关）。
+     * 防御：会话外条目（playlist 与 currentVideo 都找不到实体）不写，防 entity 为 null。
+     */
+    private fun persistMediaDimensionsIfNeeded(filePath: String, width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        val entity = _playerPlaylist.value.find { it.filePath == filePath }
+            ?: _playerState.value.currentVideo?.takeIf { it.filePath == filePath }
+            ?: return
+        val oldW = entity.mediaWidth
+        val oldH = entity.mediaHeight
+        val unchanged = oldW != null && oldH != null &&
+            abs(oldW - width) < 2 && abs(oldH - height) < 2
+        if (unchanged) return
+        val updated = entity.copy(mediaWidth = width, mediaHeight = height)
+        _playerPlaylist.value = _playerPlaylist.value.map {
+            if (it.filePath == filePath) updated else it
+        }
+        _playerState.update { st ->
+            if (st.currentVideo?.filePath == filePath) st.copy(currentVideo = updated) else st
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { historyRepository.updateMediaDimensions(entity.id, width, height) }
+        }
+    }
+
+    /**
+     * 2026-10-03 批次E：图片页 Coil 加载成功后回传实测宽高（PlayerScreen 的
+     * ZoomableImageViewerPage onState 回调调用），写回与内存更新链路同视频
+     * （persistMediaDimensionsIfNeeded：同值去重 + IO 写库 + 即时更新实体）。
+     */
+    fun reportImageDimensions(filePath: String, width: Int, height: Int) {
+        persistMediaDimensionsIfNeeded(filePath, width, height)
+    }
+
+    // ===================== 视频首帧预渲染（2026-10-03 批次E） =====================
+
+    /**
+     * 查询/抽取视频真实首帧（进程内 LruCache，见 VideoFirstFrameCache）：命中直返，
+     * 未命中在 IO 抽帧后落缓存；文件不存在/失败返回 null（调用方回退旧封面）。
+     * 同文件并发请求在缓存内合并，不重复解码。
+     */
+    suspend fun firstFrameFor(filePath: String): Bitmap? =
+        VideoFirstFrameCache.firstFrame(getApplication(), filePath)
+
+    /** 仅查缓存不抽帧（播放页封面 peek：不为当前页额外抽帧，PlayerView 自会渲染真画面） */
+    fun peekFirstFrame(filePath: String): Bitmap? = VideoFirstFrameCache.peek(filePath)
+
+    /**
+     * 落定预取邻页首帧：settledPage 变化时对 ±1 页的视频条目预热缓存（忽略图片条目与
+     * 不存在的文件），邻页预组合渲染时缓存大概率已就绪 —— 滑入页直接显示真帧。
+     * viewModelScope 后台执行，与去抖切播链路、比例动画流互不干扰。
+     */
+    fun prefetchNeighborFirstFrames(page: Int) {
+        val playlist = _playerPlaylist.value
+        listOf(page - 1, page + 1)
+            .filter { it in playlist.indices }
+            .map { playlist[it] }
+            .filter { !MediaFileTypes.isImageFile(it.filePath) && File(it.filePath).exists() }
+            .forEach { entity ->
+                viewModelScope.launch { firstFrameFor(entity.filePath) }
+            }
+    }
+
+    // ===================== 真双播放器（2026-10-03 批次F） =====================
+
+    /**
+     * 旗舰机「真双播放器」总开关（2026-10-03 批次F；2026-10-03 定案升级为设置开关）：
+     * 最终生效 = 设置「真双播放器」开关（SettingsRepository.dualPlayerFlow，默认开）
+     * ∧ FlagshipDetector 硬件达标（RAM ≥ 16GB）——任一不满足即 false，整条预览链路
+     * 不触发，完全走批次E 真帧封面路径。StateFlow 随设置实时变化，拖拽预览的触发
+     * effect 与 requestPreviewPlayer 均以此为准。
+     */
+    private val settingsRepository =
+        (getApplication<Application>() as com.ed.edqiu.EdqiuApplication).container.settingsRepository
+    val isDualPlayerEnabled: StateFlow<Boolean> =
+        settingsRepository.dualPlayerFlow
+            .map { enabled -> enabled && FlagshipDetector.isFlagship(getApplication()) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    private val _previewFilePath = MutableStateFlow<String?>(null)
+
+    /** 当前挂着静音预览的文件路径（null = 无预览；非旗舰机恒 null） */
+    val previewFilePath: StateFlow<String?> = _previewFilePath.asStateFlow()
+
+    private val _previewHasFirstFrame = MutableStateFlow<String?>(null)
+
+    /** 预览首帧已上屏的文件路径（PlayerScreen 封面层据此从真帧/卡片封面淡出交接活视频） */
+    val previewHasFirstFrame: StateFlow<String?> = _previewHasFirstFrame.asStateFlow()
+
+    /**
+     * 预览播放器实例（全 App 第二个也是最后一个 ExoPlayer，「主 + 预览 ≤ 2 实例」铁律）。
+     * 独立 build/release，不走 obtainPlayer/playerReleased 主实例机制；UI 侧由
+     * PlayerScreen 的 AndroidView.update 按页角色读取重绑。
+     */
+    var previewPlayer: ExoPlayer? = null
+        private set
+
+    /** 预览监听：只关心首帧上屏与错误自清（预览恒静音，不参与任何主播放器状态） */
+    private val previewListener = object : Player.Listener {
+        override fun onRenderedFirstFrame() {
+            // 预览首帧上屏：记录该路径，PlayerScreen 据此淡出邻页封面露出活视频
+            _previewHasFirstFrame.value = _previewFilePath.value
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            // 解码器耗尽等预览错误：静默释放、回退批次E 真帧路径，绝不 crash 也绝不
+            // 影响主播放（release 延迟到主队列下一拍，不在监听回调内同步重入）
+            viewModelScope.launch { releasePreviewPlayer() }
+        }
+    }
+
+    /**
+     * 预览播放器构建：与主播放器同 Builder 风格，但**不加 PreloadConfiguration**
+     *（预览只播单条，且不能为它再预载第三路媒体 —— 守住 ≤2 实例与内存底线）。
+     */
+    private fun buildPreviewPlayer(): ExoPlayer =
+        ExoPlayer.Builder(getApplication<Application>()).build().apply {
+            addListener(previewListener)
+            // 恒静音：拖拽期间只呈现活画面，绝不与主播放器出现双声
+            volume = 0f
+        }
+
+    /**
+     * 请求为「拖拽目标页」启动静音预览播放（PlayerScreen 拖拽越过 15% 时调用）。
+     * 拒绝条件（直接返回，调用方自动回退批次E 真帧路径）：双播放未开启 / 图片路径 /
+     * 是当前主播放条目 / 已是该路径 / 文件不存在。已有预览实例时换目标复用同实例
+     *（永远只有一个预览实例）；构建失败（runCatching 兜底，如解码器耗尽）静默置空，
+     * 绝不 crash。释放后再次请求可惰性重建。
+     */
+    fun requestPreviewPlayer(filePath: String) {
+        if (!isDualPlayerEnabled.value) return
+        if (MediaFileTypes.isImageFile(filePath)) return
+        if (_playerState.value.currentVideo?.filePath == filePath) return
+        if (_previewFilePath.value == filePath) return
+        val file = File(filePath)
+        if (!file.exists()) return
+
+        if (previewPlayer == null) {
+            val built = runCatching { buildPreviewPlayer() }.getOrNull() ?: return
+            previewPlayer = built
+        }
+        // 状态先清后立：封面层在预览首帧上屏前保持显示（previewHasFirstFrame 归零）
+        _previewHasFirstFrame.value = null
+        _previewFilePath.value = filePath
+        val player = previewPlayer
+        if (player != null) {
+            player.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+            player.prepare()
+            // 静音起播（volume 构建时已置 0）：拖拽中呈现活画面
+            player.playWhenReady = true
+        }
+    }
+
+    /** 释放预览播放器（幂等）：release 实例 + 清两个状态，UI 自动回退批次E 路径。 */
+    fun releasePreviewPlayer() {
+        val player = previewPlayer
+        previewPlayer = null
+        _previewFilePath.value = null
+        _previewHasFirstFrame.value = null
+        if (player != null) {
+            runCatching { player.release() }
+        }
+    }
+
+    /**
      * 确保播放列表与会话列表一致（2026-09-15 批次3；2026-09-30 v1.6.9 改为会话列表）。
      * 会话列表已按类型分流（视频会话不含图片），避免预载撞上无法解码的图片项。
      * @return 当前会话实体列表（与播放列表一一对应）。
@@ -356,11 +582,19 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             playerReleased = true
             exoPlayer.release()
         }
+        // 2026-10-03 批次F：全量释放路径一并回收预览实例（≤2 实例铁律）
+        releasePreviewPlayer()
+        // 2026-10-03 批次E：播放器实例释放，首帧缓存一并归还
+        VideoFirstFrameCache.evictExcept(emptySet())
     }
 
     /** 停止播放但不释放 ExoPlayer（返回后再进还能播） */
     fun stopPlayer() {
         if (!playerReleased) exoPlayer.stop()
+        // 2026-10-03 批次F：离开播放器（PlayerScreen onDispose）即回收预览实例
+        releasePreviewPlayer()
+        // 2026-10-03 批次E：播放器关闭（离开播放页）清空首帧缓存，归还位图内存
+        VideoFirstFrameCache.evictExcept(emptySet())
     }
 
     /**
@@ -382,5 +616,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             playerReleased = true
             exoPlayer.release()
         }
+        // 2026-10-03 批次F：ViewModel 销毁兜底回收预览实例
+        releasePreviewPlayer()
+        // 2026-10-03 批次E：ViewModel 销毁兜底回收首帧缓存
+        VideoFirstFrameCache.evictExcept(emptySet())
     }
 }

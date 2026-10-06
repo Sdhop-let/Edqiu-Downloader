@@ -2,7 +2,7 @@
 
 Android 原生的 X/Twitter 媒体下载器：链接收件箱、媒体下载、本地媒体库与沉浸式播放器一体化，并支持把下载历史与媒体直连备份到你的网盘。
 
-> 当前版本：**v1.6.9.1 (fix)**（versionCode 46）· compileSdk/targetSdk 37（Android 17）· minSdk 24 · 仅 arm64-v8a
+> 当前版本：**v1.7.0**（versionCode 47）· compileSdk/targetSdk 37（Android 17）· minSdk 24 · 仅 arm64-v8a
 > 历史曾用名：XInvox / Es Qp / TwitterDownloader（现已合并为 Edqiu 单一应用）
 
 [![Download](https://img.shields.io/badge/下载-GitHub_Releases-2563EB)](../../releases/latest)
@@ -15,7 +15,8 @@ Android 原生的 X/Twitter 媒体下载器：链接收件箱、媒体下载、�
 
 前往 [**Releases 页面**](../../releases/latest) 下载 `Edqiu-vX.X.X.apk`：
 
-1. 下载 APK（约 84MB，arm64-v8a，适用绝大多数现代手机）；
+1. 下载 APK（约 84MB，arm64-v8a，适用绝大多数现代手机）——**已安装旧版的用户建议走应用内
+   「检查更新」**：弹窗内可直接查看更新内容，并提供**国内镜像直连 / GitHub 官方直连**双下载源；
 2. 允许「安装未知来源应用」（仅首次）；
 3. 覆盖安装即可，数据全部保留。
 
@@ -41,18 +42,25 @@ Android 原生的 X/Twitter 媒体下载器：链接收件箱、媒体下载、�
 
 ### 播放器
 - 抖音式纵向滑动流，滑动按素材类型分流（视频会话只切视频、图片会话只切图片）；
-- X/Twitter 式页面过渡：媒体面内嵌页面、首帧渲染完成后交接封面，切条零黑帧、比例恒定；
+- X/Twitter 式页面过渡：媒体面内嵌页面、首帧渲染完成后交接封面，切条零黑帧；
+- **媒体框比例跟手渐变**：翻页时媒体框按前后两条视频的真实比例连续形变，形变期
+  裁切补位无黑边，落定立即起播；多次滑动后返回媒体库精准定位到当前视频卡片；
 - 倍速、静音、横屏、seek、播放列表选片；右缘跟手拖拽返回。
 
 ### 云备份
-- 直连备份到 **WebDAV / 百度网盘 / 阿里云盘 / 123 网盘 / CloudDrive2**（凭证 Keystore 加密存储，不经任何第三方服务器）；
-- 分片上传 + 断点续传 + 秒传（阿里）+ 远端删除对账；
+- **云备份统一入口在「WebDAV 同步」页**：WebDAV 直连同步配置 + 「网盘备份中心」
+  （百度 / 123 / 阿里 / 自定义 WebDAV 直连备份的授权、备份范围与任务状态）+ 同步情况一览；
+- 分片上传 + 断点续传 + 秒传（阿里）+ 远端删除对账；手动同步挂应用级任务，
+  退出页面不中断，回到页面补看结果；
 - 下载历史 JSON 备份/恢复（SHA-256 校验），支持 WebDAV 与本地公共目录；
 - WebDAV 配置指南：[docs/webdav-cloud-backup-guide](docs/webdav-cloud-backup-guide/webdav-cloud-backup-guide.html)。
 
 ### 界面
 - Material 3 + 壁纸动态取色（Monet），液态玻璃质感（透明度/磨砂/折射独立可调）；
-- 悬浮胶囊底栏、跟手返回转场、深色模式跟随系统。
+- 悬浮胶囊底栏、跟手返回转场、深色模式跟随系统；
+- 开屏显式「跳过」入口；首次安装三步引导（Cookie/代理可跳过）带错峰入场动画与
+  跟手指示器；
+- **应用内检查更新**：更新弹窗展示更新内容与双下载源（国内镜像直连 / GitHub 官方直连）。
 
 ## 从源码构建
 
@@ -80,7 +88,7 @@ keyPassword=<别名口令>
 
 ### 发版流程（维护者）
 
-推送 `v*` tag（如 `v1.6.9.1`）→ GitHub Actions 自动构建 APK → 创建 Release 并上传 `Edqiu-<tag>.apk`，
+推送 `v*` tag（如 `v1.7.0`）→ GitHub Actions 自动构建 APK → 创建 Release 并上传 `Edqiu-<tag>.apk`，
 Release 说明自动取 `docs/` 下最新的 `RELEASE_NOTES-*.md`。详见 [docs/release-automation.md](docs/release-automation.md)。
 网盘备份的应用资质（百度/阿里/123 的 client_id/secret）通过 `gradle.properties` 注入 BuildConfig，缺省留空时对应功能提示"未配置"。
 
@@ -128,9 +136,10 @@ app/src/main/java/com/ed/edqiu/
 | 文档 | 说明 |
 |---|---|
 | [docs/release-automation.md](docs/release-automation.md) | 发版流程（tag → CI → Release） |
+| [docs/RELEASE_NOTES-1.7.0.md](docs/RELEASE_NOTES-1.7.0.md) | **本版更新内容**（备份中心整合/播放器比例/更新弹窗等） |
+| [docs/RELEASE_NOTES-1.6.9.1.md](docs/RELEASE_NOTES-1.6.9.1.md) | 上版修复清单（50+ 项，历史） |
 | [docs/ARCHITECTURE-v2.md](docs/ARCHITECTURE-v2.md) / [docs/system_design.md](docs/system_design.md) | 架构与系统设计 |
 | [docs/webdav-cloud-backup-guide/](docs/webdav-cloud-backup-guide/webdav-cloud-backup-guide.html) | WebDAV 备份图文指南 |
-| [docs/RELEASE_NOTES-1.6.9.1.md](docs/RELEASE_NOTES-1.6.9.1.md) | 本版修复清单（50+ 项） |
 | [docs/archive/](docs/archive/) | 历史文档归档（XInvox 时代审计/PRD/旧版说明） |
 | [docs/figma-redesign/](docs/figma-redesign/) | 液态玻璃设计原型（HTML） |
 

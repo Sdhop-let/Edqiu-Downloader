@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.HorizontalDivider
@@ -71,7 +72,7 @@ import com.ed.edqiu.ui.settings.XSection
 import com.ed.edqiu.navigation.MineNav
 import com.ed.edqiu.ui.screens.DlSection
 
-private enum class SubMenu { CONTENT, DOWNLOADER, APPEARANCE, STORAGE }
+private enum class SubMenu { CONTENT, DOWNLOADER, APPEARANCE, STORAGE, PLAYBACK }
 
 @Composable
 fun MineScreen(mineNav: MineNav) {
@@ -90,7 +91,6 @@ fun MineScreen(mineNav: MineNav) {
         onDownloadCenter = mineNav.openDownloadCenter,
         onTrash = mineNav.openTrash,
         onAuthors = mineNav.openAuthors,
-        onBackup = mineNav.openBackupCenter,
         onNetwork = { mineNav.openDownloaderSection(DlSection.NETWORK) },
         onWebdav = { mineNav.openDownloaderSection(DlSection.WEBDAV) },
         onPreDownload = { mineNav.openDownloaderSection(DlSection.PREDOWNLOAD) },
@@ -99,7 +99,8 @@ fun MineScreen(mineNav: MineNav) {
         onAppearance = { mineNav.openEdqiuSection(XSection.APPEARANCE) },
         onStorage = { mineNav.openEdqiuSection(XSection.STORAGE) },
         onBackupRestore = { mineNav.openEdqiuSection(XSection.BACKUP) },
-        onCapture = { mineNav.openEdqiuSection(XSection.CAPTURE) }
+        onCapture = { mineNav.openEdqiuSection(XSection.CAPTURE) },
+        onPlayback = { mineNav.openEdqiuSection(XSection.PLAYBACK) }
     )
 }
 
@@ -111,7 +112,6 @@ private fun MineMainView(
     onDownloadCenter: () -> Unit,
     onTrash: () -> Unit,
     onAuthors: () -> Unit,
-    onBackup: () -> Unit,
     onNetwork: () -> Unit,
     onWebdav: () -> Unit,
     onPreDownload: () -> Unit,
@@ -120,7 +120,8 @@ private fun MineMainView(
     onAppearance: () -> Unit,
     onStorage: () -> Unit,
     onBackupRestore: () -> Unit,
-    onCapture: () -> Unit
+    onCapture: () -> Unit,
+    onPlayback: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -187,6 +188,22 @@ private fun MineMainView(
             ) {
                 SubMenuItemRow(Icons.Default.AutoAwesome, "外观设置", "颜色 / 玻璃与底栏 / 显示 / 手势与触感", onAppearance)
             }
+            GroupItemDivider()
+            // 2026-10-03 批次F 定案：真双播放器等播放行为设置入口（16GB 旗舰门槛在设置页有详细说明）
+            ExpandableMenuSection(
+                icon = Icons.Default.SmartDisplay,
+                title = "播放与媒体库",
+                subtitle = "滑动播放、真双播放器与退场定位",
+                isExpanded = expandedSection == SubMenu.PLAYBACK,
+                onToggle = { onToggleSection(SubMenu.PLAYBACK) }
+            ) {
+                SubMenuItemRow(
+                    Icons.Default.SmartDisplay,
+                    "播放设置",
+                    "真双播放器开关（含硬件门槛与当前设备说明）",
+                    onPlayback
+                )
+            }
         }
 
         // ③ 系统与维护：文件与数据「存哪、怎么备份、怎么维护」+ 版本信息
@@ -203,9 +220,8 @@ private fun MineMainView(
                 SubMenuDivider()
                 SubMenuItemRow(Icons.Default.Backup, "备份与恢复", "收件箱/回收站数据的本地备份与导入导出", onBackupRestore)
                 SubMenuDivider()
-                SubMenuItemRow(Icons.Default.Cloud, "网盘备份中心", "媒体云端备份：各网盘授权、任务与状态", onBackup)
-                SubMenuDivider()
-                SubMenuItemRow(Icons.Default.Sync, "WebDAV 同步", "私有云盘直连配置与自动同步", onWebdav)
+                // 2026-10：网盘备份中心入口已整合进「WebDAV 同步」页，独立入口移除
+                SubMenuItemRow(Icons.Default.Sync, "WebDAV 同步", "私有云盘直连配置、自动同步与多网盘备份", onWebdav)
                 SubMenuDivider()
                 SubMenuItemRow(Icons.Default.Settings, "更新与工具", "版本更新、日志与调试工具", onUpdate)
             }

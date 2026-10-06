@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -39,6 +40,12 @@ import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.ViewAgenda
 import androidx.compose.material.icons.outlined.ViewStream
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import com.ed.edqiu.ui.components.SmoothAlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
@@ -68,9 +75,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
@@ -103,6 +115,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -283,11 +296,24 @@ fun MediaLibraryScreen(
     }
     val groups = remember(items, grouped) { if (grouped) groupLibraryByTweet(items) else emptyList() }
 
-    // ── 播放返回定位（2026-09-30 v1.6.8；2026-09-30 v1.6.9 修复定位失效）──
+    // ── 播放返回定位（2026-09-30 v1.6.8；2026-09-30 v1.6.9 修复定位失效；2026-10-03 批次D 目标卡片屏幕居中 + 落位高亮）──
     // 卡片封面矩形表（onGloballyPositioned 持续上报，仅可见卡片在表内）
     val coverBoundsMap = remember { mutableStateMapOf<String, Rect>() }
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-    androidx.compose.runtime.LaunchedEffect(locateFilePath, items.size, grouped) {
+    // 2026-10-03 批次D：落位高亮确认——居中完成且矩形上报后置为目标 filePath，
+    // 目标卡片主色描边脉冲 1.2s 自动淡出。
+    // 2026-10-03 终验修正：高亮计时独立成 effect——定位 effect 的生命周期绑定
+    // locateFilePath，而宿主在收缩落定（onBack）即清空该值并把本 effect 取消，
+    // 原先 delay(1200) 放在定位 effect 内会被 finally 立即清掉（高亮只活几十毫秒）。
+    // 现在定位 effect 只点亮，独立 effect 负责到点熄灭，不受 locateFilePath 清空影响。
+    var highlightedPath by remember { mutableStateOf<String?>(null) }
+    androidx.compose.runtime.LaunchedEffect(highlightedPath) {
+        if (highlightedPath != null) {
+            delay(1200L)
+            highlightedPath = null
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(locateFilePath, items.size, grouped, filter) {
         val target = locateFilePath ?: return@LaunchedEffect
         // LazyColumn 内部索引：头部占 index 0；分组模式还要累加各组头部
         val lazyIndex = if (grouped) {
@@ -304,23 +330,63 @@ fun MediaLibraryScreen(
         } else {
             items.indexOfFirst { it.filePath == target }.takeIf { it >= 0 }?.plus(1) ?: -1
         }
-        if (lazyIndex < 0) return@LaunchedEffect
-        // 2026-09-30 v1.6.9 修复「退场不定位/回缩错卡」：
-        // ① animateScrollToItem 长列表在 460ms 收尾动画内滚不完 → 改瞬时 scrollToItem
-        //   （列表在浮层后面跳变，浮层淡出时已停在目标卡片）；
+        if (lazyIndex < 0) {
+            // 2026-10-03 批次D 筛选兜底：目标不在当前筛选视图时切回「全部作品」后返回，
+            // effect key 含 filter（items.size 亦随列表变化），列表刷新后自动重跑定位；
+            // 已是全部作品仍找不到则按现状放弃（只兜一次，避免死循环）
+            if (filter != LibraryFilter.ALL) filter = LibraryFilter.ALL
+            return@LaunchedEffect
+        }
+        // 2026-09-30 v1.6.9 的经验保留：
+        // ① 瞬时 scrollToItem（animateScrollToItem 在 460ms 收尾动画内滚不完）；
         // ② 滚动后 onGloballyPositioned 要到下一帧布局才把矩形写入 coverBoundsMap，
-        //   旧逻辑同步读表拿不到 → targetBounds 恒空 → 回缩落到进场旧卡片。
-        //   现在等矩形表出现「滚动后新值」（跳过订阅时的旧值）再上报。
-        val boundsBeforeScroll = coverBoundsMap[target]
-        runCatching { listState.scrollToItem(lazyIndex) }
-        val boundsAfterScroll = withTimeoutOrNull(400L) {
-            androidx.compose.runtime.snapshotFlow { coverBoundsMap[target] }
-                .drop(1)
+        //   上报必须等矩形表出现新值。
+        val boundsBeforeLocate = coverBoundsMap[target]
+        // 2026-10-03 批次D 两段式居中第一段：目标不在可见区才瞬跳（列表在浮层背后，
+        // 用户不可见）；目标本就在 visibleItemsInfo 中则跳过瞬跳，避免无谓跳变
+        val targetVisibleNow = listState.layoutInfo.visibleItemsInfo.any { it.index == lazyIndex }
+        if (!targetVisibleNow) {
+            runCatching { listState.scrollToItem(lazyIndex) }
+        }
+        // 第二段：读最新布局找目标项，按「项中心 - 视口中心」差值平滑滚到竖直居中。
+        // layoutInfo 的 item offset 与 viewportStart/EndOffset 同属内容坐标系，视口占
+        // [viewportStartOffset, viewportEndOffset]。订阅首帧若已拿到目标（目标本就可见 /
+        // scrollToItem 已强制重测布局）则立即返回，否则等瞬跳后的新布局（200ms 兜底直读）。
+        // 220ms 平滑滚动发生在播放层收缩动画（460ms）期间、浮层背后，视觉安全；
+        // 首尾滚不够时 animateScrollBy 自然钳制（卡片停在端头），无需特判
+        val targetInfo = withTimeoutOrNull(200L) {
+            androidx.compose.runtime.snapshotFlow { listState.layoutInfo }
+                .map { layout -> layout.visibleItemsInfo.firstOrNull { it.index == lazyIndex } }
                 .filterNotNull()
                 .first()
+        } ?: listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == lazyIndex }
+        if (targetInfo != null) {
+            val layout = listState.layoutInfo
+            val viewportCenter = (layout.viewportStartOffset + layout.viewportEndOffset) / 2
+            val delta = (targetInfo.offset + targetInfo.size / 2) - viewportCenter
+            if (delta != 0) {
+                // 2026-10-05 定位失效修复：居中改瞬时（scrollBy）——旧 220ms 平滑动画
+                // 使终点矩形上报晚于播放器收缩窗口（远处卡片必现「定位无效果」）；
+                // 居中发生在浮层背后用户不可见，瞬时无观感代价、上报提前 ~260ms
+                runCatching { listState.animateScrollBy(delta.toFloat(), androidx.compose.animation.core.snap()) }
+            }
         }
-        // 卡片本就停在原位（矩形无变化 → 超时）时用滚动前的现值，它就是最新矩形
-        (boundsAfterScroll ?: boundsBeforeScroll)?.let(onLocateBounds)
+        // 居中完成后立即上报矩形（瞬时居中后 1-2 帧内 onGloballyPositioned 已写入新值）。
+        kotlinx.coroutines.delay(60L)
+        val boundsAfterLocate = coverBoundsMap[target]
+            ?: withTimeoutOrNull(400L) {
+                androidx.compose.runtime.snapshotFlow { coverBoundsMap[target] }
+                    .drop(1)
+                    .filterNotNull()
+                    .first()
+            }
+        // 超时回退：优先当前表值，再退定位前现值
+        (boundsAfterLocate ?: boundsBeforeLocate)?.let { bounds ->
+            onLocateBounds(bounds)
+            // 2026-10-03 批次D：落位高亮确认（1.2s 计时由上方独立 effect 负责，
+            // 不随本协程被 locateFilePath 清空而取消——终验修正）
+            highlightedPath = target
+        }
     }
 
     LazyColumn(
@@ -377,6 +443,8 @@ fun MediaLibraryScreen(
                     onCoverBounds = { coverBoundsMap[entity.filePath] = it },
                     // 容器变形退场：播放层缩小落定过程中隐藏该卡片信息区，落定后淡入
                     infoHidden = entity.filePath == infoHiddenFor && !infoRevealed,
+                    // 2026-10-03 批次D：播放返回定位落定后的目标卡片高亮脉冲（1.2s 自动淡出）
+                    highlighted = entity.filePath == highlightedPath,
                     onShare = {
                         runCatching {
                             val file = File(entity.filePath)
@@ -875,7 +943,9 @@ private fun MediaCard(
     onCoverBounds: ((Rect) -> Unit)? = null,
     // 容器变形退场（2026-09-30 第二版）：true = 信息区隐藏（播放层正缩小飞向本卡片），
     // 翻回 false 时信息区淡入（作者/文案/下载信息「慢慢显示」）
-    infoHidden: Boolean = false
+    infoHidden: Boolean = false,
+    // 2026-10-03 批次D：播放返回落位确认——true 时卡片主色描边脉冲（1.2s 自动淡出）
+    highlighted: Boolean = false
 ) {
     var showDelete by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
@@ -894,12 +964,42 @@ private fun MediaCard(
         label = "mediaCardInfoAlpha"
     )
 
+    // 2026-10-03 批次D：落位确认脉冲——主色描边 alpha 0.9↔0.25 来回 2 次共 1.2s（4×300ms）；
+    // 仅 highlighted 时创建动画，alpha 状态在绘制阶段读取（只重绘不重组），
+    // 不改变卡片尺寸与点击行为，与信息区淡入淡出互不影响
+    val pulseAlpha = if (highlighted) {
+        rememberInfiniteTransition(label = "locatePulse").animateFloat(
+            initialValue = 0.9f,
+            targetValue = 0.25f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 300, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "locatePulseAlpha"
+        )
+    } else null
+    val pulseColor = MaterialTheme.colorScheme.primary
+
     // L1 玻璃媒体卡
     GlassSurface(
         tier = GlassTier.L1,
         shape = RoundedCornerShape(20.dp),
         modifier = Modifier
             .fillMaxWidth()
+            // 2026-10-03 批次D：落位确认脉冲描边——drawWithContent 在内容之上叠加，
+            // 圆角与卡片一致（20dp），描边内缩半个线宽避免贴边裁切
+            .drawWithContent {
+                drawContent()
+                val alpha = pulseAlpha?.value ?: return@drawWithContent
+                val strokeWidth = 2.5.dp.toPx()
+                drawRoundRect(
+                    color = pulseColor.copy(alpha = alpha),
+                    topLeft = Offset(strokeWidth / 2f, strokeWidth / 2f),
+                    size = Size(size.width - strokeWidth, size.height - strokeWidth),
+                    cornerRadius = CornerRadius(20.dp.toPx()),
+                    style = Stroke(width = strokeWidth)
+                )
+            }
             .clickable(onClick = { onPlay(coverBounds) })
     ) {
         Column {

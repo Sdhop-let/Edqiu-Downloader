@@ -60,7 +60,12 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                 val task = downloadRepository.downloadTasks.value
                     .lastOrNull { it.url == videoInfo.url && it.formatId == format.formatId && it.mediaIndex == format.mediaIndex }
                 task?.let {
-                    historyRepository.addToHistory(it, filePath, videoInfo.duration)
+                    // 2026-10-02 批次B：入库即带媒体显示宽高（比例动画前提）
+                    val (mediaWidth, mediaHeight) = resolveMediaDimensions(format, videoInfo)
+                    historyRepository.addToHistory(
+                        it, filePath, videoInfo.duration,
+                        mediaWidth = mediaWidth, mediaHeight = mediaHeight
+                    )
                 }
             }
         }
@@ -115,11 +120,24 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                 val task = downloadRepository.downloadTasks.value
                     .lastOrNull { it.url == videoInfo.url && it.formatId == format.formatId && it.mediaIndex == format.mediaIndex }
                 task?.let {
-                    historyRepository.addToHistory(it, filePath, videoInfo.duration)
+                    // 2026-10-02 批次B：入库即带媒体显示宽高（比例动画前提）
+                    val (mediaWidth, mediaHeight) = resolveMediaDimensions(format, videoInfo)
+                    historyRepository.addToHistory(
+                        it, filePath, videoInfo.duration,
+                        mediaWidth = mediaWidth, mediaHeight = mediaHeight
+                    )
                 }
             }
         }
     }
+
+    /**
+     * 2026-10-02 批次B：入库宽高取值——与下载目标一致的媒体条目（format）优先，
+     * 缺失时用 VideoInfo 主媒体兜底。本链路没有已取到的 TweetMeta（不为此追加网络请求），
+     * 仍缺失则留 null，由 MediaDimensionsBackfillWorker 本地探测回填。
+     */
+    private fun resolveMediaDimensions(format: VideoFormat, videoInfo: VideoInfo): Pair<Int?, Int?> =
+        (format.width ?: videoInfo.width) to (format.height ?: videoInfo.height)
 
     private suspend fun isSameAuthorContext(videoInfo: VideoInfo): Boolean {
         val currentAuthor = normalizeAuthor(videoInfo.uploader)

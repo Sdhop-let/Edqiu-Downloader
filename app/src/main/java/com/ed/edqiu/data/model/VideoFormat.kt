@@ -19,7 +19,13 @@ data class VideoFormat(
     /** True when this item is a media entry, not a quality variant. */
     val isMediaItem: Boolean = false,
     /** Whether this downloadable item is a video or image. */
-    val mediaType: MediaType = MediaType.VIDEO
+    val mediaType: MediaType = MediaType.VIDEO,
+    // 2026-10-02 批次B：该媒体条目的显示宽高（px，FXTwitter photos[].width/height、
+    // videos 外层或 videos[] 变体）。入库透传用；null=来源未提供，靠回填 Worker 兜底。
+    /** 该媒体条目的显示宽（px）；null=未知。 */
+    val width: Int? = null,
+    /** 该媒体条目的显示高（px）；null=未知。 */
+    val height: Int? = null
 ) {
     val isImage: Boolean
         get() = mediaType == MediaType.IMAGE

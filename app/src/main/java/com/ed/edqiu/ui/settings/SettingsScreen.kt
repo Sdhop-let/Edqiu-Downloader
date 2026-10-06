@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Save
@@ -132,6 +133,8 @@ object XSection {
     const val STORAGE = "storage"
     const val BACKUP = "backup"
     const val CAPTURE = "capture"
+    /** 播放与媒体库（2026-10-03 批次F 定案：真双播放器开关在此分区） */
+    const val PLAYBACK = "playback"
 }
 
 @Composable
@@ -148,6 +151,8 @@ fun SettingsScreen(
     val monitorUri by settings.monitorDirUriFlow.collectAsStateWithLifecycle(initialValue = null)
     val autoRetry by settings.autoRetryFlow.collectAsStateWithLifecycle(initialValue = true)
     val backgroundSync by settings.backgroundSyncFlow.collectAsStateWithLifecycle(initialValue = true)
+    // 2026-10-03 批次F 定案：真双播放器开关（默认开；生效还需旗舰硬件，见卡片内说明）
+    val dualPlayer by settings.dualPlayerFlow.collectAsStateWithLifecycle(initialValue = true)
     val backupDirUri by backupVm.backupDirUri.collectAsStateWithLifecycle()
     val automaticBackup by backupVm.automaticBackup.collectAsStateWithLifecycle()
     val lastBackupAt by backupVm.lastBackupAt.collectAsStateWithLifecycle()
@@ -657,6 +662,52 @@ fun SettingsScreen(
             }
             SwitchRow("后台更新下载状态", "系统允许时定期扫描监控目录，同步已下载文件", backgroundSync) {
                 scope.launch { settings.setBackgroundSync(it) }
+            }
+        }
+        }
+
+        // ── 播放与媒体库（2026-10-03 批次F 定案）：真双播放器开关 + 详细说明 + 设备状态 ──
+        if (section == null || section == XSection.PLAYBACK) {
+        SectionCard(
+            title = "播放与媒体库",
+            subtitle = "滑动播放、真双播放器与退场定位",
+            icon = Icons.Filled.SmartDisplay
+        ) {
+            Text(
+                text = "「真双播放器」：在播放页上下滑动切换视频时，相邻一页在手指拖拽期间就用" +
+                    "第二个静音播放器实时渲染视频画面（两个页面都是活视频），松手后声音由主播放器无缝接管；" +
+                    "滑走的旧视频在翻过一半时自动暂停，省电且切换更干脆。",
+                style = MaterialTheme.typography.bodySmall,
+                color = Ink
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "硬件门槛与回退：该功能需要两个解码器同时工作，仅对运行内存 ≥ 16GB 的设备生效；" +
+                    "设备未达标或本开关关闭时自动回退为「相邻页真帧预览」——滑动时邻页显示该视频的真实首帧，" +
+                    "落定后才起播，功能无损、更省电。开关状态即时生效，无需重启。",
+                style = MaterialTheme.typography.bodySmall,
+                color = Muted
+            )
+            Spacer(Modifier.height(6.dp))
+            val ramText = remember { com.ed.edqiu.domain.FlagshipDetector.totalMemText(context) }
+            val meetsHardware = remember {
+                com.ed.edqiu.domain.FlagshipDetector.isFlagship(context)
+            }
+            StatusLine(
+                Icons.Default.Info,
+                if (meetsHardware) {
+                    "当前设备：${ramText}运存 —— 已达 16GB 门槛，开关开启时生效"
+                } else {
+                    "当前设备：${ramText}运存 —— 未达 16GB 门槛，自动使用真帧预览"
+                },
+                color = if (meetsHardware) Accent else Muted
+            )
+            SwitchRow(
+                "真双播放器（滑动时两页都是活视频）",
+                "需 16GB 运存设备；关闭或未达标时回退真帧预览",
+                dualPlayer
+            ) {
+                scope.launch { settings.setDualPlayer(it) }
             }
         }
         }
