@@ -82,6 +82,10 @@ object FXTwitterResolver {
                     return@withContext Result.failure(Exception("娌℃湁鍙笅杞界殑媒体鏍煎紡"))
                 }
 
+                // 2026-10-02 批次B：主媒体显示宽高（首个视频，无视频则首个图片），
+                // 与下载目标一致的条目级宽高在 formats 各自的 width/height 上
+                val primaryItem = mediaItems.firstOrNull { it.mediaType == MediaType.VIDEO }
+                    ?: mediaItems.firstOrNull()
                 val videoInfo = VideoInfo(
                     url = url,
                     title = tweet.optString("text", "Twitter Media").take(80).ifBlank { "Twitter Media" },
@@ -89,7 +93,9 @@ object FXTwitterResolver {
                     duration = mediaItems.filter { it.mediaType == MediaType.VIDEO }.maxOfOrNull { it.duration } ?: 0L,
                     uploader = author.optString("screen_name", "unknown"),
                     formats = formats,
-                    formatMode = FormatMode.MEDIA_ITEMS
+                    formatMode = FormatMode.MEDIA_ITEMS,
+                    width = primaryItem?.width,
+                    height = primaryItem?.height
                 )
 
                 Log.d(TAG, "fxtwitter resolved: ${videoInfo.formats.size} media item(s)")
@@ -196,6 +202,11 @@ object FXTwitterResolver {
             if (isVideo && !videoUrl.isNullOrBlank()) {
                 val dedupeKey = videoUrl.substringBefore("?")
                 if (seen.add(dedupeKey)) {
+                    // 2026-10-02 批次B：显示宽高 px——优先外层 media.videos[].width/height；
+                    // FXTwitter 视频外层通常无宽高，取与下载目标一致的 bestVariant（videos[] 变体）
+                    // 上的 width/height（变体即实际下载的分辨率，天然是显示尺寸，无需旋转校正）。
+                    val dims = item.optPositiveDims()
+                        ?: bestVariant?.optPositiveDims()
                     result += FXMediaItem(
                         url = videoUrl,
                         type = mediaTypeText ?: "video",
@@ -205,7 +216,9 @@ object FXTwitterResolver {
                         duration = item.optDouble("duration", 0.0).toLong(),
                         bitrate = bitrate,
                         ext = "mp4",
-                        mediaType = MediaType.VIDEO
+                        mediaType = MediaType.VIDEO,
+                        width = dims?.first,
+                        height = dims?.second
                     )
                 }
                 return@forEach
@@ -224,6 +237,8 @@ object FXTwitterResolver {
                 val dedupeKey = imageUrl.substringBefore("?")
                 if (seen.add(dedupeKey)) {
                     val ext = inferImageExtension(imageUrl)
+                    // 2026-10-02 批次B：图片显示宽高 px（media.photos[].width/height）
+                    val dims = item.optPositiveDims()
                     result += FXMediaItem(
                         url = imageUrl,
                         type = mediaTypeText ?: "photo",
@@ -231,7 +246,9 @@ object FXTwitterResolver {
                         duration = 0L,
                         bitrate = 0,
                         ext = ext,
-                        mediaType = MediaType.IMAGE
+                        mediaType = MediaType.IMAGE,
+                        width = dims?.first,
+                        height = dims?.second
                     )
                 }
             }
@@ -248,7 +265,7 @@ object FXTwitterResolver {
                 val qualityLabel = bitrateToQualityLabel(bitrate)
                 VideoFormat(
                     formatId = "fx_${index}_${bitrate}",
-                    quality = "视频${index.toString().padStart(2, '0')} · $qualityLabel",
+                    quality = "视频${index.toString().padStart(2, '0')} · $qualityLabel",
                     ext = ext,
                     filesize = 0,
                     vcodec = "h264",
@@ -258,7 +275,10 @@ object FXTwitterResolver {
                     thumbnail = thumbnail,
                     mediaIndex = index,
                     isMediaItem = true,
-                    mediaType = MediaType.VIDEO
+                    mediaType = MediaType.VIDEO,
+                    // 2026-10-02 批次B：媒体条目显示宽高透传（入库/比例动画用）
+                    width = width,
+                    height = height
                 )
             }
             MediaType.IMAGE -> {
@@ -271,7 +291,9 @@ object FXTwitterResolver {
                     thumbnail = thumbnail ?: url,
                     mediaIndex = index,
                     isMediaItem = true,
-                    mediaType = MediaType.IMAGE
+                    mediaType = MediaType.IMAGE,
+                    width = width,
+                    height = height
                 )
             }
         }
@@ -312,6 +334,17 @@ object FXTwitterResolver {
         return if (has(key) && !isNull(key)) optString(key).takeIf { it.isNotBlank() } else null
     }
 
+    /**
+     * 2026-10-02 批次B：读取媒体条目的显示宽高（px），宽或高 ≤0 视为无效返回 null。
+     * FXTwitter photos[].width/height 为原始显示尺寸；视频外层无宽高时由调用方
+     * 回退到 videos[] 变体（与下载目标一致的分辨率）。
+     */
+    private fun JSONObject.optPositiveDims(): Pair<Int, Int>? {
+        val w = optInt("width", 0)
+        val h = optInt("height", 0)
+        return if (w > 0 && h > 0) w to h else null
+    }
+
     private fun inferImageExtension(url: String): String {
         val formatMatch = Regex("[?&]format=([a-zA-Z0-9]+)").find(url)
         val formatExt = formatMatch?.groupValues?.getOrNull(1)?.lowercase(Locale.ROOT)
@@ -342,7 +375,10 @@ object FXTwitterResolver {
         val duration: Long,
         val bitrate: Int,
         val ext: String,
-        val mediaType: MediaType
+        val mediaType: MediaType,
+        // 2026-10-02 批次B：显示宽高 px（null=来源未提供，靠回填 Worker 兜底）
+        val width: Int? = null,
+        val height: Int? = null
     )
 }
 

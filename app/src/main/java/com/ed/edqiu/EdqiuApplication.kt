@@ -2,6 +2,7 @@
 
 import com.ed.edqiu.background.BackgroundSyncScheduler
 import com.ed.edqiu.background.HistoryBackupScheduler
+import com.ed.edqiu.background.MediaDimensionsBackfillWorker
 import com.ed.edqiu.data.repository.DownloadTaskBus
 import com.ed.edqiu.di.AppContainer
 import com.ed.edqiu.TwitterDownloaderApp
@@ -24,6 +25,19 @@ class EdqiuApplication : TwitterDownloaderApp() {
 
     override fun onCreate() {
         super.onCreate()
+        // 临时诊断探针（2026-10）：生命周期事件日志，配合 FreezeProbe 定位窗口 mStopped 卡死
+        registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
+            private fun log(act: android.app.Activity, ev: String) {
+                android.util.Log.d("FreezeProbe", "LIFECYCLE ${act.javaClass.simpleName} $ev")
+            }
+            override fun onActivityCreated(a: android.app.Activity, b: android.os.Bundle?) { log(a, "CREATE") }
+            override fun onActivityStarted(a: android.app.Activity) { log(a, "START") }
+            override fun onActivityResumed(a: android.app.Activity) { log(a, "RESUME") }
+            override fun onActivityPaused(a: android.app.Activity) { log(a, "PAUSE") }
+            override fun onActivityStopped(a: android.app.Activity) { log(a, "STOP") }
+            override fun onActivitySaveInstanceState(a: android.app.Activity, b: android.os.Bundle) { log(a, "SAVE") }
+            override fun onActivityDestroyed(a: android.app.Activity) { log(a, "DESTROY") }
+        })
         container = AppContainer(this)
         applicationScope.launch {
             container.settingsRepository.backgroundSyncFlow
@@ -64,5 +78,8 @@ class EdqiuApplication : TwitterDownloaderApp() {
                 recovered.forEach { DownloadTaskBus.add(it) }
             }
         }
+        // 2026-10-02 批次B：启动即调度存量媒体宽高回填（播放器比例动画前提）。
+        // 幂等：Worker 只处理 mediaWidth IS NULL 的记录；KEEP 防重复排队（纯本地探测，无须网络约束）
+        MediaDimensionsBackfillWorker.schedule(this)
     }
 }

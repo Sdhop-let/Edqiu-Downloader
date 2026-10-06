@@ -7,7 +7,11 @@ data class VideoInfo(
     val duration: Long,
     val uploader: String,
     val formats: List<VideoFormat>,
-    val formatMode: FormatMode = FormatMode.QUALITY
+    val formatMode: FormatMode = FormatMode.QUALITY,
+    // 2026-10-02 批次B：主媒体显示宽高（px，FXTwitter media.photos[].width/height 或
+    // media.videos[]（外层缺失时 videos[] 变体））。null=来源未提供，靠回填 Worker 兜底。
+    val width: Int? = null,
+    val height: Int? = null
 ) {
     val durationFormatted: String
         get() {

@@ -12,7 +12,7 @@ import com.ed.edqiu.data.model.MediaType
 
 @Database(
     entities = [DownloadHistoryEntity::class, DownloadTaskEntity::class, SubscriptionEntity::class],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 @TypeConverters(AppDatabase.Converters::class)
@@ -210,6 +210,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 2026-10-02 批次B（v11）：download_history 加媒体显示宽高 mediaWidth/mediaHeight
+         * （px，视频为旋转校正后的显示尺寸；NULL=未知）。供播放器滑动切条比例动画取比例，
+         * 存量记录由 MediaDimensionsBackfillWorker 纯本地回填（MediaMetadataRetriever/BitmapFactory）。
+         */
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE download_history ADD COLUMN mediaWidth INTEGER")
+                database.execSQL("ALTER TABLE download_history ADD COLUMN mediaHeight INTEGER")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -220,7 +232,7 @@ abstract class AppDatabase : RoomDatabase() {
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                    MIGRATION_9_10
+                    MIGRATION_9_10, MIGRATION_10_11
                 )
                 // 2026-10 安全整改：移除 fallbackToDestructiveMigration()——
                 // 升级路径 schema 漂移时它会把整库（下载历史/任务/订阅）静默删除重建。

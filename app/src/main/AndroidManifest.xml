@@ -57,6 +57,7 @@
 
         <!-- Titanic 开屏动画（2026-09-30）：LAUNCHER 入口，3s 后进 MainActivity；
              shortcuts meta-data 必须挂在 LAUNCHER activity 上，随入口一并迁来 -->
+        <!-- 2026-10-03：开屏与主界面均锁定竖屏（用户定案，App 不跟随系统自动旋转） -->
         <activity
             android:name=".SplashActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
@@ -74,6 +75,9 @@
 
         <!-- 2026-10 安全整改：无 intent-filter 无需导出（launcher 入口在 SplashActivity，
              静态 shortcut 由系统以本应用身份拉起，不受 exported=false 影响） -->
+        <!-- 2026-10-03 用户定案：App 整体锁定竖屏，不跟随系统自动旋转、不改系统旋转开关；
+             播放页全屏横屏由 PlayerScreen 的 requestedOrientation 临时覆盖（SENSOR_LANDSCAPE），
+             退出恢复 PORTRAIT。configChanges 保留，旋转不重建 Activity、不触发 capture() 重复入库 -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"

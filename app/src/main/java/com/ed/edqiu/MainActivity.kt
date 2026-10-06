@@ -36,6 +36,11 @@ class MainActivity : ComponentActivity() {
         // ColorOS（Android 17）在 ANIMATION 回调激活时仍会在窗口层叠加缩放预览，
         // 与 App 内 NavHost 的 seek 转场叠加成双重动画；此调用将其清零
         // （Android 14+ API；0 = 无动画。预览阶段若系统仍强制播放则属 ROM 行为）
+        // 2026-09-29 跟手返回：覆盖系统 predictive 返回的窗口转场为"无动画"——
+        // ColorOS（Android 17）在 ANIMATION 回调激活时仍会在窗口层叠加缩放预览，
+        // 与 App 内 NavHost 的 seek 转场叠加成双重动画；此调用将其清零
+        // （Android 14+ API；0 = 无动画。预览阶段若系统仍强制播放则属 ROM 行为）
+        // 2026-10 冻结排查 A/B 结论：禁用与启用均复现冻结，排除嫌疑，恢复产品行为
         if (android.os.Build.VERSION.SDK_INT >= 34) {
             overrideActivityTransition(OVERRIDE_TRANSITION_CLOSE, 0, 0)
             overrideActivityTransition(OVERRIDE_TRANSITION_OPEN, 0, 0)
@@ -52,6 +57,7 @@ class MainActivity : ComponentActivity() {
 
         // 强制高刷（2026-09-14 v1.4.15 改为设置开关，默认开）：
         // 收集开关实时生效 —— 开=锁定最高刷新率模式，关=清除锁定回系统动态刷新
+        // 2026-10 冻结排查 A/B 结论：禁用与启用均复现冻结，排除嫌疑，恢复产品行为
         lifecycleScope.launch {
             container.settingsRepository.highRefreshRateFlow.collect { enabled ->
                 applyHighRefreshRate(enabled)

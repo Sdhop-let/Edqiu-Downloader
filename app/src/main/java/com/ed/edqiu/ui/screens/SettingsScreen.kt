@@ -1,6 +1,7 @@
 ﻿package com.ed.edqiu.ui.screens
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -17,14 +18,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -41,6 +45,9 @@ import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.VpnLock
+import androidx.compose.material3.RadioButton
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.sp
 import com.ed.edqiu.ui.components.SmoothAlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -60,6 +67,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -79,6 +87,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ed.edqiu.data.model.ProxySettings
 import com.ed.edqiu.data.preferences.CloudSyncPreferences
 import com.ed.edqiu.data.preferences.CookiePreferences
@@ -90,16 +99,18 @@ import com.ed.edqiu.data.proxy.ProxyDetector
 import com.ed.edqiu.data.proxy.ProxyTester
 import com.ed.edqiu.service.AppUpdateInfo
 import com.ed.edqiu.service.AppUpdateService
-import com.ed.edqiu.service.WebDavSyncService
+import com.ed.edqiu.service.WebDavManualSync
 import com.ed.edqiu.service.YoutubeDLService
 import com.ed.edqiu.backup.provider.WebDavEngine
 import com.ed.edqiu.backup.provider.WebDavCredential
 import com.ed.edqiu.background.WebDavAutoBackupScheduler
 import com.ed.edqiu.BuildConfig
+import com.ed.edqiu.ui.components.EdgeSwipeBackBox
 import com.ed.edqiu.ui.components.FeedbackKind
 import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.components.FeedbackDialog
 import com.ed.edqiu.ui.components.DynamicSwitch
+import com.ed.edqiu.ui.navigation.LocalSnackbarController
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -126,7 +137,9 @@ fun SettingsScreen(
     onBack: () -> Unit,
     showBack: Boolean = false,
     section: String? = null,
-    onOpenMediaBackup: () -> Unit = {}
+    onOpenMediaBackup: () -> Unit = {},
+    // 2026-10：网盘备份中心整合进 WebDAV 同步页（原「我的 → 网盘备份中心」独立入口移除）
+    onOpenCloudBackup: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -174,11 +187,16 @@ fun SettingsScreen(
     var webDavProviderId by remember { mutableStateOf("custom") }
     var lastSyncTime by remember { mutableLongStateOf(0L) }
     var syncedCount by remember { mutableIntStateOf(0) }
-    var isWebDavSyncing by remember { mutableStateOf(false) }
+    // 2026-10：「立即同步」状态挂应用级运行器 WebDavManualSync——退出页面同步继续，
+    // 回到本页补看结果；此前的 rememberCoroutineScope 版本会在离开页面时静默取消上传
+    val webDavSyncState by WebDavManualSync.state.collectAsStateWithLifecycle()
+    val isWebDavSyncing = webDavSyncState is WebDavManualSync.State.Syncing
     var isTestingConnection by remember { mutableStateOf(false) }
     var connectionVerified by remember { mutableStateOf(false) }
     var autoBackupEnabled by remember { mutableStateOf(false) }
     var autoBackupDays by remember { mutableIntStateOf(1) }
+    // WebDAV 配置是否已从磁盘加载完成（去抖落盘防覆写开关，见下方 snapshotFlow）
+    var webDavLoaded by remember { mutableStateOf(false) }
 
     val dirPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -232,6 +250,62 @@ fun SettingsScreen(
         connectionVerified = cloudSyncPreferences.connectionVerified
         autoBackupEnabled = cloudSyncPreferences.autoBackupEnabled
         autoBackupDays = cloudSyncPreferences.autoBackupDays
+        webDavLoaded = true
+    }
+
+    // 2026-10 修复「页面异常」：WebDAV 四个输入框此前只在「测试连接」时落盘——
+    // 编辑后直接退出 = 改动静默丢失；直接点「立即同步」= 实际跑的是旧落盘配置
+    // （页面显示新值、同步读旧值）。与代理项同款方案：snapshotFlow + 600ms 去抖落盘，
+    // webDavLoaded 防止加载前的初始空值覆写已存配置。
+    LaunchedEffect(webDavLoaded) {
+        if (!webDavLoaded) return@LaunchedEffect
+        snapshotFlow {
+            listOf(webDavServerUrl, webDavUsername, webDavPassword, webDavRemotePath)
+        }
+            .debounce(600)
+            .collect {
+                cloudSyncPreferences.serverUrl = webDavServerUrl
+                cloudSyncPreferences.username = webDavUsername
+                cloudSyncPreferences.password = webDavPassword
+                cloudSyncPreferences.remotePath = webDavRemotePath
+            }
+    }
+
+    // 后台同步结果提醒（2026-10）：页面在前台时同步完成直接弹反馈；
+    // 用户离开期间完成的，回到本页时补提示，随后复位状态
+    LaunchedEffect(webDavSyncState) {
+        when (val state = webDavSyncState) {
+            is WebDavManualSync.State.Succeeded -> {
+                lastSyncTime = cloudSyncPreferences.lastSyncTime
+                syncedCount = cloudSyncPreferences.syncedFileCount
+                inlineFeedback = FeedbackMessage(
+                    "同步完成：新增 ${state.added} 个，跳过 ${state.skipped} 个",
+                    FeedbackKind.SUCCESS
+                )
+                WebDavManualSync.consumeResult()
+            }
+            is WebDavManualSync.State.Failed -> {
+                inlineFeedback = FeedbackMessage(
+                    "WebDAV 同步失败：${state.message}",
+                    FeedbackKind.ERROR
+                )
+                WebDavManualSync.consumeResult()
+            }
+            else -> {}
+        }
+    }
+
+    // 退出页面时同步仍在进行：提醒用户任务不会中断（2026-10 新增，配合 WebDavManualSync）
+    val snackbarController = LocalSnackbarController.current
+    DisposableEffect(Unit) {
+        onDispose {
+            if (WebDavManualSync.isSyncing()) {
+                snackbarController.show(
+                    "WebDAV 同步仍在后台进行，完成后回到本页可查看结果",
+                    kind = FeedbackKind.NEUTRAL
+                )
+            }
+        }
     }
 
     // 2026-10 P2 整改：旧实现 LaunchedEffect(keys) 每敲一键取消重launch并写一次盘，
@@ -271,7 +345,7 @@ fun SettingsScreen(
         }
     }
 
-    fun downloadAndInstallAppUpdate(info: AppUpdateInfo) {
+    fun downloadAndInstallAppUpdate(info: AppUpdateInfo, useMirror: Boolean) {
         if (isDownloadingAppUpdate) return
         isDownloadingAppUpdate = true
         appUpdateProgress = 0f
@@ -280,7 +354,8 @@ fun SettingsScreen(
         val appContext = context.applicationContext
         val launchScope = (appContext as? com.ed.edqiu.EdqiuApplication)?.container?.globalIoScope ?: scope
         launchScope.launch {
-            val result = AppUpdateService.downloadApk(appContext, info) { progress ->
+            // 2026-10-07 更新弹窗改版：useMirror = 国内镜像直连 / GitHub 官方直连 双源
+            val result = AppUpdateService.downloadApk(appContext, info, useMirror) { progress ->
                 appUpdateProgress = progress // Compose snapshot 跨线程写安全；页面销毁后写为无害 no-op
             }
             withContext(Dispatchers.Main) {
@@ -311,27 +386,149 @@ fun SettingsScreen(
 
     val pendingAppUpdate = appUpdateInfo
     if (pendingAppUpdate != null) {
+        // 2026-10-07 更新弹窗改版（大卡片）：版本对比 + 更新内容滚动区（Release Notes，
+        // 修复/新增说明）+ 双下载源选择（国内镜像直连 / GitHub 官方直连）+ GitHub 主页跳转；
+        // 下载进度卡内实时显示，可关闭弹窗后台继续（进度回落到「更新与工具」卡片）
+        var updateUseMirror by remember { mutableStateOf(true) }
         SmoothAlertDialog(
             onDismissRequest = { appUpdateInfo = null },
-            title = { Text("发现新版本 ${pendingAppUpdate.versionName}") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("当前版本：${BuildConfig.VERSION_NAME}")
-                    Text("新版本：${pendingAppUpdate.versionName}")
-                    if (pendingAppUpdate.publishedAt.isNotBlank()) Text("发布时间：${pendingAppUpdate.publishedAt}")
+            modifier = Modifier.fillMaxWidth(0.94f),
+            title = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        "下载在后台进行，完成后自动调用系统安装器，旧数据和本地媒体会保留。",
+                        "发现新版本 v${pendingAppUpdate.versionName}",
+                        fontWeight = FontWeight.Black
+                    )
+                    Text(
+                        "当前 v${BuildConfig.VERSION_NAME} · ${pendingAppUpdate.publishedAt} 发布",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (pendingAppUpdate.releaseNotes.isNotBlank()) {
+                        Text(
+                            "更新内容",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 220.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.6f))
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                pendingAppUpdate.releaseNotes,
+                                style = MaterialTheme.typography.bodySmall,
+                                lineHeight = 19.sp
+                            )
+                        }
+                    }
+                    if (isDownloadingAppUpdate) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            LinearProgressIndicator(
+                                progress = { appUpdateProgress.coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                "正在下载 ${(appUpdateProgress * 100).toInt()}% · 完成后自动调起安装",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        Text(
+                            "选择下载方式",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.6f))
+                                .clickable { updateUseMirror = true }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = updateUseMirror, onClick = null)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "国内镜像直连",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    "境内加速下载 · 网络不佳时推荐",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.6f))
+                                .clickable { updateUseMirror = false }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = !updateUseMirror, onClick = null)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "GitHub 官方直连",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    "原始发布源 · 需可访问 GitHub",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        TextButton(
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(
+                                            Intent.ACTION_VIEW,
+                                            Uri.parse(pendingAppUpdate.upgradeDocumentUrl)
+                                        )
+                                    )
+                                }
+                            }
+                        ) {
+                            Text(
+                                "前往 GitHub Releases 主页查看与手动下载",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        Text(
+                            "下载在后台进行，完成后自动调起系统安装器，旧数据与本地媒体保留",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
             confirmButton = {
-                // 2026-09-15：确认即关闭弹窗并后台下载（原下载中禁用全部按钮且不可关闭，模态锁死）
-                TextButton(onClick = {
-                    appUpdateInfo = null
-                    downloadAndInstallAppUpdate(pendingAppUpdate)
-                }) { Text("立即更新") }
+                TextButton(
+                    enabled = !isDownloadingAppUpdate,
+                    onClick = {
+                        appUpdateInfo = null
+                        downloadAndInstallAppUpdate(pendingAppUpdate, updateUseMirror)
+                    }
+                ) { Text(if (isDownloadingAppUpdate) "下载中…" else "立即更新") }
             },
             dismissButton = {
                 TextButton(onClick = { appUpdateInfo = null }) { Text("稍后") }
@@ -339,6 +536,12 @@ fun SettingsScreen(
         )
     }
 
+    // 二级页右缘跟手侧滑返回（2026-10）：此前该能力只挂在浮层路由上，
+    // 设置二级页（含 WebDAV 同步页）只有返回箭头，侧滑返回不生效
+    EdgeSwipeBackBox(
+        enabled = showBack || section != null,
+        onBack = onBack,
+    ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -807,26 +1010,36 @@ fun SettingsScreen(
                             ) { Text(if (isTestingConnection) "测试中" else "测试连接") }
                             Button(
                                 onClick = {
-                                    scope.launch {
-                                        isWebDavSyncing = true
-                                        WebDavSyncService.syncDownloads(context, cloudSyncPreferences)
-                                            .onSuccess { (newCount, skipCount) ->
-                                                if (newCount > 0) {
-                                                    syncedCount += newCount
-                                                    cloudSyncPreferences.syncedFileCount = syncedCount
-                                                    cloudSyncPreferences.lastSyncTime = System.currentTimeMillis()
-                                                    lastSyncTime = cloudSyncPreferences.lastSyncTime
-                                                }
-                                                inlineFeedback = FeedbackMessage("同步完成：新增 $newCount 个，跳过 $skipCount 个", FeedbackKind.SUCCESS)
-                                            }
-                                            .onFailure { e -> inlineFeedback = FeedbackMessage("WebDAV 同步失败：${e.message ?: "未知错误"}", FeedbackKind.ERROR) }
-                                        isWebDavSyncing = false
-                                    }
+                                    // 先落盘当前输入（覆盖 600ms 去抖窗口内尚未写盘的编辑），
+                                    // 再交应用级运行器执行——退出页面同步继续（2026-10）
+                                    cloudSyncPreferences.serverUrl = webDavServerUrl
+                                    cloudSyncPreferences.username = webDavUsername
+                                    cloudSyncPreferences.password = webDavPassword
+                                    cloudSyncPreferences.remotePath = webDavRemotePath
+                                    WebDavManualSync.sync(context)
                                 },
                                 enabled = !isWebDavSyncing && connectionVerified,
                                 modifier = Modifier.weight(1f)
                             ) { Text(if (isWebDavSyncing) "同步中" else "立即同步") }
                         }
+
+                        // 2026-10：网盘备份中心整合进本页——多网盘（百度/123/阿里/WebDAV 直连）
+                        // 的授权、备份范围与任务状态由此进入（原「我的 → 网盘备份中心」已移除）。
+                        // 不放在 connectionVerified 门禁内：多网盘直连备份不依赖 WebDAV 配置
+                        Spacer(Modifier.height(12.dp))
+                        AssistChip(
+                            onClick = onOpenCloudBackup,
+                            label = { Text("网盘备份中心（多网盘直连备份）", fontWeight = FontWeight.Medium) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.Cloud,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(999.dp),
+                        )
 
                         if (connectionVerified) {
                             Spacer(Modifier.height(12.dp))
@@ -1069,6 +1282,7 @@ fun SettingsScreen(
             }
             }
         }
+    }
     }
 }
 

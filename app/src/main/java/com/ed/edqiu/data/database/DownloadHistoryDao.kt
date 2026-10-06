@@ -121,5 +121,14 @@ interface DownloadHistoryDao {
 
     @Query("UPDATE download_history SET phash = :phash WHERE filePath = :filePath")
     suspend fun setPhash(filePath: String, phash: Long)
+
+    // 2026-10-02 批次B：媒体宽高回填（播放器比例动画前提）。
+    /** 宽高缺失（mediaWidth IS NULL）的记录，供 MediaDimensionsBackfillWorker 逐条本地探测回填。 */
+    @Query("SELECT * FROM download_history WHERE mediaWidth IS NULL")
+    suspend fun historyNeedingDimensions(): List<DownloadHistoryEntity>
+
+    /** 回填宽高（显示尺寸，视频已旋转校正；仅 id 精确命中，幂等由「null 才查」保证）。 */
+    @Query("UPDATE download_history SET mediaWidth = :w, mediaHeight = :h WHERE id = :id")
+    suspend fun updateMediaDimensions(id: String, w: Int, h: Int)
 }
 

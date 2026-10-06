@@ -23,6 +23,10 @@ data class AppUpdateInfo(
     val release: String,
     val publishedAt: String,
     val apkUrl: String,
+    // 2026-10-07 更新弹窗改版：GitHub Release body（RELEASE_NOTES，修复/新增说明）
+    val releaseNotes: String,
+    // 国内镜像直链（gh-proxy 加速前缀的同一 APK 资产，签名自校验兜底防镜像篡改）
+    val apkMirrorUrl: String,
     val upgradeDocumentUrl: String
 )
 
@@ -69,6 +73,10 @@ object AppUpdateService {
                 release = json.optString("name").ifBlank { tag },
                 publishedAt = json.optString("published_at").substringBefore('T'),
                 apkUrl = apkUrl,
+                // GitHub Release body = RELEASE_NOTES（修复/新增说明），弹窗展示用
+                releaseNotes = json.optString("body").replace("\r\n", "\n").trim(),
+                // 国内镜像直连：gh-proxy 加速前缀 + 同一 APK 资产
+                apkMirrorUrl = "https://gh-proxy.com/$apkUrl",
                 upgradeDocumentUrl = json.optString("html_url")
             )
         }
@@ -97,6 +105,9 @@ object AppUpdateService {
     suspend fun downloadApk(
         context: Context,
         info: AppUpdateInfo,
+        // 2026-10-07 更新弹窗改版：双下载源——true=国内镜像直连（gh-proxy 加速），
+        // false=GitHub 官方直连；镜像源下载完成后仍走签名自校验，防镜像篡改
+        useMirror: Boolean = false,
         onProgress: (Float) -> Unit = {}
     ): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
@@ -106,7 +117,8 @@ object AppUpdateService {
             val apkFile = File(updateDir, "twitter-downloader-$safeRelease.apk")
             if (apkFile.exists()) apkFile.delete()
 
-            val connection = (URL(info.apkUrl).openConnection() as HttpURLConnection).apply {
+            val downloadUrl = if (useMirror) info.apkMirrorUrl else info.apkUrl
+            val connection = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 15_000
                 readTimeout = 60_000
                 instanceFollowRedirects = true

@@ -22,4 +22,23 @@
         android:text="@string/splash_titanic_title"
         android:textColor="@color/splash_text" />
 
+    <!-- 2026-10-07：可见的「跳过」入口（此前仅整页点按可跳过，不可发现）。
+         进度就绪（引擎初始化完成）后自动进入；点此可不等满 1.5s 品牌曝光直接进主界面 -->
+    <TextView
+        android:id="@+id/splash_skip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="48dp"
+        android:layout_marginEnd="20dp"
+        android:paddingHorizontal="18dp"
+        android:paddingVertical="9dp"
+        android:text="跳过"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:textColor="#666666"
+        android:background="@drawable/splash_skip_bg"
+        android:clickable="true"
+        android:focusable="true" />
+
 </FrameLayout>

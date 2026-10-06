@@ -48,13 +48,19 @@ android {
         //   ffmpeg zip 载荷内 libwebp* 等 5 个库仍是 4KB 对齐（libavcodec DT_NEEDED 直接依赖），
         //   16KB 页设备上 ffmpeg 功能不可用——需升级上游依赖或等待重打包后复测。
         targetSdk = 37
-        versionCode = 46
-        versionName = "1.6.9.1"
+        versionCode = 47
+        versionName = "1.7.0"
 
         // 2026-09-15：只保留 arm64-v8a（Android 16/17 手机端均为 arm64），APK 从 225.9MB 降至约 80MB；
         // ffmpeg/yt-dlp 功能完整保留，x86 系模拟器不再支持
+        // 2026-10-03：模拟器调试逃生口——`gradlew assembleDebug -PemulatorAbi=x86_64`
+        // 追加 x86_64（依赖 AAR 内含该 ABI 的 ffmpeg .so，仅供 x86 模拟器跑 UI 验证；
+        // 不传该属性时行为与旧配置完全一致，仍 arm64 单架构）
         ndk {
             abiFilters += listOf("arm64-v8a")
+            (project.findProperty("emulatorAbi") as? String)?.takeIf { it.isNotBlank() }?.let {
+                abiFilters += it
+            }
         }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

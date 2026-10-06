@@ -13,5 +13,11 @@ data class TweetMeta(
     val thumbnailUrl: String? = null,
     val authorBio: String? = null,
     /** 推文发布时间（epoch ms，2026-09-15 旧记录发布时间补拉用）。 */
-    val publishedAt: Long? = null
+    val publishedAt: Long? = null,
+    // 2026-10-02 批次B：主媒体显示宽高（px，视频为显示尺寸无需旋转校正）。
+    // 来源 fxtwitter photos[0]/videos[0]；null=来源未提供，靠回填 Worker 兜底。
+    /** 主媒体显示宽（px）；null=未知。 */
+    val mediaWidth: Int? = null,
+    /** 主媒体显示高（px）；null=未知。 */
+    val mediaHeight: Int? = null
 )

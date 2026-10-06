@@ -163,7 +163,6 @@ class MineNav(
     val openTrash: () -> Unit,
     val openDownloaderSection: (String) -> Unit,
     val openEdqiuSection: (String) -> Unit,
-    val openBackupCenter: () -> Unit,
     val openAuthors: () -> Unit
 )
 
@@ -182,7 +181,12 @@ fun AppNavigation(
     onFeedback: ((com.ed.edqiu.ui.components.FeedbackKind, String) -> Unit)? = null,
     floatingTabBarEnabled: Boolean = true,
     liquidGlassEnabled: Boolean = true,
-    predictiveBackEnabled: Boolean = true
+    predictiveBackEnabled: Boolean = true,
+    // 2026-10 修复：浮层（详情/网盘备份/媒体备份）打开时须屏蔽 NavHost 的返回处理——
+    // BackHandler 后注册者优先，本文件的返回 Handler 注册晚于 AppNav 的浮层返回，
+    // 若不屏蔽，浮层开着按返回会先弹走底下的导航栈（肉眼不可见），连按数次后
+    // 浮层关闭时露出的已是起点页（如收件箱），用户视角=「返回后页面不对/返回无效」
+    navBackGated: Boolean = false
 ) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -191,7 +195,8 @@ fun AppNavigation(
     // 返回处理（2026-09-29 二分实验）：恢复普通 BackHandler——18:44 实证存在它时
     // mIsAnimationCallback=true（predictive progress 正常分发），删除后变 false。
     // 疑似其 enabled 状态变化触发 dispatcher 重新向平台注册 ANIMATION 回调
-    BackHandler(enabled = navController.previousBackStackEntry != null) {
+    BackHandler(enabled = !navBackGated && navController.previousBackStackEntry != null) {
+        android.util.Log.e("BackDispatch", "NAVHOST BH fired gated=$navBackGated")
         navController.popBackStack()
     }
     val edqiuMode = inboxContent != null
@@ -452,7 +457,8 @@ fun AppNavigation(
                     val downloaderSettings: @Composable () -> Unit = {
                         SettingsScreen(
                             onBack = { navController.navigate(Screen.Home.route) },
-                            onOpenMediaBackup = onOpenMediaBackup ?: {}
+                            onOpenMediaBackup = onOpenMediaBackup ?: {},
+                            onOpenCloudBackup = openCloudBackup ?: {}
                         )
                     }
                     if (settingsContent != null) {
@@ -475,7 +481,6 @@ fun AppNavigation(
                                     launchSingleTop = true
                                 }
                             },
-                            openBackupCenter = openCloudBackup ?: {},
                             openAuthors = {
                                 if (authorsContent != null) {
                                     navController.navigate(Screen.Authors.route) { launchSingleTop = true }
@@ -498,7 +503,8 @@ fun AppNavigation(
                         onBack = { navController.popBackStack() },
                         showBack = true,
                         section = section,
-                        onOpenMediaBackup = onOpenMediaBackup ?: {}
+                        onOpenMediaBackup = onOpenMediaBackup ?: {},
+                        onOpenCloudBackup = openCloudBackup ?: {}
                     )
                 }
 
@@ -559,6 +565,8 @@ fun AppNavigation(
                     originBounds = playerOriginBounds,
                     // 退场几何终点（媒体库定位滚动回传，实时跟随更新）
                     targetBounds = playerTargetBounds,
+                    // 2026-10-05 定位失效修复：实时取值器供播放器退场等待定位回传
+                    targetBoundsNow = { playerTargetBounds },
                     // 拖拽/缩小进度 → 背景缩放+压暗实时还原
                     onDragProgress = { playerBgReveal = it },
                     // 退场定位链路：记录当前视频 → 媒体库滚动定位；
