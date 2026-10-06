@@ -1,7 +1,9 @@
-# GitHub Release 自动发版（2026-09-30 起）：
-# 推送 v* tag → GitHub 服务器构建 debug APK → 创建 Release 并上传资产。
+# GitHub Release 自动发版（2026-09-30 起；2026-10-07 起支持正式签名）：
+# 推送 v* tag → GitHub 服务器构建 APK → 创建 Release 并上传资产。
 # 本地无需访问 api.github.com（发版动作全部在 GitHub 侧执行）。
-# 约定：tag 名 = 版本号（v1.6.9），必须与 app/build.gradle.kts 的 versionName 一致；
+# 签名：仓库 Secrets 配置 SIGNING_KEYSTORE_BASE64 等四项时构建正式签名包
+#（可覆盖安装到已装用户）；未配置时回退 debug 签名包（仅适合全新安装）。
+# 约定：tag 名 = 版本号（v1.7.0），必须与 app/build.gradle.kts 的 versionName 一致；
 # Release 说明自动取 docs/ 下最新的 RELEASE_NOTES-*.md（保证文档与 APK 同步）。
 name: Release
 
@@ -29,10 +31,33 @@ jobs:
       - name: Install Android SDK platform 37
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" > /dev/null || true
 
-      - name: Build debug APK
+      - name: Restore release signing (optional, from repo secrets)
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          if [ -n "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            printf 'storeFile=%s/release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "$RUNNER_TEMP" "$SIGNING_STORE_PASSWORD" "$SIGNING_KEY_ALIAS" "$SIGNING_KEY_PASSWORD" \
+              > keystore.properties
+            echo "keystore.properties restored from secrets — building release-signed APK"
+          else
+            echo "SIGNING_KEYSTORE_BASE64 not set — falling back to debug-signed APK (fresh installs only)"
+          fi
+
+      - name: Build APK
         run: |
           set -o pipefail
-          ./gradlew :app:assembleDebug --no-daemon 2>&1 | tee build-log.txt
+          # 2026-10-07：双模式——仓库 Secrets 配置了签名凭据时构建正式签名包
+          # （assembleRelease，可覆盖安装到已装用户），否则回退 debug 包（仅全新安装）
+          if [ -f keystore.properties ]; then
+            ./gradlew :app:assembleRelease --no-daemon 2>&1 | tee build-log.txt
+          else
+            ./gradlew :app:assembleDebug --no-daemon 2>&1 | tee build-log.txt
+          fi
 
       - name: Push build log to ci-logs branch (diagnosis)
         if: failure()
@@ -61,7 +86,12 @@ jobs:
         run: ls docs/RELEASE_NOTES-*.md | sort -V | tail -1 | xargs -I{} cp {} release-notes.md
 
       - name: Rename APK with version
-        run: cp app/build/outputs/apk/debug/app-debug.apk "Edqiu-${{ github.ref_name }}.apk"
+        run: |
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk "Edqiu-${{ github.ref_name }}.apk"
+          else
+            cp app/build/outputs/apk/debug/app-debug.apk "Edqiu-${{ github.ref_name }}.apk"
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
