@@ -107,6 +107,7 @@ import com.ed.edqiu.BuildConfig
 import com.ed.edqiu.ui.components.DynamicSwitch
 import com.ed.edqiu.ui.components.FeedbackKind
 import com.ed.edqiu.ui.components.FeedbackMessage
+import com.ed.edqiu.ui.components.EdqiuSlider
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.FeedbackDialog
@@ -1033,7 +1034,7 @@ private fun ThemeSettingsSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 16.dp, top = 4.dp)
             )
-            Slider(
+            EdqiuSlider(
                 value = glassTransparency,
                 onValueChange = { scope.launch { settings.setGlassTransparency(it) } },
                 valueRange = 0f..1f,
@@ -1045,7 +1046,7 @@ private fun ThemeSettingsSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 16.dp)
             )
-            Slider(
+            EdqiuSlider(
                 value = blurIntensity,
                 onValueChange = { scope.launch { settings.setBlurIntensity(it) } },
                 valueRange = 0f..1f,
@@ -1058,7 +1059,7 @@ private fun ThemeSettingsSection(
                 color = if (liquidGlass) MaterialTheme.colorScheme.onSurfaceVariant else Muted,
                 modifier = Modifier.padding(start = 16.dp)
             )
-            Slider(
+            EdqiuSlider(
                 value = refractionIntensity,
                 onValueChange = { scope.launch { settings.setRefractionIntensity(it) } },
                 valueRange = 0f..1f,
@@ -1132,7 +1133,7 @@ private fun ThemeSettingsSection(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 16.dp, top = 6.dp)
                 )
-                Slider(
+                EdqiuSlider(
                     value = spec.value,
                     onValueChange = spec.onChange,
                     valueRange = spec.range,
@@ -1206,7 +1207,7 @@ private fun ThemeSettingsSection(
                     )
                 }
             )
-            Slider(
+            EdqiuSlider(
                 value = displayScale,
                 onValueChange = { scope.launch { settings.setDisplayScale(it) } },
                 valueRange = 0.5f..1.0f,

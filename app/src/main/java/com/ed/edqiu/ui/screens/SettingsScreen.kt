@@ -55,7 +55,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -109,6 +108,7 @@ import com.ed.edqiu.ui.components.EdgeSwipeBackBox
 import com.ed.edqiu.ui.components.FeedbackKind
 import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.components.FeedbackDialog
+import com.ed.edqiu.ui.components.PillChip
 import com.ed.edqiu.ui.components.DynamicSwitch
 import com.ed.edqiu.ui.navigation.LocalSnackbarController
 import java.text.SimpleDateFormat
@@ -1088,14 +1088,15 @@ fun SettingsScreen(
                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                                     val options = listOf(1 to "每天", 3 to "每3天", 7 to "每周")
                                     options.forEach { (days, label) ->
-                                        FilterChip(
+                                        // 2026-10-10 统一分段胶囊（iOS 分段控制语义）
+                                        PillChip(
+                                            label = label,
                                             selected = autoBackupDays == days,
                                             onClick = {
                                                 autoBackupDays = days
                                                 cloudSyncPreferences.autoBackupDays = days
                                                 WebDavAutoBackupScheduler.schedule(context, days)
                                             },
-                                            label = { Text(label) }
                                         )
                                     }
                                 }
@@ -1139,13 +1140,13 @@ fun SettingsScreen(
                         Spacer(Modifier.height(6.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf(5, 10, 20).forEach { n ->
-                                FilterChip(
+                                PillChip(
+                                    label = "$n 条",
                                     selected = batchSizeText == n.toString(),
                                     onClick = {
                                         batchSizeText = n.toString()
                                         preDownloadPrefs.batchSize = n
                                     },
-                                    label = { Text("$n 条") }
                                 )
                             }
                             OutlinedTextField(

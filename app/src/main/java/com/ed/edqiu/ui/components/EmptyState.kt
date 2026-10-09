@@ -43,8 +43,13 @@ fun EmptyState(
                 .size(86.dp)
                 .clip(RoundedCornerShape(28.dp))
                 .background(
+                    // 2026-10-10 固定配色：旧 mint/blue 硬编码渐变改主题容器色
+                    //（primaryContainer→tertiaryContainer，跟随强调色与明暗主题）
                     Brush.linearGradient(
-                        listOf(Color(0xFFE8F7F1), Color(0xFFDBEAFE))
+                        listOf(
+                            MaterialTheme.colorScheme.primaryContainer,
+                            MaterialTheme.colorScheme.tertiaryContainer
+                        )
                     )
                 ),
             contentAlignment = Alignment.Center

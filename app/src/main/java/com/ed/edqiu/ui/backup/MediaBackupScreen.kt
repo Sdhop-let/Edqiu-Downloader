@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,7 +31,6 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -54,6 +54,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.ImageLoader
 import coil.compose.AsyncImage
@@ -62,6 +63,10 @@ import com.ed.edqiu.backup.BackupScope
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.FeedbackDialog
+import com.ed.edqiu.ui.components.PillChip
+import com.ed.edqiu.ui.components.rememberTitleCollapseProgress
+import com.ed.edqiu.ui.components.titleCollapseAlpha
+import com.ed.edqiu.ui.components.titleCollapseSize
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -106,9 +111,14 @@ fun MediaBackupScreen(
             .statusBarsPadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        HeaderRow(onBack = onBack)
+        // 大标题折叠（2026-10-10）：固定头随列表滚动收缩，与收件箱同规格
+        val listState = rememberLazyListState()
+        val titleCollapse by rememberTitleCollapseProgress(listState)
+
+        HeaderRow(onBack = onBack, collapse = titleCollapse)
 
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -125,16 +135,16 @@ fun MediaBackupScreen(
                         modifier = Modifier.weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        FilterChip(
+                        PillChip(
+                            label = "视频",
                             selected = state.filter == BackupScope.VIDEO,
                             onClick = { vm.setFilter(BackupScope.VIDEO) },
-                            label = { Text("视频") },
                             modifier = Modifier.weight(1f),
                         )
-                        FilterChip(
+                        PillChip(
+                            label = "图片",
                             selected = state.filter == BackupScope.IMAGE,
                             onClick = { vm.setFilter(BackupScope.IMAGE) },
-                            label = { Text("图片") },
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -172,7 +182,7 @@ fun MediaBackupScreen(
 }
 
 @Composable
-private fun HeaderRow(onBack: () -> Unit) {
+private fun HeaderRow(onBack: () -> Unit, collapse: Float = 0f) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -198,13 +208,14 @@ private fun HeaderRow(onBack: () -> Unit) {
         Column {
             Text(
                 "同步情况",
-                style = MaterialTheme.typography.titleLarge,
+                fontSize = titleCollapseSize(collapse, 20.sp, 17.sp),
                 fontWeight = FontWeight.Bold,
             )
             Text(
                 "视频/图片上传状态一览",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.graphicsLayer { alpha = titleCollapseAlpha(collapse) }
             )
         }
     }
@@ -331,14 +342,20 @@ private fun MediaBackupItemRow(
                 when (item.state) {
                     MediaUploadState.UPLOADING -> {
                         Spacer(Modifier.height(4.dp))
+                        // 2026-10-10 统一：进度条 6dp 圆角胶囊 + primary tint（对齐下载中心）
                         LinearProgressIndicator(
                             progress = { item.progress },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(999.dp)),
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                         )
                         Text(
                             "上传中 ${(item.progress * 100).toInt()}%",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.secondary,
+                            color = MaterialTheme.colorScheme.primary,
                         )
                     }
                     MediaUploadState.QUEUED -> {

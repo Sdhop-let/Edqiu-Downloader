@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,7 +49,16 @@ fun DownloadProgressItem(
                 Text(statusTextValue(task), color = statusColor(task.status), style = MaterialTheme.typography.labelMedium)
             }
             if (task.status == DownloadStatus.DOWNLOADING || task.progress > 0f) {
-                LinearProgressIndicator(progress = { (task.progress / 100f).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                // 2026-10-10 统一：6dp 圆角胶囊进度条（对齐下载中心/备份页）
+                LinearProgressIndicator(
+                    progress = { (task.progress / 100f).coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(999.dp)),
+                    color = statusColor(task.status),
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                )
                 Text("${task.progressInt}%${task.etaSeconds.takeIf { it > 0 }?.let { " · 剩余 ${it}s" } ?: ""}", style = MaterialTheme.typography.labelSmall)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -32,8 +32,6 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -53,6 +51,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -70,6 +69,7 @@ import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.components.FeedbackDialog
 import com.ed.edqiu.ui.components.GlassTier
+import com.ed.edqiu.ui.components.PillChip
 import com.ed.edqiu.ui.components.titleCollapseAlpha
 import com.ed.edqiu.ui.components.titleCollapseSize
 import kotlinx.coroutines.launch
@@ -507,15 +507,12 @@ private fun BackupSettingsCard(
 
 @Composable
 private fun ScopeChip(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
-    FilterChip(
+    // 2026-10-10 统一分段胶囊（替代 M3 FilterChip 描边形态，iOS 分段控制语义）
+    PillChip(
+        label = label,
         selected = selected,
-        onClick = onClick,
         enabled = enabled,
-        label = { Text(label) },
-        colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = MaterialTheme.colorScheme.primary,
-            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-        ),
+        onClick = onClick,
     )
 }
 
@@ -590,7 +587,12 @@ private fun BackupStatusCard(
                 }
                 LinearProgressIndicator(
                     progress = { active.progress },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(999.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                 )
             } else if (tasks.none { it.isActive } && tasks.isNotEmpty()) {
                 Text(
@@ -848,8 +850,9 @@ private fun StatusDot(color: Color) {
 @Composable
 private fun statusColor(statusText: String): Color =
     when {
-        statusText.contains("已授权") || statusText.contains("本机已运行") -> Color(0xFF16A34A)
-        statusText.contains("已配置") -> Color(0xFFF59E0B)
+        // 2026-10-10 统一 iOS 状态语义色（浅色可读档，与全局状态色一致）
+        statusText.contains("已授权") || statusText.contains("本机已运行") -> Color(0xFF1F8A3D)
+        statusText.contains("已配置") -> Color(0xFFC93400)
         statusText.contains("本机未检测到") -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> MaterialTheme.colorScheme.error
     }

@@ -2,6 +2,9 @@
 
 import com.ed.edqiu.ui.util.pressableNoRipple
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -11,11 +14,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -42,6 +47,7 @@ import androidx.compose.material.icons.outlined.VolumeOff
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -57,6 +63,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -91,8 +98,9 @@ fun GlassTopBar(
 ) {
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn(),
-        exit = fadeOut(),
+        // 2026-10-10 全局动画统一：顶部条与主控制层同规格（220/160ms），替代默认时长
+        enter = fadeIn(tween(durationMillis = 220)),
+        exit = fadeOut(tween(durationMillis = 160)),
         modifier = modifier
     ) {
         // 深色玻璃面板：顶部贴边（无圆角、无避让），底部 16dp 圆角过渡
@@ -180,6 +188,7 @@ fun GlassIconButton(
 
 // ---------- 底部玻璃控制层 ----------
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun GlassPlayerControls(
     progress: Float,
     positionText: String,
@@ -215,10 +224,23 @@ fun GlassPlayerControls(
             Column(modifier = Modifier.padding(14.dp)) {
                 // 2026-10-02 批次A：移除 isImageMode 分支——图片会话不再渲染本控制条
                 //（PlayerScreen 改挂 GlassImageViewerBar），视频路径行为保持不变
-                // 胶囊滑杆（细化）：thumb 4dp + track 2dp 细线
-                // 2026-10 整改：拖动期间只更新本地 dragProgress（旧实现每帧直接 seek，
-                // 与 350ms 位置轮询互踩造成拖动跳帧/回跳），松手才真正 seek 一次。
+                // 胶囊滑杆（2026-10-10 视觉增强版）：拖动时 thumb 放大 + track 变粗，
+                // 手势反馈「触摸即增强、松手平滑回落」（§5.7 进度拖动规范）。
+                // 2026-10 整改保留：拖动期间只更新本地 dragProgress，松手才真正 seek 一次。
                 var dragProgress by remember { mutableStateOf<Float?>(null) }
+                val sliderInteraction = remember { MutableInteractionSource() }
+                val sliderPressed by sliderInteraction.collectIsPressedAsState()
+                val seeking = dragProgress != null || sliderPressed
+                val thumbScale by animateFloatAsState(
+                    targetValue = if (seeking) 3f else 1f,
+                    animationSpec = spring(dampingRatio = 0.8f, stiffness = 500f),
+                    label = "player_thumb_scale"
+                )
+                val trackGrowth by animateFloatAsState(
+                    targetValue = if (seeking) 2.4f else 1f,
+                    animationSpec = tween(150),
+                    label = "player_track_growth"
+                )
                 Slider(
                     value = dragProgress ?: progress,
                     onValueChange = { dragProgress = it },
@@ -226,14 +248,40 @@ fun GlassPlayerControls(
                         dragProgress?.let(onSeek)
                         dragProgress = null
                     },
+                    interactionSource = sliderInteraction,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(18.dp),
-                    colors = SliderDefaults.colors(
-                        thumbColor = Color.White,
-                        activeTrackColor = MaterialTheme.colorScheme.primary,
-                        inactiveTrackColor = Color.White.copy(alpha = 0.22f)
-                    )
+                    thumb = {
+                        Box(
+                            modifier = Modifier
+                                .size(4.dp)
+                                .graphicsLayer {
+                                    scaleX = thumbScale
+                                    scaleY = thumbScale
+                                }
+                                .clip(CircleShape)
+                                .background(Color.White)
+                        )
+                    },
+                    track = { state ->
+                        val fraction = state.coercedValueAsFraction
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(2.dp * trackGrowth)
+                                .clip(RoundedCornerShape(50))
+                                .background(Color.White.copy(alpha = 0.22f))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(fraction)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(50))
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                        }
+                    }
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -280,6 +328,7 @@ fun GlassPlayerControls(
                     Spacer(Modifier.weight(1f))
 
                     // 中：播放键（52dp 液态圆钮，适配深色玻璃——白色描边环 + 白色填充）
+                    // 2026-10-10：播放/暂停图标 Crossfade 平滑转换（替代瞬间切换）
                     Box(
                         modifier = Modifier
                             .size(52.dp)
@@ -289,12 +338,18 @@ fun GlassPlayerControls(
                             .pressableNoRipple { onPlayPause() },
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlaying) "暂停" else "播放",
-                            tint = Color.White,
-                            modifier = Modifier.size(28.dp)
-                        )
+                        Crossfade(
+                            targetState = isPlaying,
+                            animationSpec = tween(140),
+                            label = "player_playpause_icon"
+                        ) { playing ->
+                            Icon(
+                                imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (playing) "暂停" else "播放",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
                     }
 
                     Spacer(Modifier.weight(1f))
@@ -380,8 +435,9 @@ fun GlassActionsPanel(
 ) {
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn() + slideInVertically { it },
-        exit = fadeOut() + slideOutVertically { it },
+        // 2026-10-10 动画统一：对齐主控制层规格（220/160ms）
+        enter = fadeIn(tween(220)) + slideInVertically(tween(220)) { it },
+        exit = fadeOut(tween(160)) + slideOutVertically(tween(160)) { it },
         modifier = modifier
     ) {
         MediaGlassSurface(
