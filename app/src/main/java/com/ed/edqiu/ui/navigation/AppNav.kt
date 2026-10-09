@@ -85,8 +85,6 @@ private const val OVERLAY_MEDIA_BACKUP = "media_backup"
 
 @Composable
 fun EdqiuApp(container: AppContainer) {
-    val dynamicColor by container.settingsRepository.dynamicColorFlow
-        .collectAsStateWithLifecycle(initialValue = false)
     val themeMode by container.settingsRepository.themeModeFlow
         .collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
     val accentColor by container.settingsRepository.accentColorFlow
@@ -114,7 +112,7 @@ fun EdqiuApp(container: AppContainer) {
         .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_EDGE_COLOR)
     val glassDimAmount by container.settingsRepository.glassDimAmountFlow
         .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_DIM_AMOUNT)
-    val keyColor = Color(accentColor)
+    val accent = Color(accentColor)
     // 玻璃三参数（2026-09-28 拆分独立滑块）：透明度 / 磨砂 / 折射各自独立调节
     val frostStrength = blurIntensity
 
@@ -144,8 +142,7 @@ fun EdqiuApp(container: AppContainer) {
     ) {
         EdqiuTheme(
             themeMode = themeMode,
-            keyColor = keyColor,
-            dynamicColor = dynamicColor
+            accent = accent
         ) {
             CompositionLocalProvider(LocalAppContainer provides container) {
                 val application = LocalContext.current.applicationContext as Application
@@ -343,9 +340,9 @@ fun EdqiuApp(container: AppContainer) {
                                                     onOpenDetail = { openOverlay(OVERLAY_DETAIL, it) }
                                                 )
                                             },
-                                            trashContent = {
+                                            trashContent = { onBack ->
                                                 val vm = viewModel<HistoryViewModel>(factory = factory)
-                                                HistoryScreen(vm = vm)
+                                                HistoryScreen(vm = vm, onBack = onBack)
                                             },
                                             settingsContent = { _, mineNav ->
                                                 MineScreen(mineNav = mineNav)

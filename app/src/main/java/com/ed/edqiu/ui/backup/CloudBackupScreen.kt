@@ -59,6 +59,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ed.edqiu.backup.BackupScope
 import com.ed.edqiu.backup.model.BackupTask
@@ -69,6 +70,8 @@ import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.components.FeedbackDialog
 import com.ed.edqiu.ui.components.GlassTier
+import com.ed.edqiu.ui.components.titleCollapseAlpha
+import com.ed.edqiu.ui.components.titleCollapseSize
 import kotlinx.coroutines.launch
 
 /**
@@ -99,14 +102,18 @@ fun CloudBackupScreen(
         }
     }
 
+    // iOS 大标题折叠：verticalScroll 页用 scrollState 驱动同一折叠进度（行程 180px 对齐）
+    val scrollState = rememberScrollState()
+    val titleCollapse = (scrollState.value / 180f).coerceIn(0f, 1f)
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
             .padding(start = 18.dp, top = 14.dp, end = 18.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        BackHeader(onBack = onBack)
+        BackHeader(onBack = onBack, collapse = titleCollapse)
         BrandCard()
 
         // 网盘列表
@@ -204,7 +211,7 @@ fun CloudBackupScreen(
 // ================= 顶部与品牌卡 =================
 
 @Composable
-private fun BackHeader(onBack: () -> Unit) {
+private fun BackHeader(onBack: () -> Unit, collapse: Float = 0f) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Surface(
             modifier = Modifier
@@ -227,7 +234,7 @@ private fun BackHeader(onBack: () -> Unit) {
         Column {
             Text(
                 text = "网盘备份",
-                style = MaterialTheme.typography.headlineSmall,
+                fontSize = titleCollapseSize(collapse, 22.sp, 17.sp),
                 fontWeight = FontWeight.Black,
                 color = MaterialTheme.colorScheme.onSurface,
             )
@@ -235,6 +242,7 @@ private fun BackHeader(onBack: () -> Unit) {
                 text = "把下载媒体直连备份到云盘",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.graphicsLayer { alpha = titleCollapseAlpha(collapse) }
             )
         }
     }

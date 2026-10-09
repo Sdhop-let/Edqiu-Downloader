@@ -8,9 +8,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.ed.edqiu.ui.theme.MonetSpec
 import com.ed.edqiu.ui.theme.ThemeMode
-import com.ed.edqiu.ui.theme.TonalStyle
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -57,37 +55,19 @@ class SettingsRepository(context: Context) {
     val lastBackupErrorFlow: Flow<String?> =
         safeData.map { it[LAST_BACKUP_ERROR] }
 
-    val seedColorIndexFlow: Flow<Int> =
-        safeData.map { it[SEED_COLOR_INDEX] ?: 0 }
-
-    /** 动态取色开关：true 跟随系统壁纸（Android 12+），false 使用 [seedColorIndexFlow] 种子色方案（默认） */
-    val dynamicColorFlow: Flow<Boolean> =
-        safeData.map { it[DYNAMIC_COLOR] ?: false }
-
     // ===== 主题设置（2026-08-15 主题设置页扩展） =====
 
     /** 主题模式：SYSTEM（默认）/ LIGHT / DARK */
     val themeModeFlow: Flow<ThemeMode> =
         safeData.map { ThemeMode.fromStorage(it[THEME_MODE]) }
 
-    /** 强调色索引（复用 seedPresets 列表；默认 0 = 墨蓝/蓝色） */
-    val keyColorIndexFlow: Flow<Int> =
-        safeData.map { it[KEY_COLOR_INDEX] ?: 0 }
-
     /**
-     * 强调色（Accent Color）—— ARGB 原始值，作为全局强调色的唯一事实来源。
-     * 默认 0xFF2F4C8F（墨蓝）。预设色选择与自定义取色都写入此值。
+     * 强调色（Accent Color）—— ARGB 原始值，作为全局 tint 的唯一事实来源。
+     * 默认 0xFF007AFF（iOS 蓝）。预设色选择与自定义取色都写入此值。
+     * 2026-10-10 固定配色重构：仅注入 primary 族 tint，背景/中性面固定不变。
      */
     val accentColorFlow: Flow<Int> =
         safeData.map { it[ACCENT_COLOR] ?: DEFAULT_ACCENT_COLOR }
-
-    /** 色彩风格（TonalSpot / Vibrant / Expressive / FruitSalad / Fidelity / Content） */
-    val tonalStyleFlow: Flow<TonalStyle> =
-        safeData.map { TonalStyle.fromStorage(it[TONAL_STYLE]) }
-
-    /** 色彩标准（SPEC_2021 / CAM16） */
-    val monetSpecFlow: Flow<MonetSpec> =
-        safeData.map { MonetSpec.fromStorage(it[MONET_SPEC]) }
 
     /** 顶栏底栏模糊（默认 ON） */
     val blurEnabledFlow: Flow<Boolean> =
@@ -202,33 +182,13 @@ class SettingsRepository(context: Context) {
         editSafe { it[LAST_BACKUP_ERROR] = message }
     }
 
-    suspend fun setSeedColorIndex(index: Int) {
-        editSafe { it[SEED_COLOR_INDEX] = index.coerceIn(0, 5) }
-    }
-
-    suspend fun setDynamicColor(enabled: Boolean) {
-        editSafe { it[DYNAMIC_COLOR] = enabled }
-    }
-
     suspend fun setThemeMode(mode: ThemeMode) {
         editSafe { it[THEME_MODE] = mode.storageValue }
-    }
-
-    suspend fun setKeyColorIndex(index: Int) {
-        editSafe { it[KEY_COLOR_INDEX] = index.coerceIn(0, 5) }
     }
 
     /** 设置强调色（ARGB）。预设色与自定义取色统一走此入口。 */
     suspend fun setAccentColor(argb: Int) {
         editSafe { it[ACCENT_COLOR] = argb }
-    }
-
-    suspend fun setTonalStyle(style: TonalStyle) {
-        editSafe { it[TONAL_STYLE] = style.storageValue }
-    }
-
-    suspend fun setMonetSpec(spec: MonetSpec) {
-        editSafe { it[MONET_SPEC] = spec.storageValue }
     }
 
     suspend fun setBlurEnabled(enabled: Boolean) {
@@ -335,7 +295,7 @@ class SettingsRepository(context: Context) {
         const val DEFAULT_MONITOR_URI = "xinvox://downloads"
         /** 默认备份目录：手机公共存储根目录下的 edqiu 文件夹（文件管理器可直接浏览） */
         const val DEFAULT_BACKUP_DIR = "/storage/emulated/0/edqiu"
-        const val DEFAULT_ACCENT_COLOR = 0xFF2F4C8F.toInt()
+        const val DEFAULT_ACCENT_COLOR = 0xFF007AFF.toInt() // iOS 系统蓝
         // 玻璃外观四项默认值（= v1.7.0 既有行为；设置页「恢复默认」与首选项移除后共用）
         const val DEFAULT_GLASS_EDGE_WIDTH = 1.25f
         const val DEFAULT_GLASS_LIGHT_STRENGTH = 1f
@@ -348,13 +308,8 @@ class SettingsRepository(context: Context) {
         private val AUTOMATIC_BACKUP = booleanPreferencesKey("automatic_backup")
         private val LAST_BACKUP_AT = longPreferencesKey("last_backup_at")
         private val LAST_BACKUP_ERROR = stringPreferencesKey("last_backup_error")
-        private val SEED_COLOR_INDEX = intPreferencesKey("seed_color_index")
-        private val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         private val THEME_MODE = stringPreferencesKey("theme_mode")
-        private val KEY_COLOR_INDEX = intPreferencesKey("key_color_index")
         private val ACCENT_COLOR = intPreferencesKey("accent_color_argb")
-        private val TONAL_STYLE = stringPreferencesKey("tonal_style")
-        private val MONET_SPEC = stringPreferencesKey("monet_spec")
         private val BLUR_ENABLED = booleanPreferencesKey("blur_enabled")
         private val BLUR_INTENSITY = floatPreferencesKey("blur_intensity")
         private val GLASS_TRANSPARENCY = floatPreferencesKey("glass_transparency")

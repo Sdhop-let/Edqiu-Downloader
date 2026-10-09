@@ -171,7 +171,7 @@ fun AppNavigation(
     externalDownloadRequest: ExternalDownloadRequest? = null,
     onExternalDownloadConsumed: (Long) -> Unit = {},
     inboxContent: (@Composable () -> Unit)? = null,
-    trashContent: (@Composable () -> Unit)? = null,
+    trashContent: (@Composable (onBack: () -> Unit) -> Unit)? = null,
     settingsContent: (@Composable (downloaderSettings: @Composable () -> Unit, mineNav: MineNav) -> Unit)? = null,
     edqiuSettingsContent: (@Composable (section: String?, onBack: () -> Unit) -> Unit)? = null,
     openCloudBackup: (() -> Unit)? = null,
@@ -310,7 +310,7 @@ fun AppNavigation(
             bottomBar = {
                 // 2026-09-28 修复"关闭悬浮底栏后没有任何底栏、无法切换 Tab（卡死当前页）"：
                 // 悬浮底栏关闭时回退标准 M3 底部导航栏（containerColor 取 surface，
-                // Monet 取色时跟随壁纸色域），保证两种开关状态下 Tab 切换能力都不缺失
+                // 固定配色下跟随主题中性面），保证两种开关状态下 Tab 切换能力都不缺失
                 if (showBottomBar && !floatingTabBarEnabled) {
                     NavigationBar(
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
@@ -445,7 +445,7 @@ fun AppNavigation(
                 }
                 if (trashContent != null) {
                     composable(Screen.Trash.route) {
-                        trashContent()
+                        trashContent { navController.popBackStack() }
                     }
                 }
                 if (authorsContent != null) {

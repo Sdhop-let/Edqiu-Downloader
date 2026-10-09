@@ -17,6 +17,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import com.ed.edqiu.ui.components.CollapsingNavTitleBar
+import com.ed.edqiu.ui.components.rememberTitleCollapseProgress
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -62,11 +65,8 @@ import com.ed.edqiu.viewmodel.HistoryViewModel
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 
-private val Accent = Color(0xFF0F766E)
-private val Blue = Color(0xFF2563EB)
-private val Ink = Color(0xFF101417)
-private val Muted = Color(0xFF64748B)
-// 注：当前仅在 Compose 外/常量使用，组件内已切到 MaterialTheme 颜色
+// 2026-10-10 固定配色重构：旧硬编码 Accent/Blue/Ink/Muted 移除——
+// 组件内一律取 MaterialTheme 语义色（primary=用户强调色 tint，tertiary=固定 teal），状态色见 statusTint()
 
 @Composable
 fun DownloadScreen(
@@ -80,14 +80,26 @@ fun DownloadScreen(
     val completedCount = state.tasks.count { it.status == DownloadStatus.COMPLETED }
     val failedCount = state.tasks.count { it.status == DownloadStatus.FAILED || it.status == DownloadStatus.CANCELLED }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Transparent)  // 透出 GlassBackground 莫奈色域
-            .statusBarsPadding(),  // 避开状态栏（对齐收件箱/媒体库/设置页的顶部处理）
-        contentPadding = PaddingValues(start = 14.dp, top = 14.dp, end = 14.dp, bottom = 112.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
+    // iOS 大标题：列表内大标题滚走后，顶部紧凑导航条淡入接住导航职责
+    val listState = rememberLazyListState()
+    val titleCollapse by rememberTitleCollapseProgress(listState)
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        CollapsingNavTitleBar(
+            title = "下载中心",
+            progress = titleCollapse,
+            modifier = Modifier.align(Alignment.TopCenter),
+            onBack = onBack
+        )
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Transparent)  // 透出全局玻璃背景色域
+                .statusBarsPadding(),  // 避开状态栏（对齐收件箱/媒体库/设置页的顶部处理）
+            contentPadding = PaddingValues(start = 14.dp, top = 14.dp, end = 14.dp, bottom = 112.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
         item {
             DownloadHeader(
                 activeCount = activeCount,
@@ -121,6 +133,7 @@ fun DownloadScreen(
                 )
             }
         }
+    }
     }
 }
 
@@ -197,7 +210,7 @@ private fun StatBlock(value: String, label: String) {
 private fun DownloadActions(onScan: () -> Unit, onClearCompleted: () -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         Surface(
-            color = Blue,
+            color = MaterialTheme.colorScheme.primary,
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier.weight(1f)
         ) {
@@ -349,7 +362,7 @@ Text(
                         .height(6.dp)
                         .clip(RoundedCornerShape(999.dp)),
                     color = statusTint(task.status),
-                    trackColor = Color(0xFFE2E8F0)
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
                 )
                 Text(
                     "${task.progressInt}%${task.etaSeconds.takeIf { it > 0 }?.let { " · 剩余 ${it}s" } ?: ""}",
@@ -406,12 +419,18 @@ private fun statusText(status: DownloadStatus): String = when (status) {
     DownloadStatus.PAUSED -> "暂停"
 }
 
-private fun statusTint(status: DownloadStatus): Color = when (status) {
-    DownloadStatus.COMPLETED -> Color(0xFF087251)
-    DownloadStatus.FAILED, DownloadStatus.CANCELLED -> Color(0xFFB91C1C)
-    DownloadStatus.PAUSED -> Color(0xFFB45309)
-    DownloadStatus.DOWNLOADING, DownloadStatus.RESOLVING -> Accent
-    else -> Blue
+// 状态语义色（2026-10-10 固定配色：完成=绿 失败=红 暂停=橙，与全局 iOS 语义色一致；
+// 下载中/解析中=teal，其余=iOS 蓝。
+@Composable
+private fun statusTint(status: DownloadStatus): Color {
+    val dark = androidx.compose.foundation.isSystemInDarkTheme()
+    return when (status) {
+        DownloadStatus.COMPLETED -> if (dark) Color(0xFF30D158) else Color(0xFF1F8A3D)
+        DownloadStatus.FAILED, DownloadStatus.CANCELLED -> if (dark) Color(0xFFFF453A) else Color(0xFFD70015)
+        DownloadStatus.PAUSED -> if (dark) Color(0xFFFF9F0A) else Color(0xFFC93400)
+        DownloadStatus.DOWNLOADING, DownloadStatus.RESOLVING -> if (dark) Color(0xFF64D2FF) else Color(0xFF0F766E)
+        else -> if (dark) Color(0xFF0A84FF) else Color(0xFF007AFF)
+    }
 }
 
 private fun statusIcon(status: DownloadStatus): ImageVector = when (status) {

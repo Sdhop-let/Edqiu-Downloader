@@ -21,17 +21,17 @@ import androidx.compose.ui.unit.dp
 /**
  * 全局 Snackbar 容器。
  *
- * 设计动机（2026-08-16）：Edqiu 启用莫奈 dynamicColor 后，
- * Material 3 默认 Snackbar 取 [inverseSurface]/[inverseOnSurface] 这两个色作为容器/文字，
- * 而 inverseSurface 由系统壁纸经莫奈算法生成。在某些壁纸下（如本工程截图所示的暖色调），
- * inverseSurface 与 inverseOnSurface 演算出相近的色，导致 Snackbar 几乎不可见。
+ * 设计动机（2026-08-16，取色体系移除后动机依然成立）：
+ * Material 3 默认 Snackbar 取 [inverseSurface]/[inverseOnSurface] 作为容器/文字色，
+ * 历史上 inverseSurface 由系统壁纸经莫奈算法生成时曾演算出相近色导致几乎不可见；
+ * 现配色已固定，但固定值反转面（浅 #1C1C1E / 深 #F2F2F7）与主题联动仍不如
+ * 专用对比色稳健，故保留本组件的固定配色方案：
  *
- * 本组件绕过 dynamicColor 配色：
- * - **容器**：固定深色（#1F232A），保证与所有 dynamicColor 背景下都有清晰边缘
+ * - **容器**：固定深色（#1F232A），保证与浅/深两种主题背景下都有清晰边缘
  * - **文字**：固定近白（#EDEEF1），与容器对比度 ≥ 13:1（WCAG AAA 远超阈值）
- * - **Action（2026-08-17 加固）**：不再直接使用 [primary]——primary 为 tone 40 派生色，
- *   在深色容器上对比度仅约 2.8:1（浅色强调色时更差）。改为「primary 向白色逐级混合，
- *   直到与容器对比度 ≥ 4.5:1」：保留品牌色相，同时保证 Action 文字在任何强调色下都清晰。
+ * - **Action（2026-08-17 加固）**：不再直接使用 [primary]——浅色强调色（如 iOS 黄）下
+ *   对比度不足。改为「primary 向白色逐级混合，直到与容器对比度 ≥ 4.5:1」：
+ *   保留品牌色相，同时保证 Action 文字在任何强调色下都清晰。
  *
  * 位置策略（关键避坑，2026-08-16 实测）：
  * 1. M3 Scaffold 的 `snackbarHost` slot 在我们这个 `contentWindowInsets=WindowInsets(0)` 的场景下

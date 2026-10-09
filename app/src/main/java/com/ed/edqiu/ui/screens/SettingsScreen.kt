@@ -118,10 +118,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-private val Accent = Color(0xFF0F766E)
-private val Ink = Color(0xFF101417)
-private val Muted = Color(0xFF64748B)
-private val Soft = Color(0xFFF1F5F9)
+// 2026-10-10 固定配色重构：Accent→primary（强调色 tint）、Ink 死代码删除、
+// Soft→surfaceContainerHighest、Muted 固定 iOS secondaryLabel
+private val Muted = Color(0xFF8A8A8E)
 
 /** 下载器设置分组标识（二级菜单入口用） */
 object DlSection {
@@ -1307,7 +1306,7 @@ private fun SettingsHeader(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Surface(color = Accent.copy(alpha = 0.12f), shape = CircleShape) {
+                Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), shape = CircleShape) {
                     Icon(Icons.Outlined.Tune, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(11.dp))
                 }
                 Column(modifier = Modifier.weight(1f)) {
@@ -1338,14 +1337,14 @@ private fun StatusChip(
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(999.dp),
-        color = if (active) Accent.copy(alpha = 0.10f) else Soft
+        color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surfaceContainerHighest
     ) {
         Text(
             text = label,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
-            color = if (active) Accent else Muted,
+            color = if (active) MaterialTheme.colorScheme.primary else Muted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -1387,7 +1386,7 @@ private fun SectionCard(
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Surface(color = Accent.copy(alpha = 0.10f), shape = CircleShape) {
+                Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), shape = CircleShape) {
                     Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(9.dp).size(20.dp))
                 }
                 Column(modifier = Modifier.weight(1f)) {

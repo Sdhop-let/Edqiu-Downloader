@@ -79,6 +79,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -102,6 +103,9 @@ import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.data.model.SavedLink
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
+import com.ed.edqiu.ui.components.rememberTitleCollapseProgress
+import com.ed.edqiu.ui.components.titleCollapseAlpha
+import com.ed.edqiu.ui.components.titleCollapseSize
 import com.ed.edqiu.ui.components.LinkCard
 import com.ed.edqiu.ui.components.SkeletonCard
 import com.ed.edqiu.ui.components.FeedbackKind
@@ -140,6 +144,8 @@ fun ListScreen(
     var longPressedLink by remember { mutableStateOf<SavedLink?>(null) }
     var isFirstLoad by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
+    // iOS 大标题折叠：收件箱标题随列表滚动收缩为紧凑导航标题
+    val titleCollapse by rememberTitleCollapseProgress(listState)
     val scope = rememberCoroutineScope()
     val showScrollTop by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 200 } }
 
@@ -277,7 +283,8 @@ fun ListScreen(
                     },
                     onBatchDownload = { showBatchPreview = true },
                     onBatchDownloadAll = vm::downloadAllPending,
-                    onBatchDelete = vm::deleteSelected
+                    onBatchDelete = vm::deleteSelected,
+                    collapse = titleCollapse
                 )
 
                 LazyColumn(
@@ -328,7 +335,8 @@ fun ListScreen(
                 Surface(
                     onClick = { scope.launch { listState.animateScrollToItem(0) } },
                     shape = CircleShape,
-                    color = Color(0xFF101417),
+                    // 2026-10-10 固定配色：回顶钮改主题反色面（浅=石墨/深=浅灰，iOS 惯例）
+                    color = MaterialTheme.colorScheme.inverseSurface,
                     shadowElevation = 6.dp,
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -483,7 +491,9 @@ private fun InboxHeader(
     onBatchDownload: () -> Unit,
     // 右上角「下载」= 直接下载全部待处理（不再是"进入批量选择"，避免误以为点了没反应）
     onBatchDownloadAll: () -> Unit,
-    onBatchDelete: () -> Unit
+    onBatchDelete: () -> Unit,
+    // 大标题折叠进度（2026-10-10）：0=展开（大标题+副标题）1=折叠（紧凑标题）
+    collapse: Float = 0f
 ) {
     Column(
         modifier = Modifier
@@ -553,14 +563,19 @@ private fun InboxHeader(
                             text = "收件箱",
                             style = MaterialTheme.typography.headlineMedium.copy(
                                 fontWeight = FontWeight.ExtraBold,
-                                fontSize = 28.sp
+                                fontSize = titleCollapseSize(collapse, 28.sp, 21.sp)
                             ),
-                            color = MaterialTheme.colorScheme.onBackground
+                            color = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.graphicsLayer {
+                                // 折叠后半程整体上提，形成"缩进紧凑导航行"的空间感
+                                translationY = collapse * (-2).dp.toPx()
+                            }
                         )
                         Text(
                             text = "捕获链接、下载进度与历史记录",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.graphicsLayer { alpha = titleCollapseAlpha(collapse) }
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

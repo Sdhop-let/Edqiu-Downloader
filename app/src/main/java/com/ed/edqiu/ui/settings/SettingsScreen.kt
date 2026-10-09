@@ -112,10 +112,7 @@ import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.FeedbackDialog
 import com.ed.edqiu.ui.navigation.LocalSnackbarController
 import com.ed.edqiu.ui.navigation.SnackbarController
-import com.ed.edqiu.ui.theme.Monet
-import com.ed.edqiu.ui.theme.MonetSpec
 import com.ed.edqiu.ui.theme.ThemeMode
-import com.ed.edqiu.ui.theme.TonalStyle
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
@@ -124,9 +121,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-private val Accent = Color(0xFF0F766E)
-private val Ink = Color(0xFF101417)
-private val Muted = Color(0xFF64748B)
+// 2026-10-10 固定配色重构：Accent→MaterialTheme.colorScheme.primary（用户强调色 tint），
+// Ink→onBackground（修复深色模式下近黑标题不可读的遗留 bug），Muted 固定 iOS secondaryLabel
+private val Muted = Color(0xFF8A8A8E)
 
 /** 收件箱设置分组标识（二级菜单入口用） */
 object XSection {
@@ -236,9 +233,6 @@ fun SettingsScreen(
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(backupVm::prepareImport)
     }
-
-    val seedIndex by settings.seedColorIndexFlow.collectAsStateWithLifecycle(initialValue = 0)
-    val dynamicColor by settings.dynamicColorFlow.collectAsStateWithLifecycle(initialValue = false)
 
     pendingImport?.let { backup ->
         SmoothAlertDialog(
@@ -679,7 +673,7 @@ fun SettingsScreen(
                     "第二个静音播放器实时渲染视频画面（两个页面都是活视频），松手后声音由主播放器无缝接管；" +
                     "滑走的旧视频在翻过一半时自动暂停，省电且切换更干脆。",
                 style = MaterialTheme.typography.bodySmall,
-                color = Ink
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(6.dp))
             Text(
@@ -701,7 +695,7 @@ fun SettingsScreen(
                 } else {
                     "当前设备：${ramText}运存 —— 未达 16GB 门槛，自动使用真帧预览"
                 },
-                color = if (meetsHardware) Accent else Muted
+                color = if (meetsHardware) MaterialTheme.colorScheme.primary else Muted
             )
             SwitchRow(
                 "真双播放器（滑动时两页都是活视频）",
@@ -743,11 +737,11 @@ private fun SectionCard(
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Surface(color = Accent.copy(alpha = 0.10f), shape = CircleShape) {
-                    Icon(icon, contentDescription = null, tint = Accent, modifier = Modifier.padding(10.dp).size(22.dp))
+                Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), shape = CircleShape) {
+                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(10.dp).size(22.dp))
                 }
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = Ink)
+                    Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onBackground)
                     Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Muted)
                 }
             }
@@ -771,9 +765,9 @@ private fun SettingRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(icon, contentDescription = null, tint = Accent, modifier = Modifier.size(22.dp))
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = Ink)
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         trailing?.invoke()
@@ -806,7 +800,7 @@ private fun SwitchRow(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = Ink)
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
             Text(description, style = MaterialTheme.typography.bodySmall, color = Muted)
         }
         DynamicSwitch(checked = checked, onCheckedChange = onCheckedChange)
@@ -966,7 +960,6 @@ private fun ThemeSettingsSection(
     snackbar: SnackbarController
 ) {
     val themeMode by settings.themeModeFlow.collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
-    val dynamicColor by settings.dynamicColorFlow.collectAsStateWithLifecycle(initialValue = false)
     val accentColor by settings.accentColorFlow.collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_ACCENT_COLOR)
     val blurIntensity by settings.blurIntensityFlow.collectAsStateWithLifecycle(initialValue = 0.6f)
     val glassTransparency by settings.glassTransparencyFlow.collectAsStateWithLifecycle(initialValue = 0.6f)
@@ -997,7 +990,7 @@ private fun ThemeSettingsSection(
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         // 顶部预览卡
-        ThemePreviewCard(keyColor = accent, liquidGlassEnabled = liquidGlass)
+        ThemePreviewCard(accentColor = accent, liquidGlassEnabled = liquidGlass)
 
         // 主题模式 segmented
         ThemeSegmented(
@@ -1005,27 +998,15 @@ private fun ThemeSettingsSection(
             onSelect = { mode -> scope.launch { settings.setThemeMode(mode) } }
         )
 
-        // ===== 颜色卡组 =====
+        // ===== 颜色卡组（2026-10-10 固定配色重构：壁纸取色已移除，强调色只管 tint） =====
         GroupCard(
             title = "颜色",
-            description = "单一色源方案：壁纸取色开时全套跟随系统 Monet；关闭时使用强调色派生（色彩风格/标准旋钮已随旧引擎移除）"
+            description = "固定中性配色（浅色清透白 / 深色石墨黑），强调色作用于按钮、开关、选中态与玻璃染色"
         ) {
-            SettingItemRow(
-                icon = Icons.Outlined.Palette,
-                title = "壁纸取色",
-                subtitle = "开启后全套配色跟随壁纸：Android 12+ 系统 Monet 原样生效，Android 9+ 壁纸主色取色（取色期间强调色不参与）",
-                trailing = {
-                    DynamicSwitch(
-                        checked = dynamicColor,
-                        onCheckedChange = { scope.launch { settings.setDynamicColor(it) } }
-                    )
-                }
-            )
-            ThinDivider()
             SettingItemRow(
                 icon = Icons.Outlined.Brush,
                 title = "强调色",
-                subtitle = "壁纸取色关闭时的全局主色，作用于按钮、链接与选中态",
+                subtitle = "全局主色（默认 iOS 蓝），不改变背景与界面层次",
                 onClick = { accentPickerOpen = true },
                 trailing = {
                     AccentSwatch(accent)
@@ -1189,7 +1170,7 @@ private fun ThemeSettingsSection(
             ThinDivider()
             Text(
                 text = "深色模式下压暗程度自动 ×1.5 补偿——深色背景上同等压暗更难被感知。" +
-                    "描边颜色属局部材质属性，不参与 ColorScheme 派生，因此不会影响壁纸取色 / 强调色的单一色源结构。",
+                    "描边颜色属局部材质属性，不参与 ColorScheme 配色，不会影响固定中性面与强调色 tint 结构。",
                 fontSize = 11.sp,
                 color = Muted,
                 lineHeight = 15.sp,
@@ -1325,20 +1306,20 @@ private fun AccentSwatch(color: Color) {
     )
 }
 
-/** 强调色扩展预设（预设色 + 常用色） */
+/** 强调色扩展预设（2026-10-10 固定配色重构：iOS 系统调色板，自定义 HSV 仍全量可选） */
 private val AccentPresets: List<Pair<String, Int>> = listOf(
-    "墨蓝" to 0xFF2F4C8F.toInt(),
-    "珊瑚橙" to 0xFFE8583A.toInt(),
-    "抹茶绿" to 0xFF3E7C4F.toInt(),
-    "薰衣草紫" to 0xFF7C5CBF.toInt(),
-    "玫瑰粉" to 0xFFC45B7E.toInt(),
-    "曜石黑" to 0xFF101417.toInt(),
-    "天空蓝" to 0xFF2563EB.toInt(),
-    "青瓷" to 0xFF0F766E.toInt(),
+    "蓝" to 0xFF007AFF.toInt(),
+    "青绿" to 0xFF30B0C7.toInt(),
+    "薄荷" to 0xFF00A896.toInt(),
+    "靛紫" to 0xFF5E5CE6.toInt(),
+    "紫" to 0xFFAF52DE.toInt(),
+    "粉" to 0xFFFF2D55.toInt(),
+    "橙" to 0xFFFF9500.toInt(),
     "琥珀" to 0xFFB45309.toInt(),
-    "莓红" to 0xFFB91C1C.toInt(),
-    "靛蓝" to 0xFF4F46E5.toInt(),
-    "灰蓝" to 0xFF64748B.toInt()
+    "黄" to 0xFFFFCC00.toInt(),
+    "绿" to 0xFF34C759.toInt(),
+    "莓红" to 0xFFFF375F.toInt(),
+    "石墨" to 0xFF48484A.toInt()
 )
 
 /**
@@ -1558,7 +1539,7 @@ private fun colorToHsv(c: Color): FloatArray {
 
 /** 顶部预览卡：mini header + tab 栏 + 4 色块（按设计稿） */
 @Composable
-private fun ThemePreviewCard(keyColor: Color, liquidGlassEnabled: Boolean) {
+private fun ThemePreviewCard(accentColor: Color, liquidGlassEnabled: Boolean) {
     GlassSurface(
         modifier = Modifier.fillMaxWidth(),
         tier = GlassTier.L1,
@@ -1595,7 +1576,7 @@ private fun ThemePreviewCard(keyColor: Color, liquidGlassEnabled: Boolean) {
             }
             // 4 色块（强调色 + 3 深色）
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Box(modifier = Modifier.size(20.dp).clip(RoundedCornerShape(6.dp)).background(keyColor))
+                Box(modifier = Modifier.size(20.dp).clip(RoundedCornerShape(6.dp)).background(accentColor))
                 Box(modifier = Modifier.size(20.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)))
                 Box(modifier = Modifier.size(20.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.40f)))
                 Box(modifier = Modifier.size(20.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.20f)))

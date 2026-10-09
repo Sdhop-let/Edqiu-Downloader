@@ -99,8 +99,15 @@ private fun statusTextValue(task: DownloadTask): String = when (task.status) {
     DownloadStatus.PAUSED -> "已暂停"
 }
 
-private fun statusColor(status: DownloadStatus) = when (status) {
-    DownloadStatus.COMPLETED -> Color(0xFF0F8A5F)
-    DownloadStatus.FAILED, DownloadStatus.CANCELLED -> Color(0xFFC2410C)
-    else -> Color(0xFF2563EB)
+// 状态语义色（2026-10-10 固定配色：iOS 系统色，与 DownloadScreen.statusTint 同源一致）
+@androidx.compose.runtime.Composable
+private fun statusColor(status: DownloadStatus): Color {
+    val dark = androidx.compose.foundation.isSystemInDarkTheme()
+    return when (status) {
+        DownloadStatus.COMPLETED -> if (dark) Color(0xFF30D158) else Color(0xFF1F8A3D)
+        DownloadStatus.FAILED, DownloadStatus.CANCELLED -> if (dark) Color(0xFFFF453A) else Color(0xFFD70015)
+        DownloadStatus.PAUSED -> if (dark) Color(0xFFFF9F0A) else Color(0xFFC93400)
+        DownloadStatus.DOWNLOADING, DownloadStatus.RESOLVING -> if (dark) Color(0xFF64D2FF) else Color(0xFF0F766E)
+        else -> if (dark) Color(0xFF0A84FF) else Color(0xFF007AFF)
+    }
 }
