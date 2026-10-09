@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
+import com.ed.edqiu.ui.anim.Motion
 
 /**
  * 按压震动档位（2026-09-14 可调）：
@@ -57,7 +58,7 @@ fun Modifier.pressableNoRipple(
     val pressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (pressed && scaleOnPress && !reduceMotion) 0.97f else 1f,
-        animationSpec = spring(dampingRatio = 0.75f, stiffness = 600f),
+        animationSpec = Motion.pressed(),
         label = "pressable_scale"
     )
 

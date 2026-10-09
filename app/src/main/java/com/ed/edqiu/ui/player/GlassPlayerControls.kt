@@ -77,6 +77,7 @@ import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.MediaGlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import kotlinx.coroutines.delay
+import com.ed.edqiu.ui.anim.Motion
 
 /**
  * 播放器玻璃控制层（设计文档 §6）。
@@ -209,9 +210,9 @@ fun GlassPlayerControls(
     AnimatedVisibility(
         visible = visible,
         // 2026-09-30 播放页动画规格：控件淡入 tween(220)（配合 PlayerScreen 延迟 200ms 置 visible）
-        enter = fadeIn(tween(durationMillis = 220)) +
+        enter = fadeIn(tween(Motion.PanelIn)) +
             slideInVertically(tween(durationMillis = 220)) { it / 3 },
-        exit = fadeOut(tween(durationMillis = 160)) +
+        exit = fadeOut(tween(Motion.Panel)) +
             slideOutVertically(tween(durationMillis = 160)) { it / 3 },
         modifier = modifier
     ) {
@@ -233,12 +234,12 @@ fun GlassPlayerControls(
                 val seeking = dragProgress != null || sliderPressed
                 val thumbScale by animateFloatAsState(
                     targetValue = if (seeking) 3f else 1f,
-                    animationSpec = spring(dampingRatio = 0.8f, stiffness = 500f),
+                    animationSpec = Motion.thumb(),
                     label = "player_thumb_scale"
                 )
                 val trackGrowth by animateFloatAsState(
                     targetValue = if (seeking) 2.4f else 1f,
-                    animationSpec = tween(150),
+                    animationSpec = tween(Motion.Control),
                     label = "player_track_growth"
                 )
                 Slider(
@@ -340,7 +341,7 @@ fun GlassPlayerControls(
                     ) {
                         Crossfade(
                             targetState = isPlaying,
-                            animationSpec = tween(140),
+                            animationSpec = tween(Motion.Micro),
                             label = "player_playpause_icon"
                         ) { playing ->
                             Icon(
@@ -436,8 +437,8 @@ fun GlassActionsPanel(
     AnimatedVisibility(
         visible = visible,
         // 2026-10-10 动画统一：对齐主控制层规格（220/160ms）
-        enter = fadeIn(tween(220)) + slideInVertically(tween(220)) { it },
-        exit = fadeOut(tween(160)) + slideOutVertically(tween(160)) { it },
+        enter = fadeIn(tween(Motion.PanelIn)) + slideInVertically(tween(Motion.PanelIn)) { it },
+        exit = fadeOut(tween(Motion.Panel)) + slideOutVertically(tween(Motion.Panel)) { it },
         modifier = modifier
     ) {
         MediaGlassSurface(

@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
+import com.ed.edqiu.ui.anim.Motion
 
 /**
  * iOS 大标题↔紧凑导航标题折叠体系（2026-10-10 全量重构）。
@@ -106,8 +107,8 @@ fun CollapsingNavTitleBar(
     val visible = progress > 0.05f
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn(tween(120)) + slideInVertically(tween(180)) { -it / 2 },
-        exit = fadeOut(tween(120)) + slideOutVertically(tween(180)) { -it / 2 },
+        enter = fadeIn(tween(Motion.Micro)) + slideInVertically(tween(Motion.PanelIn)) { -it / 2 },
+        exit = fadeOut(tween(Motion.Micro)) + slideOutVertically(tween(Motion.Panel)) { -it / 2 },
         modifier = modifier
     ) {
         Row(

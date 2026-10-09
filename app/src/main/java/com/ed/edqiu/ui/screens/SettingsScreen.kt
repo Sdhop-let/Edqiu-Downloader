@@ -432,9 +432,15 @@ fun SettingsScreen(
                     }
                     if (isDownloadingAppUpdate) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            // 2026-10-10 统一：6dp 圆角胶囊进度条（全工程一致）
                             LinearProgressIndicator(
                                 progress = { appUpdateProgress.coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(999.dp)),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
                             )
                             Text(
                                 "正在下载 ${(appUpdateProgress * 100).toInt()}% · 完成后自动调起安装",

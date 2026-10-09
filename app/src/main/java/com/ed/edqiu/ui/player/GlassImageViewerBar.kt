@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ed.edqiu.ui.components.MediaGlassSurface
 import com.ed.edqiu.ui.util.pressableNoRipple
+import com.ed.edqiu.ui.anim.Motion
 
 /**
  * 图片查看器专属底部功能栏（2026-10-02 批次A）。
@@ -60,10 +61,10 @@ fun GlassImageViewerBar(
     AnimatedVisibility(
         visible = visible,
         // 2026-10-02 批次A：对齐 GlassPlayerControls 的进出动画规格（220/160ms + 1/3 位移）
-        enter = fadeIn(tween(durationMillis = 220)) +
-            slideInVertically(tween(durationMillis = 220)) { it / 3 },
-        exit = fadeOut(tween(durationMillis = 160)) +
-            slideOutVertically(tween(durationMillis = 160)) { it / 3 },
+        enter = fadeIn(tween(Motion.PanelIn)) +
+            slideInVertically(tween(Motion.PanelIn)) { it / 3 },
+        exit = fadeOut(tween(Motion.Panel)) +
+            slideOutVertically(tween(Motion.Panel)) { it / 3 },
         modifier = modifier
     ) {
         MediaGlassSurface(

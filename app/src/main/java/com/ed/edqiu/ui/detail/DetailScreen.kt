@@ -263,7 +263,8 @@ private fun NavCircleButton(
         onClick = onClick,
         enabled = enabled,
         colors = IconButtonDefaults.iconButtonColors(
-            containerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+            // 2026-10-10 统一：圆钮底色对齐全工程 HeaderIconButton 形态（surfaceContainer 72%）
+            containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
             contentColor = MaterialTheme.colorScheme.onSurface,
             disabledContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
             disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
@@ -417,11 +418,17 @@ private fun Avatar(data: SavedLink, bordered: Boolean = true) {
             modifier = Modifier
                 .size(size)
                 .clip(CircleShape)
-                .background(Color(0xFF38BDF8))
+                // 2026-10-10 固定配色：无头像兜底由旧品牌天蓝改主题容器色
+                .background(MaterialTheme.colorScheme.primaryContainer)
                 .then(borderModifier),
             contentAlignment = Alignment.Center
         ) {
-            Text("X", fontWeight = FontWeight.Black, color = Color.White, fontSize = 15.sp)
+            Text(
+                "X",
+                fontWeight = FontWeight.Black,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                fontSize = 15.sp
+            )
         }
     }
 }
@@ -565,7 +572,7 @@ private fun CollapsibleCaption(caption: String) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .animateContentSize(tween(durationMillis = 220))
+            .animateContentSize(tween(com.ed.edqiu.ui.anim.Motion.PanelIn))
     ) {
         Column {
             SelectionContainer {

@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.ed.edqiu.ui.anim.Motion
 
 /**
  * 统一 iOS 风格滑杆（2026-10-10 全量重构，总指令 §6.4）。
@@ -49,12 +50,12 @@ fun EdqiuSlider(
     val pressed by interaction.collectIsPressedAsState()
     val thumbScale by animateFloatAsState(
         targetValue = if (pressed) 1.25f else 1f,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = 500f),
+        animationSpec = Motion.thumb(),
         label = "edqiu_slider_thumb"
     )
     val trackGrowth by animateFloatAsState(
         targetValue = if (pressed) 1.75f else 1f,
-        animationSpec = tween(150),
+        animationSpec = tween(Motion.Control),
         label = "edqiu_slider_track"
     )
     val trackHeight: Dp = 4.dp
