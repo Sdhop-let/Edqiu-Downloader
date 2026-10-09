@@ -105,6 +105,24 @@ class SettingsRepository(context: Context) {
     val refractionIntensityFlow: Flow<Float> =
         safeData.map { it[REFRACTION_INTENSITY] ?: 0.6f }
 
+    // ── 玻璃外观四项（v1.8.0）：默认值 = v1.7.0 既有行为，四项均为中性元 ──
+
+    /** 描边粗细 dp（默认 1.25 = 原硬编码值）：玻璃内描边线宽，0 = 不描边 */
+    val glassEdgeWidthFlow: Flow<Float> =
+        safeData.map { it[GLASS_EDGE_WIDTH] ?: DEFAULT_GLASS_EDGE_WIDTH }
+
+    /** 亮边强度倍数（默认 1.0 = 中性）：等比缩放内描边白高光与顶部光带 */
+    val glassEdgeLightStrengthFlow: Flow<Float> =
+        safeData.map { it[GLASS_EDGE_LIGHT_STRENGTH] ?: DEFAULT_GLASS_LIGHT_STRENGTH }
+
+    /** 描边颜色 ARGB（默认 0 = 跟随主题色）：仅覆盖内描边 seed 层，不参与 ColorScheme 派生 */
+    val glassEdgeColorFlow: Flow<Int> =
+        safeData.map { it[GLASS_EDGE_COLOR] ?: DEFAULT_GLASS_EDGE_COLOR }
+
+    /** 压暗程度 0.0-1.0（默认 0.0 = 不压暗）：玻璃材质层叠加黑色，深色模式自动 ×1.5 */
+    val glassDimAmountFlow: Flow<Float> =
+        safeData.map { it[GLASS_DIM_AMOUNT] ?: DEFAULT_GLASS_DIM_AMOUNT }
+
     /** 按压震动档位（2026-09-14）：0=关闭 1=轻(CLOCK_TICK) 2=中(VIRTUAL_KEY) 3=明确(CONFIRM) */
     val hapticStrengthFlow: Flow<Int> =
         safeData.map { it[HAPTIC_STRENGTH] ?: 2 }
@@ -229,6 +247,47 @@ class SettingsRepository(context: Context) {
         editSafe { it[REFRACTION_INTENSITY] = intensity.coerceIn(0f, 1f) }
     }
 
+    suspend fun setGlassEdgeWidth(width: Float) {
+        editSafe { it[GLASS_EDGE_WIDTH] = width.coerceIn(0f, 2.5f) }
+    }
+
+    suspend fun setGlassEdgeLightStrength(strength: Float) {
+        editSafe { it[GLASS_EDGE_LIGHT_STRENGTH] = strength.coerceIn(0f, 1.6f) }
+    }
+
+    /** 描边颜色；传 0 表示恢复「跟随主题色」。 */
+    suspend fun setGlassEdgeColor(argb: Int) {
+        editSafe { it[GLASS_EDGE_COLOR] = argb }
+    }
+
+    suspend fun setGlassDimAmount(amount: Float) {
+        editSafe { it[GLASS_DIM_AMOUNT] = amount.coerceIn(0f, 1f) }
+    }
+
+    /**
+     * 恢复「玻璃外观」分组的默认值（2026-10-09 v1.8.0）。
+     *
+     * 只重置本组四项，不触碰透明度 / 磨砂 / 折射 / 液态玻璃开关——
+     * 分组级恢复默认的语义是「只回退这一组参数」，与全局重置严格区分。
+     */
+    suspend fun resetGlassAppearance() {
+        editSafe { prefs ->
+            prefs.remove(GLASS_EDGE_WIDTH)
+            prefs.remove(GLASS_EDGE_LIGHT_STRENGTH)
+            prefs.remove(GLASS_EDGE_COLOR)
+            prefs.remove(GLASS_DIM_AMOUNT)
+        }
+    }
+
+    /** 「玻璃外观」分组是否处于默认状态（用于恢复默认按钮的可用性判断）。 */
+    val glassAppearanceIsDefaultFlow: Flow<Boolean> =
+        safeData.map { prefs ->
+            (prefs[GLASS_EDGE_WIDTH] ?: DEFAULT_GLASS_EDGE_WIDTH) == DEFAULT_GLASS_EDGE_WIDTH &&
+                (prefs[GLASS_EDGE_LIGHT_STRENGTH] ?: DEFAULT_GLASS_LIGHT_STRENGTH) == DEFAULT_GLASS_LIGHT_STRENGTH &&
+                (prefs[GLASS_EDGE_COLOR] ?: DEFAULT_GLASS_EDGE_COLOR) == DEFAULT_GLASS_EDGE_COLOR &&
+                (prefs[GLASS_DIM_AMOUNT] ?: DEFAULT_GLASS_DIM_AMOUNT) == DEFAULT_GLASS_DIM_AMOUNT
+        }
+
     suspend fun setHapticStrength(level: Int) {
         editSafe { it[HAPTIC_STRENGTH] = level.coerceIn(0, 3) }
     }
@@ -277,6 +336,11 @@ class SettingsRepository(context: Context) {
         /** 默认备份目录：手机公共存储根目录下的 edqiu 文件夹（文件管理器可直接浏览） */
         const val DEFAULT_BACKUP_DIR = "/storage/emulated/0/edqiu"
         const val DEFAULT_ACCENT_COLOR = 0xFF2F4C8F.toInt()
+        // 玻璃外观四项默认值（= v1.7.0 既有行为；设置页「恢复默认」与首选项移除后共用）
+        const val DEFAULT_GLASS_EDGE_WIDTH = 1.25f
+        const val DEFAULT_GLASS_LIGHT_STRENGTH = 1f
+        const val DEFAULT_GLASS_EDGE_COLOR = 0
+        const val DEFAULT_GLASS_DIM_AMOUNT = 0f
         private val MONITOR_URI = stringPreferencesKey("monitor_dir_uri")
         private val AUTO_RETRY = booleanPreferencesKey("auto_retry")
         private val BACKGROUND_SYNC = booleanPreferencesKey("background_sync")
@@ -295,6 +359,11 @@ class SettingsRepository(context: Context) {
         private val BLUR_INTENSITY = floatPreferencesKey("blur_intensity")
         private val GLASS_TRANSPARENCY = floatPreferencesKey("glass_transparency")
         private val REFRACTION_INTENSITY = floatPreferencesKey("refraction_intensity")
+        // 玻璃外观四项（v1.8.0）
+        private val GLASS_EDGE_WIDTH = floatPreferencesKey("glass_edge_width")
+        private val GLASS_EDGE_LIGHT_STRENGTH = floatPreferencesKey("glass_edge_light_strength")
+        private val GLASS_EDGE_COLOR = intPreferencesKey("glass_edge_color_argb")
+        private val GLASS_DIM_AMOUNT = floatPreferencesKey("glass_dim_amount")
         private val HAPTIC_STRENGTH = intPreferencesKey("haptic_strength")
         private val HIGH_REFRESH_RATE = booleanPreferencesKey("high_refresh_rate")
         private val FLOATING_TAB_BAR = booleanPreferencesKey("floating_tab_bar")

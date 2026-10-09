@@ -126,12 +126,26 @@ private fun RealGlassOverlay(
     // 磨砂度已由 blurRadius 承载
     val t = ThemeEffects.GlassTransparency.current.coerceIn(0f, 1f)
     val r = ThemeEffects.GlassRefractionStrength.current.coerceIn(0f, 1f)
+    // 玻璃外观（v1.8.0）：压暗程度 + 亮边强度；默认中性元，不改变既有观感
+    val dim = ThemeEffects.effectiveDim(ThemeEffects.GlassDimAmount.current, darkTheme)
+    val lightStrength = ThemeEffects.GlassEdgeLightStrength.current.coerceIn(0f, 1.6f)
     // 表面色（透明度：0=实 0.58，1=透 0.16；Dark 风格（媒体条）保持可读下限）
     val surface = when (style) {
         OverlayGlassStyle.Light ->
             if (darkTheme) Color(0xFF1A1D21).copy(alpha = 0.62f - 0.36f * t)
             else Color.White.copy(alpha = 0.58f - 0.42f * t)
         OverlayGlassStyle.Dark -> Color(0xFF14181C).copy(alpha = 0.80f - 0.28f * t)
+    }
+    // 压暗：只压 RGB、保留 alpha——保持半透明语义，避免把「透」压成「实」
+    val drawnSurface = if (dim > 0f) {
+        Color(
+            red = surface.red * (1f - dim),
+            green = surface.green * (1f - dim),
+            blue = surface.blue * (1f - dim),
+            alpha = surface.alpha
+        )
+    } else {
+        surface
     }
 
     // 顺序：clip（内容裁剪）→ drawBackdrop（按 shape 绘制折射层）
@@ -150,7 +164,7 @@ private fun RealGlassOverlay(
                 blur(blurRadius.toPx())
                 lens(lensHeight.toPx(), lensAmount.toPx() * (0.2f + 1.4f * r))
             },
-            onDrawSurface = { drawRect(surface) }
+            onDrawSurface = { drawRect(drawnSurface) }
         )
     ) {
         // 顶部窄镜面高光：叠加在真折射之上（玻璃上沿反射，Liquid 灵魂的最后一笔）
@@ -160,8 +174,8 @@ private fun RealGlassOverlay(
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            Color.White.copy(alpha = if (style == OverlayGlassStyle.Dark) 0.14f else 0.10f),
-                            Color.White.copy(alpha = 0.02f),
+                            Color.White.copy(alpha = ((if (style == OverlayGlassStyle.Dark) 0.14f else 0.10f) * lightStrength).coerceIn(0f, 1f)),
+                            Color.White.copy(alpha = (0.02f * lightStrength).coerceIn(0f, 1f)),
                             Color.Transparent
                         ),
                         startY = 0f,

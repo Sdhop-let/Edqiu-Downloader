@@ -2,7 +2,7 @@
 
 Android 原生的 X/Twitter 媒体下载器：链接收件箱、媒体下载、本地媒体库与沉浸式播放器一体化，并支持把下载历史与媒体直连备份到你的网盘。
 
-> 当前版本：**v1.7.0**（versionCode 47）· compileSdk/targetSdk 37（Android 17）· minSdk 24 · 仅 arm64-v8a
+> 当前版本：**v1.8.0**（versionCode 48）· compileSdk/targetSdk 37（Android 17）· minSdk 24 · 仅 arm64-v8a
 > 历史曾用名：XInvox / Es Qp / TwitterDownloader（现已合并为 Edqiu 单一应用）
 
 [![Download](https://img.shields.io/badge/下载-GitHub_Releases-2563EB)](../../releases/latest)
@@ -136,7 +136,8 @@ app/src/main/java/com/ed/edqiu/
 | 文档 | 说明 |
 |---|---|
 | [docs/release-automation.md](docs/release-automation.md) | 发版流程（tag → CI → Release） |
-| [docs/RELEASE_NOTES-1.7.0.md](docs/RELEASE_NOTES-1.7.0.md) | **本版更新内容**（备份中心整合/播放器比例/更新弹窗等） |
+| [docs/RELEASE_NOTES-1.8.0.md](docs/RELEASE_NOTES-1.8.0.md) | **本版更新内容**（玻璃外观参数化：描边/亮边/描边色/压暗） |
+| [docs/RELEASE_NOTES-1.7.0.md](docs/RELEASE_NOTES-1.7.0.md) | 上版更新内容（备份中心整合/播放器比例/更新弹窗等，历史） |
 | [docs/RELEASE_NOTES-1.6.9.1.md](docs/RELEASE_NOTES-1.6.9.1.md) | 上版修复清单（50+ 项，历史） |
 | [docs/ARCHITECTURE-v2.md](docs/ARCHITECTURE-v2.md) / [docs/system_design.md](docs/system_design.md) | 架构与系统设计 |
 | [docs/webdav-cloud-backup-guide/](docs/webdav-cloud-backup-guide/webdav-cloud-backup-guide.html) | WebDAV 备份图文指南 |

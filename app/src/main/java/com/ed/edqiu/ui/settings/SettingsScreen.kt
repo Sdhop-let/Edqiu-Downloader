@@ -122,6 +122,7 @@ import java.util.Date
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 private val Accent = Color(0xFF0F766E)
 private val Ink = Color(0xFF101417)
@@ -328,7 +329,7 @@ fun SettingsScreen(
                     )
                     Text(
                         text = when (section) {
-                            XSection.APPEARANCE -> "颜色 / 玻璃与底栏 / 显示 / 手势与触感"
+                            XSection.APPEARANCE -> "颜色 / 玻璃与底栏 / 玻璃外观 / 显示 / 手势与触感"
                             XSection.STORAGE -> "下载存储、监控目录与数据备份"
                             XSection.BACKUP -> "自动备份开关与导出导入"
                             XSection.CAPTURE -> "下载重试与后台同步"
@@ -972,6 +973,17 @@ private fun ThemeSettingsSection(
     val refractionIntensity by settings.refractionIntensityFlow.collectAsStateWithLifecycle(initialValue = 0.6f)
     val floatingTabBar by settings.floatingTabBarFlow.collectAsStateWithLifecycle(initialValue = true)
     val liquidGlass by settings.liquidGlassEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
+    // 玻璃外观四项（v1.8.0）
+    val glassEdgeWidth by settings.glassEdgeWidthFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_EDGE_WIDTH)
+    val glassLightStrength by settings.glassEdgeLightStrengthFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_LIGHT_STRENGTH)
+    val glassEdgeColor by settings.glassEdgeColorFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_EDGE_COLOR)
+    val glassDimAmount by settings.glassDimAmountFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_DIM_AMOUNT)
+    val glassAppearanceIsDefault by settings.glassAppearanceIsDefaultFlow
+        .collectAsStateWithLifecycle(initialValue = true)
     val highRefreshRate by settings.highRefreshRateFlow.collectAsStateWithLifecycle(initialValue = true)
     val hapticStrength by settings.hapticStrengthFlow.collectAsStateWithLifecycle(initialValue = 2)
     // 2026-10：「返回手势」假开关已移除（predictiveBackFlow 全工程无消费者，
@@ -980,6 +992,8 @@ private fun ThemeSettingsSection(
     val accent = Color(accentColor)
 
     var accentPickerOpen by remember { mutableStateOf(false) }
+    // 玻璃描边颜色选择器（v1.8.0）
+    var edgeColorPickerOpen by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         // 顶部预览卡
@@ -1096,6 +1110,102 @@ private fun ThemeSettingsSection(
             )
         }
 
+        // ===== 玻璃外观卡组（v1.8.0：在透明度/磨砂/折射之上补齐外观四项） =====
+        GroupCard(
+            title = "玻璃外观",
+            description = "描边与光效的细调参数，按「对象 × 属性」组织（对象=玻璃，属性=粗细/强度/程度/颜色）；改动实时生效"
+        ) {
+            // 数据驱动渲染：规格表 → 滑块。新增一个标量参数只需往表里加一行，
+            // 不必改动布局代码——避免设置页随参数增长线性膨胀。
+            val specs = listOf(
+                GlassSliderSpec(
+                    label = "玻璃描边粗细",
+                    value = glassEdgeWidth,
+                    range = 0f..2.5f,
+                    format = { v ->
+                        if (v <= 0.01f) "无描边" else String.format(java.util.Locale.US, "%.2f dp", v)
+                    },
+                    onChange = { scope.launch { settings.setGlassEdgeWidth(it) } }
+                ),
+                GlassSliderSpec(
+                    label = "玻璃亮边强度",
+                    value = glassLightStrength,
+                    range = 0f..1.6f,
+                    // 用「倍数」而非百分比：中性值 1.0 若按 1.0/1.6 显示会变成 63%，
+                    // 看起来像"没拉满"，容易被误读为默认未生效
+                    format = { v -> String.format(java.util.Locale.US, "%.2f×", v) },
+                    onChange = { scope.launch { settings.setGlassEdgeLightStrength(it) } }
+                ),
+                GlassSliderSpec(
+                    label = "玻璃压暗程度",
+                    value = glassDimAmount,
+                    range = 0f..1f,
+                    format = { v -> "${(v * 100f).roundToInt()}%" },
+                    onChange = { scope.launch { settings.setGlassDimAmount(it) } }
+                )
+            )
+            specs.forEach { spec ->
+                Text(
+                    text = "${spec.label}  ${spec.format(spec.value)}",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 16.dp, top = 6.dp)
+                )
+                Slider(
+                    value = spec.value,
+                    onValueChange = spec.onChange,
+                    valueRange = spec.range,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                )
+            }
+
+            ThinDivider()
+            val edgeColorIsDefault = glassEdgeColor == SettingsRepository.DEFAULT_GLASS_EDGE_COLOR
+            SettingItemRow(
+                icon = Icons.Outlined.Brush,
+                title = "玻璃描边颜色",
+                subtitle = if (edgeColorIsDefault) {
+                    "跟随主题色（默认，保持单一色源不变）"
+                } else {
+                    "自定义描边色，不参与配色派生"
+                },
+                onClick = { edgeColorPickerOpen = true },
+                trailing = {
+                    if (edgeColorIsDefault) {
+                        Text("跟随主题", fontSize = 12.sp, color = Muted)
+                    } else {
+                        AccentSwatch(Color(glassEdgeColor))
+                    }
+                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted, modifier = Modifier.size(18.dp))
+                }
+            )
+            if (!edgeColorIsDefault) {
+                TextButton(
+                    onClick = { scope.launch { settings.setGlassEdgeColor(SettingsRepository.DEFAULT_GLASS_EDGE_COLOR) } },
+                    modifier = Modifier.padding(start = 8.dp)
+                ) { Text("改回跟随主题色", fontSize = 13.sp) }
+            }
+
+            ThinDivider()
+            Text(
+                text = "深色模式下压暗程度自动 ×1.5 补偿——深色背景上同等压暗更难被感知。" +
+                    "描边颜色属局部材质属性，不参与 ColorScheme 派生，因此不会影响壁纸取色 / 强调色的单一色源结构。",
+                fontSize = 11.sp,
+                color = Muted,
+                lineHeight = 15.sp,
+                modifier = Modifier.padding(start = 16.dp, top = 10.dp, end = 16.dp)
+            )
+            // 分组级恢复默认：只回退本组四项，不动透明度 / 磨砂 / 折射 / 液态玻璃开关
+            OutlinedButton(
+                onClick = { scope.launch { settings.resetGlassAppearance() } },
+                enabled = !glassAppearanceIsDefault,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) { Text("恢复默认（本组）") }
+        }
+
         // ===== 显示卡组（二次重组：缩放与刷新率同属显示体验） =====
         GroupCard(
             title = "显示",
@@ -1170,7 +1280,38 @@ private fun ThemeSettingsSection(
             }
         )
     }
+
+    // 玻璃描边颜色（v1.8.0）：复用同一套取色器，仅落点不同
+    if (edgeColorPickerOpen) {
+        AccentColorPickerDialog(
+            initial = if (glassEdgeColor == SettingsRepository.DEFAULT_GLASS_EDGE_COLOR) {
+                accent
+            } else {
+                Color(glassEdgeColor)
+            },
+            onDismiss = { edgeColorPickerOpen = false },
+            onConfirm = { argb ->
+                scope.launch { settings.setGlassEdgeColor(argb) }
+                edgeColorPickerOpen = false
+            },
+            title = "选择描边色"
+        )
+    }
 }
+
+/**
+ * 「玻璃外观」标量参数规格（v1.8.0 数据驱动渲染）。
+ *
+ * 一个参数 = 一条规格，设置页据此自动渲染「标签 + 当前值 + 滑块」，
+ * 新增参数无需改动布局代码。命名沿用「对象 × 属性」正交法。
+ */
+private data class GlassSliderSpec(
+    val label: String,
+    val value: Float,
+    val range: ClosedFloatingPointRange<Float>,
+    val format: (Float) -> String,
+    val onChange: (Float) -> Unit
+)
 
 /** 强调色小圆点（右侧值预览） */
 @Composable
@@ -1209,7 +1350,8 @@ private val AccentPresets: List<Pair<String, Int>> = listOf(
 private fun AccentColorPickerDialog(
     initial: Color,
     onDismiss: () -> Unit,
-    onConfirm: (Int) -> Unit
+    onConfirm: (Int) -> Unit,
+    title: String = "选择强调色"
 ) {
     val initHsv = remember(initial) { colorToHsv(initial) }
     var hue by remember { mutableStateOf(initHsv[0]) }
@@ -1231,7 +1373,7 @@ private fun AccentColorPickerDialog(
                 .padding(bottom = 18.dp)
         ) {
             Text(
-                "选择强调色",
+                title,
                 fontWeight = FontWeight.Black,
                 fontSize = 18.sp,
                 color = MaterialTheme.colorScheme.onSurface

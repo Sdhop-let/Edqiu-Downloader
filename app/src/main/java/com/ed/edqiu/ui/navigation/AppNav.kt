@@ -105,6 +105,15 @@ fun EdqiuApp(container: AppContainer) {
         .collectAsStateWithLifecycle(initialValue = true)
     val hapticStrength by container.settingsRepository.hapticStrengthFlow
         .collectAsStateWithLifecycle(initialValue = 2)
+    // 玻璃外观四项（v1.8.0）：描边粗细 / 亮边强度 / 描边颜色 / 压暗程度
+    val glassEdgeWidth by container.settingsRepository.glassEdgeWidthFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_EDGE_WIDTH)
+    val glassLightStrength by container.settingsRepository.glassEdgeLightStrengthFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_LIGHT_STRENGTH)
+    val glassEdgeColor by container.settingsRepository.glassEdgeColorFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_EDGE_COLOR)
+    val glassDimAmount by container.settingsRepository.glassDimAmountFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_DIM_AMOUNT)
     val keyColor = Color(accentColor)
     // 玻璃三参数（2026-09-28 拆分独立滑块）：透明度 / 磨砂 / 折射各自独立调节
     val frostStrength = blurIntensity
@@ -124,6 +133,13 @@ fun EdqiuApp(container: AppContainer) {
         ThemeEffects.GlassFrostStrength provides frostStrength,
         ThemeEffects.GlassRefractionStrength provides refractionIntensity,
         ThemeEffects.LiquidGlassEnabled provides liquidGlass,
+        ThemeEffects.GlassEdgeWidth provides glassEdgeWidth,
+        ThemeEffects.GlassEdgeLightStrength provides glassLightStrength,
+        ThemeEffects.GlassEdgeColor provides
+            // 0 = 跟随主题色哨兵：映射为 Unspecified，避免 Color(0)（透明黑）被当成有效覆盖色
+            if (glassEdgeColor == SettingsRepository.DEFAULT_GLASS_EDGE_COLOR) Color.Unspecified
+            else Color(glassEdgeColor),
+        ThemeEffects.GlassDimAmount provides glassDimAmount,
         com.ed.edqiu.ui.util.LocalHapticStrength provides hapticStrength
     ) {
         EdqiuTheme(

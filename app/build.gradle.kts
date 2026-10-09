@@ -48,8 +48,9 @@ android {
         //   ffmpeg zip 载荷内 libwebp* 等 5 个库仍是 4KB 对齐（libavcodec DT_NEEDED 直接依赖），
         //   16KB 页设备上 ffmpeg 功能不可用——需升级上游依赖或等待重打包后复测。
         targetSdk = 37
-        versionCode = 47
-        versionName = "1.7.0"
+        // 2026-10-09 v1.8.0：玻璃外观参数化（描边粗细/亮边强度/描边颜色/压暗程度）
+        versionCode = 48
+        versionName = "1.8.0"
 
         // 2026-09-15：只保留 arm64-v8a（Android 16/17 手机端均为 arm64），APK 从 225.9MB 降至约 80MB；
         // ffmpeg/yt-dlp 功能完整保留，x86 系模拟器不再支持

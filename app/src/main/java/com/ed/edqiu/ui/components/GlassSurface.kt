@@ -70,6 +70,8 @@ enum class GlassTier(
  * @param seedTop 顶部 seed 色叠加强度
  * @param seedBottom 底部 seed 色强度（通常略高于顶部，模拟下缘环境色回弹）
  * @param width 描边宽度
+ * @param lightStrength 亮边强度倍数（v1.8.0）：等比缩放四路高光 alpha，
+ *   1 = 中性（v1.7.0 观感），0 = 熄灭全部高光，1.6 = 强反光
  */
 fun Modifier.glassEdgeLight(
     shape: Shape,
@@ -78,23 +80,25 @@ fun Modifier.glassEdgeLight(
     whiteBottom: Float,
     seedTop: Float,
     seedBottom: Float,
-    width: Dp = 1.25.dp
+    width: Dp = 1.25.dp,
+    lightStrength: Float = 1f
 ): Modifier = this.drawWithContent {
     drawContent()
     val stroke = width.toPx()
     if (stroke <= 0f) return@drawWithContent
+    val ls = lightStrength.coerceAtLeast(0f)
     val halfInset = stroke / 2f
     // 垂直渐变决定"上亮下暖"的边缘特征
     val whiteBrush = Brush.verticalGradient(
         colors = listOf(
-            Color.White.copy(alpha = whiteTop),
-            Color.White.copy(alpha = whiteBottom)
+            Color.White.copy(alpha = (whiteTop * ls).coerceIn(0f, 1f)),
+            Color.White.copy(alpha = (whiteBottom * ls).coerceIn(0f, 1f))
         )
     )
     val seedBrush = Brush.verticalGradient(
         colors = listOf(
-            seed.copy(alpha = seedTop),
-            seed.copy(alpha = seedBottom)
+            seed.copy(alpha = (seedTop * ls).coerceIn(0f, 1f)),
+            seed.copy(alpha = (seedBottom * ls).coerceIn(0f, 1f))
         )
     )
     // 内描边：把形状尺寸向内缩一个线宽，再整体外移半个线宽 → 描边恰好贴内侧轮廓，
@@ -154,6 +158,11 @@ fun GlassSurface(
     val liquidGlass = ThemeEffects.LiquidGlassEnabled.current
     val transparency = ThemeEffects.GlassTransparency.current.coerceIn(0f, 1f)
     val frost = ThemeEffects.GlassFrostStrength.current.coerceIn(0f, 1f)
+    // 玻璃外观四项（v1.8.0）：默认中性元，老用户升级后观感不变
+    val edgeWidth = ThemeEffects.GlassEdgeWidth.current.coerceIn(0f, 2.5f)
+    val lightStrength = ThemeEffects.GlassEdgeLightStrength.current.coerceIn(0f, 1.6f)
+    val edgeColorOverride = ThemeEffects.GlassEdgeColor.current
+    val dim = ThemeEffects.effectiveDim(ThemeEffects.GlassDimAmount.current, dark)
 
     // 玻璃底色 = 半透明白（主体）+ 主题容器色 tint（带主题色的磨砂面板）
     // 透明度 t：底色 alpha 在 1.3x（实）与 0.55x（透）之间缩放——深色背景上卡片明度远高于背景，
@@ -176,19 +185,28 @@ fun GlassSurface(
     val tierSeed = MaterialTheme.colorScheme.primary
         .takeIf { it != Color.Unspecified && it.alpha > 0f }
         ?: tint
+    // 描边颜色覆盖（v1.8.0）：仅在用户显式选色时替换 seed 层，默认仍跟随主题色（单一色源）。
+    // 全透明色同样视作未覆盖——防止哨兵值误传导致描边消失。
+    val edgeSeed = if (edgeColorOverride != Color.Unspecified && edgeColorOverride.alpha > 0f) {
+        edgeColorOverride
+    } else {
+        tierSeed
+    }
     val m = modifier
         .clip(shape)
         .background(glassColor)
         .glassEdgeLight(
             shape = shape,
-            seed = tierSeed,
+            seed = edgeSeed,
             // 浅色主题：白高光为主；深色主题：白高光减弱让 seed 色更主导
             // 2026-09-28 区分度修复：seed 描边加权——浅背景上白色描边不可见，
             // 主题色描边承担卡片轮廓定义
             whiteTop = (if (dark) 0.20f else 0.26f) * tier.edgeLight,
             whiteBottom = (if (dark) 0.05f else 0.07f) * tier.edgeLight,
             seedTop = (if (dark) 0.22f else 0.20f) * tier.edgeLight,
-            seedBottom = (if (dark) 0.34f else 0.30f) * tier.edgeLight
+            seedBottom = (if (dark) 0.34f else 0.30f) * tier.edgeLight,
+            width = edgeWidth.dp,
+            lightStrength = lightStrength
         )
 
     Box(modifier = m) {
@@ -215,7 +233,7 @@ fun GlassSurface(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = (tier.edgeAlpha * 0.7f * tier.topLight).coerceAtMost(1f)),
+                                Color.White.copy(alpha = (tier.edgeAlpha * 0.7f * tier.topLight * lightStrength).coerceIn(0f, 1f)),
                                 Color.White.copy(alpha = tier.edgeAlpha * 0.08f),
                                 Color.Transparent
                             ),
@@ -247,7 +265,7 @@ fun GlassSurface(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = ((if (dark) 0.08f else 0.12f) * tier.topLight).coerceAtMost(1f)),
+                                Color.White.copy(alpha = ((if (dark) 0.08f else 0.12f) * tier.topLight * lightStrength).coerceIn(0f, 1f)),
                                 Color.White.copy(alpha = 0.015f),
                                 Color.Transparent
                             ),
@@ -316,6 +334,15 @@ fun GlassSurface(
                         )
                 )
             }
+        }
+        // 压暗程度（v1.8.0）：叠加在材质层之上、内容之下——只压暗玻璃本身，
+        // 不影响 content() 的文字对比度。dim=0（默认）时不产生任何绘制。
+        if (dim > 0f) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(Color.Black.copy(alpha = dim))
+            )
         }
         content()
     }
