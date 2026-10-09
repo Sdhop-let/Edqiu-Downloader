@@ -73,5 +73,5 @@ data（下载历史 / 台账）─→ backup（引擎 + 分片上传 + 各网盘
 - [CHANGELOG.md](CHANGELOG.md) — 版本历史
 - [release-automation.md](release-automation.md) — 发版流程
 - [webdav-cloud-backup-guide/](webdav-cloud-backup-guide/webdav-cloud-backup-guide.html) — WebDAV 备份图文指南
-- [figma-redesign/](figma-redesign/) — 液态玻璃设计原型
+- [design/](design/) — 设计资产：图标源文件、液态玻璃原型（HTML）
 - [archive/](archive/) — 历史文档（含早期包名时期的架构规划）
