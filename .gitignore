@@ -22,6 +22,14 @@ audit-ui-auto/
 snackbar-fix-compare/
 .trae-html-share-packages/
 
+# ===== tools/build_iter.sh 构建时「让位」的旧目录 =====
+# 脚本每轮会把 .gradle / app/build 改名成 <名>_iter<编号>（build_push.sh 早期版本为 _prev<时间戳>），
+# 不忽略的话每次构建都会在 git status 里冒出两个未跟踪目录
+.gradle_iter*/
+app/build_iter*/
+.gradle_prev*/
+app/build_prev*/
+
 # ===== 根目录调试产物（截图 / UI 转储 / 数据库 / 日志 / APK） =====
 /*.png
 /*.xml
