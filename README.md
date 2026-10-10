@@ -4,12 +4,12 @@
 
 Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数据只存在你自己的手机和网盘里。
 
-[**下载 v1.8.0**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
+[**下载 v1.9.0**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
 
 [![Release CI](https://img.shields.io/badge/发版-推送_tag_自动构建-2EA043)](.github/workflows/release.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-F0B429)](LICENSE)
 
-> v1.8.0（versionCode 48）· Android 7.0+（API 24）· 仅 arm64-v8a
+> v1.9.0（versionCode 49）· Android 7.0+（API 24）· 仅 arm64-v8a
 > 曾用名：XInvox / EsQp / TwitterDownloader（已合并为 Edqiu）
 
 ---
@@ -23,7 +23,7 @@ Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数
 | **媒体库** | 按作者 / 日期分组；pHash 感知哈希查重；发布时间联网补拉、画质升级 |
 | **播放器** | 抖音式纵向滑动流，按素材类型分流；媒体框比例跟手形变、切条零黑帧；倍速 / 横屏 / seek |
 | **云备份** | 百度 / 123 / 阿里 / 自定义 WebDAV 直连；分片上传 + 断点续传 + 秒传；历史 JSON 备份（SHA-256 校验） |
-| **界面** | Material 3 + 壁纸动态取色（Monet）；液态玻璃（透明度 / 磨砂 / 折射 / 描边 / 亮边 / 压暗可调） |
+| **界面** | iOS 26/27 Liquid Glass 设计语言；固定中性配色（浅色清透白 / 深色石墨黑）+ 单一强调色；玻璃透明度 / 磨砂 / 折射 / 描边 / 亮边 / 压暗全参数可调 |
 
 ## 安装
 
@@ -52,12 +52,31 @@ JAVA_HOME="<JDK21>" ./gradlew :app:assembleRelease   # 需自备 keystore.proper
 
 ## 仓库结构
 
-```
-app/              应用源码（Kotlin + Compose）
-docs/             文档；docs/archive/ 为历史归档，docs/design/ 为设计资产
-tools/            开发辅助脚本（不参与构建）
-gradle/           Gradle wrapper
-```
+> 根目录下的 `build.gradle.kts`、`settings.gradle.kts`、`gradlew`、`gradle.properties`、`.gitignore`
+> 是 Gradle / Android 构建的**硬性约定位置**，必须位于仓库根目录——这是所有 Gradle 项目的标准形态，
+> 移入子文件夹会导致无法构建。下表逐一标注每个条目的用途。
+
+### 文件夹
+
+| 目录 | 用途 |
+|---|---|
+| **app/** | 应用全部源码与资源：Kotlin + Jetpack Compose，`app/src/main/java/com/ed/edqiu/` 下按 `ui/`（页面与组件）、`data/`（数据库与仓库）、`downloader/`（三级下载引擎）、`backup/`（网盘直连）、`player/`（播放器控制层）、`navigation/`（双层导航）等分包 |
+| **docs/** | 项目文档：版本历史（CHANGELOG）、各版本发布说明（RELEASE_NOTES-\*）、架构说明、发版自动化、WebDAV 图文指南；子目录 `design/` 为图标源文件与液态玻璃原型，`archive/` 为历史文档归档 |
+| **tools/** | 开发辅助脚本（产物归档、构建推送、UI 一致性审核等），不参与 App 构建，仅本机开发用 |
+| **gradle/wrapper/** | Gradle Wrapper 本体（`gradle-wrapper.jar` + `gradle-wrapper.properties`），保证任何人克隆后用统一版本构建 |
+| **.github/workflows/** | GitHub Actions 工作流：`release.yml`（推 `v*` tag 自动签名构建并发布 Release） |
+
+### 根目录文件
+
+| 文件 | 用途 |
+|---|---|
+| **README.md** | 本文件——项目门面页 |
+| **build.gradle.kts** | 根构建脚本：声明插件版本（AGP / Kotlin / KSP），子模块配置在 `app/build.gradle.kts` |
+| **settings.gradle.kts** | 工程设置：模块注册、依赖仓库源（google / mavenCentral / 本地构件仓） |
+| **gradle.properties** | Gradle 与 Android 构建参数（JVM 内存、AndroidX 开关、非 SDK 依赖注入位） |
+| **gradlew** / **gradlew.bat** | Gradle Wrapper 启动器（Linux/Mac 与 Windows 两个入口） |
+| **.gitignore** | Git 忽略规则（构建产物、签名文件、本地配置不入库） |
+| **LICENSE** | 开源协议：Apache License 2.0 |
 
 ## 隐私与权限
 
@@ -84,7 +103,7 @@ Cookie、网盘凭证等登录态经 AndroidKeyStore + AES/GCM 加密存储，�
 | 文档 | 说明 |
 |---|---|
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | **全部版本历史**（v1.3.0 起） |
-| [docs/RELEASE_NOTES-1.8.0.md](docs/RELEASE_NOTES-1.8.0.md) | 当前版本完整说明 |
+| [docs/RELEASE_NOTES-1.9.0.md](docs/RELEASE_NOTES-1.9.0.md) | 当前版本完整说明 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构：技术栈、模块划分、主要链路 |
 | [docs/release-automation.md](docs/release-automation.md) | 发版流程 |
 | [docs/webdav-cloud-backup-guide/](docs/webdav-cloud-backup-guide/webdav-cloud-backup-guide.html) | WebDAV 备份图文指南 |
@@ -95,7 +114,6 @@ Cookie、网盘凭证等登录态经 AndroidKeyStore + AES/GCM 加密存储，�
 
 - [youtubedl-android](https://github.com/JunkFood02/youtubedl-android)（yt-dlp / ffmpeg Android 封装）
 - [AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)（液态玻璃 Backdrop）
-- [materialkolor](https://github.com/jordond/materialkolor)（动态取色）
 - [Titanic](https://github.com/romainpiel/Titanic)（开屏水波动画）
 - FXTwitter API、yt-dlp 项目
 
