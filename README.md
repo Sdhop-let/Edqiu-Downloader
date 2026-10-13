@@ -4,12 +4,12 @@
 
 Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数据只存在你自己的手机和网盘里。
 
-[**下载 v1.9.0**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
+[**下载 v1.9.1**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
 
 [![Release CI](https://img.shields.io/badge/发版-推送_tag_自动构建-2EA043)](.github/workflows/release.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-F0B429)](LICENSE)
 
-> v1.9.0（versionCode 49）· Android 7.0+（API 24）· 仅 arm64-v8a
+> v1.9.1（versionCode 50）· Android 7.0+（API 24）· 仅 arm64-v8a
 > 曾用名：XInvox / EsQp / TwitterDownloader（已合并为 Edqiu）
 
 ---
@@ -23,7 +23,7 @@ Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数
 | **媒体库** | 按作者 / 日期分组；pHash 感知哈希查重；发布时间联网补拉、画质升级 |
 | **播放器** | 抖音式纵向滑动流，按素材类型分流；媒体框比例跟手形变、切条零黑帧；倍速 / 横屏 / seek |
 | **云备份** | 百度 / 123 / 阿里 / 自定义 WebDAV 直连；分片上传 + 断点续传 + 秒传；历史 JSON 备份（SHA-256 校验） |
-| **界面** | iOS 26/27 Liquid Glass 设计语言；固定中性配色（浅色清透白 / 深色石墨黑）+ 单一强调色；玻璃透明度 / 磨砂 / 折射 / 描边 / 亮边 / 压暗全参数可调 |
+| **界面** | iOS 26/27 Liquid Glass 设计语言；固定中性配色（浅色清透白 / 深色石墨黑）+ 单一强调色；玻璃透明度 / 磨砂 / 折射 / 描边 / 亮边 / 压暗全参数可调；统一组件语言——玻璃卡片 / 填充式输入场 / 勾选圆圈 / 滑杆 / 分段胶囊 / 弹窗体系 |
 
 ## 安装
 
@@ -103,11 +103,11 @@ Cookie、网盘凭证等登录态经 AndroidKeyStore + AES/GCM 加密存储，�
 | 文档 | 说明 |
 |---|---|
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | **全部版本历史**（v1.3.0 起） |
-| [docs/RELEASE_NOTES-1.9.0.md](docs/RELEASE_NOTES-1.9.0.md) | 当前版本完整说明 |
+| [docs/RELEASE_NOTES-1.9.1.md](docs/RELEASE_NOTES-1.9.1.md) | 当前版本完整说明 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构：技术栈、模块划分、主要链路 |
 | [docs/release-automation.md](docs/release-automation.md) | 发版流程 |
 | [docs/webdav-cloud-backup-guide/](docs/webdav-cloud-backup-guide/webdav-cloud-backup-guide.html) | WebDAV 备份图文指南 |
-| [docs/design/](docs/design/) | 设计资产：图标源文件、液态玻璃原型 |
+| [docs/design/](docs/design/) | 设计资产：图标源文件、液态玻璃原型、设计验收清单（AUDIT-CHECKLIST.md） |
 | [docs/archive/](docs/archive/) | 历史文档归档 |
 
 ## 致谢
