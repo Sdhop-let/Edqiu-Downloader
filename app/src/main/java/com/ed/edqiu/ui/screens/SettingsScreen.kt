@@ -60,7 +60,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -105,6 +104,7 @@ import com.ed.edqiu.backup.provider.WebDavCredential
 import com.ed.edqiu.background.WebDavAutoBackupScheduler
 import com.ed.edqiu.BuildConfig
 import com.ed.edqiu.ui.components.EdgeSwipeBackBox
+import com.ed.edqiu.ui.components.EdqiuTextField
 import com.ed.edqiu.ui.components.FeedbackKind
 import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.components.FeedbackDialog
@@ -674,22 +674,20 @@ fun SettingsScreen(
                     if (proxyEnabled) {
                         Spacer(Modifier.height(12.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
+                            EdqiuTextField(
                                 value = proxyHost,
                                 onValueChange = { proxyHost = it },
                                 modifier = Modifier.weight(1f),
-                                label = { Text("主机") },
-                                singleLine = true,
-                                shape = RoundedCornerShape(14.dp)
+                                label = "主机",
+                                singleLine = true
                             )
-                            OutlinedTextField(
+                            EdqiuTextField(
                                 value = proxyPort,
                                 onValueChange = { value -> if (value.isEmpty() || value.all(Char::isDigit)) proxyPort = value },
                                 modifier = Modifier.width(118.dp),
-                                label = { Text("端口") },
+                                label = "端口",
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                shape = RoundedCornerShape(14.dp)
+                                singleLine = true
                             )
                         }
                         Spacer(Modifier.height(8.dp))
@@ -795,22 +793,20 @@ fun SettingsScreen(
                         icon = Icons.Outlined.Cookie
                     )
                     Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
+                    EdqiuTextField(
                         value = authToken,
                         onValueChange = { authToken = it },
-                        label = { Text("auth_token") },
+                        label = "auth_token",
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp)
+                        singleLine = true
                     )
                     Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
+                    EdqiuTextField(
                         value = ct0,
                         onValueChange = { ct0 = it },
-                        label = { Text("ct0") },
+                        label = "ct0",
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp)
+                        singleLine = true
                     )
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -852,23 +848,21 @@ fun SettingsScreen(
                         }
                     }
                     Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
+                    EdqiuTextField(
                         value = tpEndpoint,
                         onValueChange = { tpEndpoint = it },
-                        label = { Text("API 端点（支持 {id} 占位符）") },
-                        placeholder = { Text("https://api.example.com/twitter/status/{id}") },
+                        label = "API 端点（支持 {id} 占位符）",
+                        placeholder = "https://api.example.com/twitter/status/{id}",
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp)
+                        singleLine = true
                     )
                     Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
+                    EdqiuTextField(
                         value = tpApiKey,
                         onValueChange = { tpApiKey = it },
-                        label = { Text("API Key（可留空）") },
+                        label = "API Key（可留空）",
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp)
+                        singleLine = true
                     )
                     Spacer(Modifier.height(10.dp))
                     Button(
@@ -941,44 +935,40 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.height(12.dp))
-                        OutlinedTextField(
+                        EdqiuTextField(
                             value = webDavServerUrl,
                             // 2026-10 P1 整改：不再逐字符落盘（半成品 URL 会被周期自动备份读到）
                             onValueChange = { webDavServerUrl = it },
-                            label = { Text("WebDAV 地址") },
-                            placeholder = { Text("https://example.com/dav") },
+                            label = "WebDAV 地址",
+                            placeholder = "https://example.com/dav",
                             modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp)
+                            singleLine = true
                         )
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
+                            EdqiuTextField(
                                 value = webDavUsername,
                                 onValueChange = { webDavUsername = it },
-                                label = { Text("账号") },
+                                label = "账号",
                                 modifier = Modifier.weight(1f),
-                                singleLine = true,
-                                shape = RoundedCornerShape(14.dp)
+                                singleLine = true
                             )
-                            OutlinedTextField(
+                            EdqiuTextField(
                                 value = webDavPassword,
                                 onValueChange = { webDavPassword = it },
-                                label = { Text("密码") },
+                                label = "密码",
                                 modifier = Modifier.weight(1f),
                                 singleLine = true,
-                                visualTransformation = PasswordVisualTransformation(),
-                                shape = RoundedCornerShape(14.dp)
+                                visualTransformation = PasswordVisualTransformation()
                             )
                         }
                         Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
+                        EdqiuTextField(
                             value = webDavRemotePath,
                             onValueChange = { webDavRemotePath = it },
-                            label = { Text("远程目录") },
+                            label = "远程目录",
                             modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp)
+                            singleLine = true
                         )
                         Spacer(Modifier.height(10.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -1155,17 +1145,16 @@ fun SettingsScreen(
                                     },
                                 )
                             }
-                            OutlinedTextField(
+                            EdqiuTextField(
                                 value = batchSizeText,
                                 onValueChange = { value ->
                                     batchSizeText = value.filter(Char::isDigit).take(2)
                                     batchSizeText.toIntOrNull()?.let { preDownloadPrefs.batchSize = it }
                                 },
                                 modifier = Modifier.width(96.dp),
-                                label = { Text("自定义") },
+                                label = "自定义",
                                 singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                shape = RoundedCornerShape(14.dp)
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                             )
                         }
                         Spacer(Modifier.height(12.dp))

@@ -57,7 +57,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -101,6 +100,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.data.model.SavedLink
+import com.ed.edqiu.ui.components.EdqiuTextField
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.rememberTitleCollapseProgress
@@ -446,11 +446,12 @@ fun ListScreen(
             onDismissRequest = { showPasteDialog = false },
             title = { Text("粘贴 X/Twitter 链接") },
             text = {
-                OutlinedTextField(
+                EdqiuTextField(
                     value = pasteText,
                     onValueChange = { pasteText = it },
-                    placeholder = { Text("https://x.com/.../status/...") },
+                    placeholder = "https://x.com/.../status/...",
                     modifier = Modifier.fillMaxWidth(),
+                    singleLine = false,
                     minLines = 3
                 )
             },

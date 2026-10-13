@@ -9,11 +9,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import com.ed.edqiu.ui.components.EdqiuTextField
 import com.ed.edqiu.ui.components.SmoothAlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -123,11 +123,11 @@ fun AliAuthDialog(
                     text = "自动获取失败？可在网页登录后，从阿里云盘开放平台 / 登录工具中复制 refresh_token 粘贴到下方：",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                OutlinedTextField(
+                EdqiuTextField(
                     value = pasted,
                     onValueChange = { pasted = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("粘贴 refresh_token") },
+                    placeholder = "粘贴 refresh_token",
                     singleLine = true,
                 )
             }

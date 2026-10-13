@@ -27,9 +27,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -126,9 +123,11 @@ fun LinkCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (selectionMode) {
-                Checkbox(
+                CheckCircle(
                     checked = selected,
-                    onCheckedChange = { onSelectionToggle() }
+                    onCheckedChange = { onSelectionToggle() },
+                    // 补偿原 M3 Checkbox 的 48dp 触达占位，行左缘节奏不变
+                    modifier = Modifier.padding(horizontal = 8.dp)
                 )
             }
             // 批量模式下也保留视频/图片预览缩略图（勾选框与缩略图并排）

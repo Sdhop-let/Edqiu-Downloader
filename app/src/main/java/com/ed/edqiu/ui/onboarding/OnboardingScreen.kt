@@ -30,7 +30,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -53,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp as lerpDp
 import androidx.compose.ui.unit.sp
 import com.ed.edqiu.data.model.ProxySettings
+import com.ed.edqiu.ui.components.EdqiuTextField
 import com.ed.edqiu.data.preferences.CookiePreferences
 import com.ed.edqiu.data.preferences.ProxyPreferences
 import com.ed.edqiu.data.preferences.SettingsRepository
@@ -306,20 +306,20 @@ private fun CookieStep(
             )
             Spacer(Modifier.height(10.dp))
         }
-        OutlinedTextField(
+        EdqiuTextField(
             value = authToken,
             onValueChange = { authToken = it.trim() },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("auth_token") },
+            label = "auth_token",
             singleLine = true,
             visualTransformation = PasswordVisualTransformation()
         )
         Spacer(Modifier.height(10.dp))
-        OutlinedTextField(
+        EdqiuTextField(
             value = ct0,
             onValueChange = { ct0 = it.trim() },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("ct0") },
+            label = "ct0",
             singleLine = true,
             visualTransformation = PasswordVisualTransformation()
         )
@@ -386,18 +386,18 @@ private fun ProxyStep(
         if (enabled) {
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
+                EdqiuTextField(
                     value = host,
                     onValueChange = { host = it },
                     modifier = Modifier.weight(1f),
-                    label = { Text("主机") },
+                    label = "主机",
                     singleLine = true
                 )
-                OutlinedTextField(
+                EdqiuTextField(
                     value = port,
                     onValueChange = { value -> if (value.isEmpty() || value.all(Char::isDigit)) port = value },
                     modifier = Modifier.width(110.dp),
-                    label = { Text("端口") },
+                    label = "端口",
                     singleLine = true
                 )
             }

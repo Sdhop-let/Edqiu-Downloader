@@ -37,7 +37,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -65,6 +64,7 @@ import com.ed.edqiu.backup.model.BackupTask
 import com.ed.edqiu.backup.model.BackupTaskStatus
 import com.ed.edqiu.backup.model.ProviderId
 import com.ed.edqiu.ui.components.DynamicSwitch
+import com.ed.edqiu.ui.components.EdqiuTextField
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.components.FeedbackDialog
@@ -749,34 +749,34 @@ private fun WebDavCredentialDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(subtitle, style = MaterialTheme.typography.bodySmall)
-                OutlinedTextField(
+                EdqiuTextField(
                     value = serverUrl,
                     onValueChange = { serverUrl = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text(serverUrlLabel) },
-                    placeholder = { Text(serverUrlPlaceholder) },
+                    label = serverUrlLabel,
+                    placeholder = serverUrlPlaceholder,
                     singleLine = true,
                 )
-                OutlinedTextField(
+                EdqiuTextField(
                     value = username,
                     onValueChange = { username = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("账号") },
+                    label = "账号",
                     singleLine = true,
                 )
-                OutlinedTextField(
+                EdqiuTextField(
                     value = password,
                     onValueChange = { password = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("密码 / WebDAV 密码") },
+                    label = "密码 / WebDAV 密码",
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                 )
-                OutlinedTextField(
+                EdqiuTextField(
                     value = remotePath,
                     onValueChange = { remotePath = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("远程根目录（可选）") },
+                    label = "远程根目录（可选）",
                     singleLine = true,
                 )
                 error?.let {

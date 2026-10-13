@@ -49,7 +49,6 @@ import androidx.compose.animation.core.tween
 import com.ed.edqiu.ui.components.SmoothAlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -105,6 +104,7 @@ import com.ed.edqiu.data.database.DownloadHistoryEntity
 import com.ed.edqiu.data.model.MediaType
 import com.ed.edqiu.ui.components.ThumbnailWithFallback
 import com.ed.edqiu.viewmodel.HistoryViewModel
+import com.ed.edqiu.ui.components.EdqiuTextField
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import java.io.File
@@ -701,13 +701,12 @@ private fun LibraryHeader(
             }
             // ── 搜索条（展开时出现，2026-09-15 批次5）──
             AnimatedVisibility(visible = searchActive) {
-                OutlinedTextField(
+                EdqiuTextField(
                     value = searchQuery,
                     onValueChange = onSearchQueryChange,
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("搜索文案、作者或文件名", style = MaterialTheme.typography.bodySmall) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp)
+                    placeholder = "搜索文案、作者或文件名",
+                    singleLine = true
                 )
             }
             // ── 视图行：排序准则说明 + 分组切换 pill（低频操作降级到次行）──

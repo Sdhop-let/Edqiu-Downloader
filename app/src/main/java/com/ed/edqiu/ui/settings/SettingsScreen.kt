@@ -68,7 +68,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -105,6 +104,7 @@ import com.ed.edqiu.data.preferences.DownloadPathPreferences
 import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.BuildConfig
 import com.ed.edqiu.ui.components.DynamicSwitch
+import com.ed.edqiu.ui.components.EdqiuTextField
 import com.ed.edqiu.ui.components.FeedbackKind
 import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.components.EdqiuSlider
@@ -387,13 +387,12 @@ fun SettingsScreen(
             }
             if (useCustomDownloadPath) {
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
+                EdqiuTextField(
                     value = downloadManualPath.takeIf { !it.startsWith("content://") } ?: "",
                     onValueChange = { downloadManualPath = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("手动保存路径") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(16.dp)
+                    label = "手动保存路径",
+                    singleLine = true
                 )
                 Spacer(Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -437,13 +436,12 @@ fun SettingsScreen(
                 trailing = { Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted) },
                 onClick = { monitorPicker.launch(null) }
             )
-            OutlinedTextField(
+            EdqiuTextField(
                 value = manualMonitorPath,
                 onValueChange = { manualMonitorPath = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("手动监控路径") },
-                singleLine = true,
-                shape = RoundedCornerShape(16.dp)
+                label = "手动监控路径",
+                singleLine = true
             )
             var detecting by remember { mutableStateOf(false) }
             Row(
@@ -550,13 +548,12 @@ fun SettingsScreen(
                     shape = RoundedCornerShape(16.dp)
                 ) { Text("去授予文件访问权限") }
             }
-            OutlinedTextField(
+            EdqiuTextField(
                 value = manualBackupPath,
                 onValueChange = { manualBackupPath = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("手动备份路径") },
-                singleLine = true,
-                shape = RoundedCornerShape(16.dp)
+                label = "手动备份路径",
+                singleLine = true
             )
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilledTonalButton(

@@ -17,12 +17,12 @@ fun UrlInputBar(
     modifier: Modifier = Modifier
 ) {
     Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
+        EdqiuTextField(
             value = url,
             onValueChange = onUrlChange,
             modifier = Modifier.weight(1f),
             singleLine = true,
-            placeholder = { Text("粘贴 X/Twitter 链接") }
+            placeholder = "粘贴 X/Twitter 链接"
         )
         Button(onClick = onResolve, enabled = !isLoading && url.isNotBlank()) {
             Text(if (isLoading) "解析中" else "解析")
