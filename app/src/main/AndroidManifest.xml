@@ -48,12 +48,18 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/full_backup_content"
         android:requestLegacyExternalStorage="true"
+        android:usesCleartextTraffic="true"
         android:enableOnBackInvokedCallback="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Edqiu"
         tools:targetApi="31">
+        <!-- 2026-10 WebDAV 双向同步批次：usesCleartextTraffic=true —— targetSdk 28+ 默认
+             禁明文 http，会把 CloudDrive2 / alist / 群晖 http://192.168.x.x 局域网地址全部
+             拒掉（"Cleartext HTTP traffic not permitted"）。本 App 服务器地址完全由用户
+             填写（下载/解析 API 均为 https），必须放行明文；http 明文含 Basic Auth 凭证，
+             公网服务仍建议 https（见 docs/WEBDAV-SYNC.md §9） -->
 
         <!-- Titanic 开屏动画（2026-09-30）：LAUNCHER 入口，3s 后进 MainActivity；
              shortcuts meta-data 必须挂在 LAUNCHER activity 上，随入口一并迁来 -->

@@ -4,12 +4,12 @@
 
 Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数据只存在你自己的手机和网盘里。
 
-[**下载 v1.9.1**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
+[**下载 v1.9.2**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
 
 [![Release CI](https://img.shields.io/badge/发版-推送_tag_自动构建-2EA043)](.github/workflows/release.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-F0B429)](LICENSE)
 
-> v1.9.1（versionCode 50）· Android 7.0+（API 24）· 仅 arm64-v8a
+> v1.9.2（versionCode 51）· Android 7.0+（API 24）· 仅 arm64-v8a
 > 曾用名：XInvox / EsQp / TwitterDownloader（已合并为 Edqiu）
 
 ---
@@ -103,7 +103,7 @@ Cookie、网盘凭证等登录态经 AndroidKeyStore + AES/GCM 加密存储，�
 | 文档 | 说明 |
 |---|---|
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | **全部版本历史**（v1.3.0 起） |
-| [docs/RELEASE_NOTES-1.9.1.md](docs/RELEASE_NOTES-1.9.1.md) | 当前版本完整说明 |
+| [docs/RELEASE_NOTES-1.9.2.md](docs/RELEASE_NOTES-1.9.2.md) | 当前版本完整说明 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构：技术栈、模块划分、主要链路 |
 | [docs/release-automation.md](docs/release-automation.md) | 发版流程 |
 | [docs/webdav-cloud-backup-guide/](docs/webdav-cloud-backup-guide/webdav-cloud-backup-guide.html) | WebDAV 备份图文指南 |

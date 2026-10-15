@@ -3,24 +3,20 @@ package com.ed.edqiu.di
 import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import com.ed.edqiu.backup.data.BackupLedgerRepository
-import com.ed.edqiu.backup.data.BackupTaskStore
-import com.ed.edqiu.backup.data.CredentialStore
-import com.ed.edqiu.backup.engine.BackupEngine
-import com.ed.edqiu.backup.provider.ProviderRegistry
 import com.ed.edqiu.capture.LinkCaptureCoordinator
 import com.ed.edqiu.data.backup.HistoryBackupRepository
+import com.ed.edqiu.data.preferences.CloudSyncPreferences
 import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.data.repository.LinkHistoryRepository
 import com.ed.edqiu.data.repository.SavedLinkRepository
 import com.ed.edqiu.predownload.PreDownloadManager
-import com.ed.edqiu.ui.backup.CloudBackupViewModel
 import com.ed.edqiu.ui.backup.MediaBackupViewModel
 import com.ed.edqiu.ui.authors.AuthorsViewModel
 import com.ed.edqiu.ui.detail.DetailViewModel
 import com.ed.edqiu.ui.history.HistoryViewModel
 import com.ed.edqiu.ui.list.ListViewModel
 import com.ed.edqiu.ui.settings.BackupViewModel
+import com.ed.edqiu.ui.subscription.SubscriptionViewModel
 
 /** 手动 DI 工厂：按类返回对应 ViewModel。 */
 class EdqiuViewModelFactory(
@@ -29,11 +25,7 @@ class EdqiuViewModelFactory(
     private val linkCaptureCoordinator: LinkCaptureCoordinator,
     private val linkHistoryRepository: LinkHistoryRepository,
     private val historyBackupRepository: HistoryBackupRepository,
-    private val backupProviderRegistry: ProviderRegistry,
-    private val backupTaskStore: BackupTaskStore,
-    private val backupEngine: BackupEngine,
-    private val backupCredentialStore: CredentialStore,
-    private val backupLedgerRepository: BackupLedgerRepository,
+    private val cloudSyncPreferences: CloudSyncPreferences,
     private val preDownloadManager: PreDownloadManager,
     // 应用级下载作用域：收件箱/详情页下载执行不随页面销毁中断（退后台继续下载）
     private val downloadScope: kotlinx.coroutines.CoroutineScope,
@@ -63,25 +55,15 @@ class EdqiuViewModelFactory(
                     historyRepository = linkHistoryRepository,
                     savedLinkRepository = savedLinkRepository
                 ) as T
-            modelClass.isAssignableFrom(CloudBackupViewModel::class.java) ->
-                CloudBackupViewModel(
-                    application = application,
-                    registry = backupProviderRegistry,
-                    engine = backupEngine,
-                    taskStore = backupTaskStore,
-                    credentialStore = backupCredentialStore,
-                    ledgerRepository = backupLedgerRepository,
-                    settingsRepository = settingsRepository
-                ) as T
+            // 2026-10 轻量对账版：仅依赖每网盘独立配置（PROPFIND 实时对账，无引擎/账本）
             modelClass.isAssignableFrom(MediaBackupViewModel::class.java) ->
                 MediaBackupViewModel(
                     application = application,
-                    registry = backupProviderRegistry,
-                    engine = backupEngine,
-                    taskStore = backupTaskStore,
-                    ledgerRepository = backupLedgerRepository,
-                    settingsRepository = settingsRepository
+                    cloudSyncPreferences = cloudSyncPreferences
                 ) as T
+            // 2026-10 作品订阅页（多平台检测中枢 UI）
+            modelClass.isAssignableFrom(SubscriptionViewModel::class.java) ->
+                SubscriptionViewModel(application) as T
             modelClass.isAssignableFrom(AuthorsViewModel::class.java) ->
                 AuthorsViewModel(savedLinkRepository, settingsRepository) as T
             else -> throw IllegalArgumentException("未知的 ViewModel: $modelClass")

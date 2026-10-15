@@ -12,7 +12,7 @@ import com.ed.edqiu.data.model.MediaType
 
 @Database(
     entities = [DownloadHistoryEntity::class, DownloadTaskEntity::class, SubscriptionEntity::class],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 @TypeConverters(AppDatabase.Converters::class)
@@ -222,6 +222,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 2026-10 真正作品订阅（v12）：subscriptions 加 platform 列（twitter/bluesky/
+         * instagram），存量订阅默认 twitter；检测器按平台分发（推/ytdlp、蓝/公共 AppView、
+         * IG/ytdlp 实验性）。
+         */
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE subscriptions ADD COLUMN platform TEXT NOT NULL DEFAULT 'twitter'"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -232,7 +245,7 @@ abstract class AppDatabase : RoomDatabase() {
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                    MIGRATION_9_10, MIGRATION_10_11
+                    MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
                 )
                 // 2026-10 安全整改：移除 fallbackToDestructiveMigration()——
                 // 升级路径 schema 漂移时它会把整库（下载历史/任务/订阅）静默删除重建。

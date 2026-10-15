@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -98,9 +99,12 @@ import com.ed.edqiu.data.proxy.ProxyTester
 import com.ed.edqiu.service.AppUpdateInfo
 import com.ed.edqiu.service.AppUpdateService
 import com.ed.edqiu.service.WebDavManualSync
+import com.ed.edqiu.service.WebDavSyncPhase
+import com.ed.edqiu.service.WebDavSyncProgress
 import com.ed.edqiu.service.YoutubeDLService
 import com.ed.edqiu.backup.provider.WebDavEngine
 import com.ed.edqiu.backup.provider.WebDavCredential
+import com.ed.edqiu.data.preferences.WebDavAccountConfig
 import com.ed.edqiu.background.WebDavAutoBackupScheduler
 import com.ed.edqiu.BuildConfig
 import com.ed.edqiu.ui.components.EdgeSwipeBackBox
@@ -137,8 +141,6 @@ fun SettingsScreen(
     showBack: Boolean = false,
     section: String? = null,
     onOpenMediaBackup: () -> Unit = {},
-    // 2026-10：网盘备份中心整合进 WebDAV 同步页（原「我的 → 网盘备份中心」独立入口移除）
-    onOpenCloudBackup: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -190,8 +192,14 @@ fun SettingsScreen(
     // 回到本页补看结果；此前的 rememberCoroutineScope 版本会在离开页面时静默取消上传
     val webDavSyncState by WebDavManualSync.state.collectAsStateWithLifecycle()
     val isWebDavSyncing = webDavSyncState is WebDavManualSync.State.Syncing
+    // 实时同步进度（第 i/N 个文件 + 单文件字节进度），驱动连接状态面板的进度条
+    val webDavSyncProgress = (webDavSyncState as? WebDavManualSync.State.Syncing)?.progress
     var isTestingConnection by remember { mutableStateOf(false) }
     var connectionVerified by remember { mutableStateOf(false) }
+    // 上次连接验证时间（epoch ms）：0 = 从未验证；驱动「连接状态」面板的鉴权结果展示
+    var lastVerifiedAt by remember { mutableLongStateOf(0L) }
+    // 允许自签名证书（HTTPS 自建 NAS 场景）；默认关
+    var allowInsecureTls by remember { mutableStateOf(false) }
     var autoBackupEnabled by remember { mutableStateOf(false) }
     var autoBackupDays by remember { mutableIntStateOf(1) }
     // WebDAV 配置是否已从磁盘加载完成（去抖落盘防覆写开关，见下方 snapshotFlow）
@@ -239,35 +247,21 @@ fun SettingsScreen(
         displayPath = pathPreferences.displayDownloadDir(context)
 
         useWebDavSync = cloudSyncPreferences.enabled
-        webDavServerUrl = cloudSyncPreferences.serverUrl
-        webDavUsername = cloudSyncPreferences.username
-        webDavPassword = cloudSyncPreferences.password
-        webDavRemotePath = cloudSyncPreferences.remotePath
         webDavProviderId = cloudSyncPreferences.providerId
+        // 2026-10 每网盘独立配置：输入框加载当前选中预设自己的凭证（cfg_{pid}_*）
+        val account = cloudSyncPreferences.accountFor(webDavProviderId)
+        webDavServerUrl = account.serverUrl
+        webDavUsername = account.username
+        webDavPassword = account.password
+        webDavRemotePath = account.remotePath.ifBlank { "Edqiu" }
+        connectionVerified = account.verified
+        lastVerifiedAt = account.verifiedAt
         lastSyncTime = cloudSyncPreferences.lastSyncTime
         syncedCount = cloudSyncPreferences.syncedFileCount
-        connectionVerified = cloudSyncPreferences.connectionVerified
+        allowInsecureTls = cloudSyncPreferences.allowInsecureTls
         autoBackupEnabled = cloudSyncPreferences.autoBackupEnabled
         autoBackupDays = cloudSyncPreferences.autoBackupDays
         webDavLoaded = true
-    }
-
-    // 2026-10 修复「页面异常」：WebDAV 四个输入框此前只在「测试连接」时落盘——
-    // 编辑后直接退出 = 改动静默丢失；直接点「立即同步」= 实际跑的是旧落盘配置
-    // （页面显示新值、同步读旧值）。与代理项同款方案：snapshotFlow + 600ms 去抖落盘，
-    // webDavLoaded 防止加载前的初始空值覆写已存配置。
-    LaunchedEffect(webDavLoaded) {
-        if (!webDavLoaded) return@LaunchedEffect
-        snapshotFlow {
-            listOf(webDavServerUrl, webDavUsername, webDavPassword, webDavRemotePath)
-        }
-            .debounce(600)
-            .collect {
-                cloudSyncPreferences.serverUrl = webDavServerUrl
-                cloudSyncPreferences.username = webDavUsername
-                cloudSyncPreferences.password = webDavPassword
-                cloudSyncPreferences.remotePath = webDavRemotePath
-            }
     }
 
     // 后台同步结果提醒（2026-10）：页面在前台时同步完成直接弹反馈；
@@ -277,9 +271,11 @@ fun SettingsScreen(
             is WebDavManualSync.State.Succeeded -> {
                 lastSyncTime = cloudSyncPreferences.lastSyncTime
                 syncedCount = cloudSyncPreferences.syncedFileCount
+                val r = state.result
+                val conflictNote = if (r.conflicts > 0) "，冲突 ${r.conflicts} 个（本地已保留，云端旧版改名 conflict-*）" else ""
                 inlineFeedback = FeedbackMessage(
-                    "同步完成：新增 ${state.added} 个，跳过 ${state.skipped} 个",
-                    FeedbackKind.SUCCESS
+                    "双向同步完成：上传 ${r.uploaded} 个，下载 ${r.downloaded} 个，一致跳过 ${r.skippedExisting} 个$conflictNote",
+                    if (r.conflicts > 0) FeedbackKind.NEUTRAL else FeedbackKind.SUCCESS
                 )
                 WebDavManualSync.consumeResult()
             }
@@ -914,17 +910,21 @@ fun SettingsScreen(
                         Spacer(Modifier.height(6.dp))
                         WebDavProviderSelector(
                             selectedProviderId = webDavProviderId,
+                            // 2026-10 每网盘独立配置：切换预设 = 切换到该网盘自己的凭证命名空间。
+                            // 未保存的编辑直接丢弃（保存语义 = 测试连接成功才落盘）；
+                            // 该网盘已保存过地址则显示已存值，模板仅在该网盘首次配置时填入。
                             onProviderSelected = { provider ->
                                 webDavProviderId = provider.id
                                 cloudSyncPreferences.providerId = provider.id
-                                if (provider.serverUrlTemplate.isNotBlank()) {
-                                    webDavServerUrl = provider.serverUrlTemplate
-                                    cloudSyncPreferences.serverUrl = provider.serverUrlTemplate
+                                val saved = cloudSyncPreferences.accountFor(provider.id)
+                                webDavServerUrl = saved.serverUrl.ifBlank { provider.serverUrlTemplate }
+                                webDavUsername = saved.username
+                                webDavPassword = saved.password
+                                webDavRemotePath = saved.remotePath.ifBlank {
+                                    provider.remotePathTemplate.ifBlank { "Edqiu" }
                                 }
-                                if (provider.remotePathTemplate.isNotBlank()) {
-                                    webDavRemotePath = provider.remotePathTemplate
-                                    cloudSyncPreferences.remotePath = provider.remotePathTemplate
-                                }
+                                connectionVerified = saved.verified
+                                lastVerifiedAt = saved.verifiedAt
                             }
                         )
                         Spacer(Modifier.height(6.dp))
@@ -972,45 +972,55 @@ fun SettingsScreen(
                         )
                         Spacer(Modifier.height(10.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                            OutlinedButton(
-                                onClick = {
-                                    cloudSyncPreferences.serverUrl = webDavServerUrl
-                                    cloudSyncPreferences.username = webDavUsername
-                                    cloudSyncPreferences.password = webDavPassword
-                                    cloudSyncPreferences.remotePath = webDavRemotePath
-                                    scope.launch {
-                                        isTestingConnection = true
-                                        val credential = WebDavCredential(
-                                            serverUrl = webDavServerUrl,
-                                            username = webDavUsername,
-                                            password = webDavPassword,
-                                            remotePath = webDavRemotePath,
-                                        )
-                                        WebDavEngine().probe(credential.serverUrl, credential)
-                                            .onSuccess {
-                                                connectionVerified = true
-                                                cloudSyncPreferences.connectionVerified = true
-                                                inlineFeedback = FeedbackMessage("连接成功，WebDAV 配置已保存", FeedbackKind.SUCCESS)
-                                            }
-                                            .onFailure { e ->
-                                                connectionVerified = false
-                                                cloudSyncPreferences.connectionVerified = false
-                                                inlineFeedback = FeedbackMessage("连接失败：${e.message ?: "未知错误"}", FeedbackKind.ERROR)
-                                            }
-                                        isTestingConnection = false
-                                    }
-                                },
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    isTestingConnection = true
+                                    val credential = WebDavCredential(
+                                        serverUrl = webDavServerUrl.trim(),
+                                        username = webDavUsername.trim(),
+                                        password = webDavPassword,
+                                        remotePath = webDavRemotePath,
+                                    )
+                                    WebDavEngine(
+                                        allowInsecureTls = { cloudSyncPreferences.allowInsecureTls }
+                                    ).probe(credential.serverUrl, credential)
+                                        .onSuccess {
+                                            // 2026-10 保存语义（用户定案）：测试连接成功 → 落盘该网盘
+                                            // 独立配置（cfg_{pid}_*）+ 验证结论；失败一律不保存
+                                            connectionVerified = true
+                                            lastVerifiedAt = System.currentTimeMillis()
+                                            cloudSyncPreferences.saveAccount(
+                                                webDavProviderId,
+                                                WebDavAccountConfig(
+                                                    serverUrl = credential.serverUrl,
+                                                    username = credential.username,
+                                                    password = credential.password,
+                                                    remotePath = credential.remotePath,
+                                                    verified = true,
+                                                    verifiedAt = lastVerifiedAt,
+                                                ),
+                                            )
+                                            inlineFeedback = FeedbackMessage("连接成功，配置已保存", FeedbackKind.SUCCESS)
+                                        }
+                                        .onFailure { e ->
+                                            // 失败不保存：输入框保留编辑内容但不落盘；
+                                            // verified 保持该网盘已保存配置的既有结论（编辑未生效）
+                                            inlineFeedback = FeedbackMessage(
+                                                "连接失败：${e.message ?: "未知错误"}（配置未保存）",
+                                                FeedbackKind.ERROR
+                                            )
+                                        }
+                                    isTestingConnection = false
+                                }
+                            },
                                 enabled = !isTestingConnection && webDavServerUrl.isNotBlank() && webDavUsername.isNotBlank() && webDavPassword.isNotBlank(),
                                 modifier = Modifier.weight(1f)
                             ) { Text(if (isTestingConnection) "测试中" else "测试连接") }
                             Button(
                                 onClick = {
-                                    // 先落盘当前输入（覆盖 600ms 去抖窗口内尚未写盘的编辑），
-                                    // 再交应用级运行器执行——退出页面同步继续（2026-10）
-                                    cloudSyncPreferences.serverUrl = webDavServerUrl
-                                    cloudSyncPreferences.username = webDavUsername
-                                    cloudSyncPreferences.password = webDavPassword
-                                    cloudSyncPreferences.remotePath = webDavRemotePath
+                                    // 同步读取已保存配置（当前选中预设的 cfg_{pid}_*）——
+                                    // 未验证通过的编辑不会生效，杜绝「页面显示新值、同步跑旧值」错位
                                     WebDavManualSync.sync(context)
                                 },
                                 enabled = !isWebDavSyncing && connectionVerified,
@@ -1018,42 +1028,92 @@ fun SettingsScreen(
                             ) { Text(if (isWebDavSyncing) "同步中" else "立即同步") }
                         }
 
-                        // 2026-10：网盘备份中心整合进本页——多网盘（百度/123/阿里/WebDAV 直连）
-                        // 的授权、备份范围与任务状态由此进入（原「我的 → 网盘备份中心」已移除）。
-                        // 不放在 connectionVerified 门禁内：多网盘直连备份不依赖 WebDAV 配置
-                        Spacer(Modifier.height(12.dp))
-                        AssistChip(
-                            onClick = onOpenCloudBackup,
-                            label = { Text("网盘备份中心（多网盘直连备份）", fontWeight = FontWeight.Medium) },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Outlined.Cloud,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(999.dp),
+                        // 2026-10 统一 WebDAV 通道：连接状态面板——状态 / 地址 / 账号 /
+                        // 鉴权结果 / 同步进度 / 错误提示集中展示（同步进度来自应用级运行器）
+                        Spacer(Modifier.height(10.dp))
+                        WebDavConnectionStatusPanel(
+                            serverUrl = webDavServerUrl,
+                            username = webDavUsername,
+                            hasPassword = webDavPassword.isNotBlank(),
+                            verified = connectionVerified,
+                            isTesting = isTestingConnection,
+                            isSyncing = isWebDavSyncing,
+                            lastVerifiedAt = lastVerifiedAt,
+                            syncProgress = webDavSyncProgress,
+                            syncError = (webDavSyncState as? WebDavManualSync.State.Failed)?.message,
                         )
 
+                        // 2026-10 HTTPS 引擎：自签名证书容忍开关（自建 NAS 的 https 自签场景）
+                        Spacer(Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "允许自签名证书（HTTPS 自建 NAS）",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    "开启后不校验 TLS 证书链与主机名，仅建议内网自建服务使用",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            DynamicSwitch(
+                                checked = allowInsecureTls,
+                                onCheckedChange = {
+                                    cloudSyncPreferences.allowInsecureTls = it
+                                    allowInsecureTls = it
+                                }
+                            )
+                        }
+
+                        // 2026-10：网盘备份中心已删除（BackupEngine 队列/多网盘适配器/账本
+                        // 整体退场）——WebDAV 同步页即唯一配置与同步入口，下面仅保留
+                        // 「同步情况详情」入口（测试连接通过后可见）
+
                         if (connectionVerified) {
-                            Spacer(Modifier.height(12.dp))
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
-                            Spacer(Modifier.height(12.dp))
-                            // 测试连接成功后：备份显示通道入口 —— 详细查看每条视频/图片的同步状态
-                            AssistChip(
+                            // 2026-10：测试通过后才显示「同步情况详情」矩形框入口
+                            //（逐文件上传/下载/冲突对账，见 MediaBackupScreen）
+                            Spacer(Modifier.height(14.dp))
+                            Surface(
                                 onClick = onOpenMediaBackup,
-                                label = { Text("详细查看同步情况", fontWeight = FontWeight.Medium) },
-                                leadingIcon = {
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
                                     Icon(
                                         Icons.Outlined.Cloud,
                                         contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
                                     )
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(999.dp),
-                            )
+                                    Text(
+                                        "同步情况详情",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        "逐文件对账 ›",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                             Spacer(Modifier.height(12.dp))
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Column(modifier = Modifier.weight(1f)) {
@@ -1243,13 +1303,13 @@ fun SettingsScreen(
                                 checked = sub.enabled,
                                 onCheckedChange = { enabled ->
                                     scope.launch {
-                                        com.ed.edqiu.service.SubscriptionManager.setEnabled(context, sub.screenName, enabled)
+                                        com.ed.edqiu.service.SubscriptionManager.setEnabled(context, sub.platform, sub.screenName, enabled)
                                     }
                                 }
                             )
                             TextButton(onClick = {
                                 scope.launch {
-                                    com.ed.edqiu.service.SubscriptionManager.remove(context, sub.screenName)
+                                    com.ed.edqiu.service.SubscriptionManager.remove(context, sub.platform, sub.screenName)
                                 }
                             }) {
                                 Text("删除", color = MaterialTheme.colorScheme.error)
@@ -1434,5 +1494,139 @@ private fun formatSyncTime(millis: Long): String {
         diff < 3_600_000 -> "${diff / 60_000} 分钟前"
         diff < 86_400_000 -> "${diff / 3_600_000} 小时前"
         else -> SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(millis))
+    }
+}
+
+// ================= WebDAV 连接状态面板（2026-10 统一通道新增） =================
+
+/**
+ * WebDAV 连接状态面板：接入配置与同步状态的集中展示位。
+ *
+ * 展示项（对齐标准化同步方案要求）：
+ * - 连接状态：未配置 / 待验证 / 正在验证 / 已连接（鉴权通过）/ 上次验证失败；
+ * - 地址：当前 WebDAV 服务器地址；
+ * - 账号：登录账号（密码永不展示，仅显示「已保存」）；
+ * - 鉴权结果：上次「测试连接」的时间与结论；
+ * - 同步进度：第 i/N 个文件 + 单文件字节进度（来自应用级运行器 WebDavManualSync）；
+ * - 错误提示：最近一次同步失败的中文原因（常驻展示直到下次同步覆盖）。
+ */
+@Composable
+private fun WebDavConnectionStatusPanel(
+    serverUrl: String,
+    username: String,
+    hasPassword: Boolean,
+    verified: Boolean,
+    isTesting: Boolean,
+    isSyncing: Boolean,
+    lastVerifiedAt: Long,
+    syncProgress: WebDavSyncProgress?,
+    syncError: String?,
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            // ── 连接状态行（语义点 + 文案） ──
+            val (statusColor, statusText) = when {
+                isTesting -> MaterialTheme.colorScheme.tertiary to "正在验证连接…"
+                verified -> Color(0xFF1F8A3D) to "已连接（鉴权通过）"
+                lastVerifiedAt > 0 -> MaterialTheme.colorScheme.error to "上次验证失败，请检查后重新测试"
+                serverUrl.isNotBlank() && username.isNotBlank() && hasPassword -> Color(0xFFC93400) to "已填写，待验证"
+                else -> MaterialTheme.colorScheme.onSurfaceVariant to "未配置"
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(statusColor)
+                )
+                Text(
+                    "连接状态",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    statusText,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = statusColor
+                )
+            }
+
+            WebDavStatusField("地址", serverUrl.ifBlank { "未填写" })
+            WebDavStatusField("账号", username.ifBlank { "未填写" })
+            WebDavStatusField("密码", if (hasPassword) "已保存（不展示）" else "未填写")
+            if (lastVerifiedAt > 0) {
+                WebDavStatusField("上次验证", "${formatSyncTime(lastVerifiedAt)}（${if (verified) "通过" else "失败"}）")
+            }
+
+            // ── 同步进度（应用级运行器实时驱动，双向：上传/下载分阶段展示） ──
+            if (syncProgress != null && syncProgress.totalFiles > 0) {
+                val overall = ((syncProgress.currentIndex - 1).coerceAtLeast(0) + syncProgress.fileProgress) /
+                    syncProgress.totalFiles
+                LinearProgressIndicator(
+                    progress = { overall.coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(999.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                )
+                val phaseLabel = if (syncProgress.phase == WebDavSyncPhase.DOWNLOAD) "正在下载" else "正在上传"
+                Text(
+                    text = "$phaseLabel ${syncProgress.currentIndex}/${syncProgress.totalFiles} · " +
+                        "${syncProgress.currentFileName} · ${(syncProgress.fileProgress * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            // ── 最近一次同步失败原因（常驻，直到下次同步开始覆盖） ──
+            if (syncError != null && !isSyncing) {
+                Text(
+                    "上次同步失败：$syncError",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+/** 状态面板单行字段：左侧灰色标签 + 右侧值（可省略号截断）。 */
+@Composable
+private fun WebDavStatusField(label: String, value: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            value,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
     }
 }

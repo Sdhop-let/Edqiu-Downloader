@@ -7,17 +7,8 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
-// ---- 网盘直连备份：应用资质（gradle.properties 注入，开发期可留空，运行时代码提示未配置） ----
-val baiduClientId: String = (project.findProperty("BAIDU_CLIENT_ID") as? String).orEmpty()
-val baiduClientSecret: String = (project.findProperty("BAIDU_CLIENT_SECRET") as? String).orEmpty()
-val aliClientId: String = (project.findProperty("ALI_CLIENT_ID") as? String).orEmpty()
-val aliClientSecret: String = (project.findProperty("ALI_CLIENT_SECRET") as? String).orEmpty()
-val pan123ClientId: String = (project.findProperty("PAN123_CLIENT_ID") as? String).orEmpty()
-val pan123ClientSecret: String = (project.findProperty("PAN123_CLIENT_SECRET") as? String).orEmpty()
-val pan123RedirectUri: String = (project.findProperty("PAN123_REDIRECT_URI") as? String).orEmpty()
-
-private fun String.asBuildConfigString(): String =
-    "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+// 2026-10 WebDAV 统一通道：百度/阿里/123 OAuth 厂商资质构建项（BAIDU_CLIENT_ID 等）已随
+// 直连适配器整体移除——配置缺失必然同步失败，全量网盘改走 WebDAV 协议，无需任何厂商资质。
 
 // ---- 1.4.0 起：release 签名（keystore.properties 本地私有，已被 .gitignore 忽略） ----
 val keystoreProps = Properties().apply {
@@ -49,8 +40,8 @@ android {
         //   16KB 页设备上 ffmpeg 功能不可用——需升级上游依赖或等待重打包后复测。
         targetSdk = 37
         // 2026-10-10 v1.9.0：全量 UI 重构——Monet 取色移除+固定 iOS 式配色 / 大标题折叠体系 / 回收站玻璃化 / 按压缩放反馈
-        versionCode = 50
-        versionName = "1.9.1"
+        versionCode = 51
+        versionName = "1.9.2"
 
         // 2026-09-15：只保留 arm64-v8a（Android 16/17 手机端均为 arm64），APK 从 225.9MB 降至约 80MB；
         // ffmpeg/yt-dlp 功能完整保留，x86 系模拟器不再支持
@@ -64,15 +55,6 @@ android {
             }
         }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-        // 网盘直连备份：应用资质占位（百度/阿里/123 client_id、client_secret）
-        buildConfigField("String", "BAIDU_CLIENT_ID", baiduClientId.asBuildConfigString())
-        buildConfigField("String", "BAIDU_CLIENT_SECRET", baiduClientSecret.asBuildConfigString())
-        buildConfigField("String", "ALI_CLIENT_ID", aliClientId.asBuildConfigString())
-        buildConfigField("String", "ALI_CLIENT_SECRET", aliClientSecret.asBuildConfigString())
-        buildConfigField("String", "PAN123_CLIENT_ID", pan123ClientId.asBuildConfigString())
-        buildConfigField("String", "PAN123_CLIENT_SECRET", pan123ClientSecret.asBuildConfigString())
-        buildConfigField("String", "PAN123_REDIRECT_URI", pan123RedirectUri.asBuildConfigString())
     }
 
     signingConfigs {

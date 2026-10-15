@@ -50,6 +50,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -106,6 +110,7 @@ import com.ed.edqiu.R
 import com.ed.edqiu.data.database.DownloadHistoryEntity
 import com.ed.edqiu.data.model.MediaFileTypes
 import com.ed.edqiu.domain.TweetIdExtractor
+import com.ed.edqiu.data.database.SubscriptionEntity
 import com.ed.edqiu.service.SubscriptionManager
 import com.ed.edqiu.ui.components.CapsuleFeedbackController
 import com.ed.edqiu.ui.components.CapsuleFeedbackHost
@@ -329,7 +334,9 @@ fun PlayerScreen(
     var authorSubscribed by remember { mutableStateOf(false) }
     LaunchedEffect(current?.uploader) {
         val handle = current?.uploader?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
-        authorSubscribed = runCatching { SubscriptionManager.isSubscribed(context, handle) }.getOrDefault(false)
+        authorSubscribed = runCatching {
+            SubscriptionManager.isSubscribed(context, SubscriptionEntity.PLATFORM_TWITTER, handle)
+        }.getOrDefault(false)
     }
 
     // 统一退场（拖拽提交 / 返回键 / ← 按钮 / 删除后共用）：
@@ -1031,6 +1038,35 @@ fun PlayerScreen(
                                 )
                             }
                         }
+                        // 2026-10 真正作品订阅：作者行常驻订阅按钮（原入口在 ⋮ 菜单，太隐蔽）
+                        if (handle.isNotBlank()) {
+                            var rowSubscribed by remember(handle) { mutableStateOf(authorSubscribed) }
+                            LaunchedEffect(authorSubscribed) { rowSubscribed = authorSubscribed }
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        val result = runCatching {
+                                            SubscriptionManager.toggle(
+                                                context,
+                                                com.ed.edqiu.data.database.SubscriptionEntity.PLATFORM_TWITTER,
+                                                handle.removePrefix("@")
+                                            )
+                                        }.getOrDefault(rowSubscribed)
+                                        rowSubscribed = result
+                                        authorSubscribed = result
+                                    }
+                                },
+                                modifier = Modifier.size(30.dp)
+                            ) {
+                                Icon(
+                                    if (rowSubscribed) Icons.Filled.NotificationsActive
+                                    else Icons.Outlined.Notifications,
+                                    contentDescription = if (rowSubscribed) "取消订阅" else "订阅作者",
+                                    tint = if (rowSubscribed) Color(0xFF1D9BF0) else Color(0x99FFFFFF),
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+                        }
                     }
                     // ⋮ 菜单：随 controlsVisible 显隐（固定占位）
                     Box(
@@ -1087,8 +1123,9 @@ fun PlayerScreen(
                                                 feedMenuOpen = false
                                                 val subHandle = current?.uploader?.takeIf { it.isNotBlank() } ?: return@DropdownMenuItem
                                                 menuScope.launch {
-                                                    val result = runCatching { SubscriptionManager.toggle(context, subHandle) }
-                                                        .getOrDefault(authorSubscribed)
+                                                    val result = runCatching {
+                                                        SubscriptionManager.toggle(context, SubscriptionEntity.PLATFORM_TWITTER, subHandle)
+                                                    }.getOrDefault(authorSubscribed)
                                                     authorSubscribed = result
                                                     notify(
                                                         if (result) FeedbackKind.SUCCESS else FeedbackKind.NEUTRAL,

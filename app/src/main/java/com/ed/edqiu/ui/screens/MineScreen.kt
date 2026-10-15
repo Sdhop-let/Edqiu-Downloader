@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
@@ -44,6 +45,9 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -72,7 +76,7 @@ import com.ed.edqiu.ui.settings.XSection
 import com.ed.edqiu.navigation.MineNav
 import com.ed.edqiu.ui.screens.DlSection
 
-private enum class SubMenu { CONTENT, DOWNLOADER, APPEARANCE, STORAGE, PLAYBACK }
+private enum class SubMenu { LIBRARY, AUTOMATION, NETWORK, LOOK, STORAGE, GENERAL }
 
 @Composable
 fun MineScreen(mineNav: MineNav) {
@@ -93,6 +97,7 @@ fun MineScreen(mineNav: MineNav) {
         onAuthors = mineNav.openAuthors,
         onNetwork = { mineNav.openDownloaderSection(DlSection.NETWORK) },
         onWebdav = { mineNav.openDownloaderSection(DlSection.WEBDAV) },
+        onSubscription = { mineNav.openSubscription() },
         onPreDownload = { mineNav.openDownloaderSection(DlSection.PREDOWNLOAD) },
         onUpdate = { mineNav.openDownloaderSection(DlSection.UPDATE) },
         onAbout = { mineNav.openDownloaderSection(DlSection.ABOUT) },
@@ -114,6 +119,7 @@ private fun MineMainView(
     onAuthors: () -> Unit,
     onNetwork: () -> Unit,
     onWebdav: () -> Unit,
+    onSubscription: () -> Unit,
     onPreDownload: () -> Unit,
     onUpdate: () -> Unit,
     onAbout: () -> Unit,
@@ -129,7 +135,7 @@ private fun MineMainView(
             .statusBarsPadding()
             .padding(horizontal = 12.dp)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(9.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
             text = "我的",
@@ -143,96 +149,84 @@ private fun MineMainView(
 
         ProfileCard()
 
-        // 2026-09-30 版式重构（对齐设计稿）：单卡「设置」拆为三张分组卡，
-        // 分组之间以小标题区隔；入口仍为「点按展开」以保证全部子功能可达。
-        // ① 内容与下载：看与管内容 + 下载引擎自身的网络、管道与行为
-        SettingsGroup(title = "内容与下载") {
-            ExpandableMenuSection(
-                icon = Icons.Default.Download,
-                title = "内容管理",
-                subtitle = "浏览与管理已下载的媒体内容",
-                isExpanded = expandedSection == SubMenu.CONTENT,
-                onToggle = { onToggleSection(SubMenu.CONTENT) }
-            ) {
-                SubMenuItemRow(Icons.Default.Download, "下载中心", "查看正在下载与已完成的内容", onDownloadCenter)
-                SubMenuDivider()
-                SubMenuItemRow(Icons.Default.Delete, "回收站", "已删除项目保留 30 天，可随时恢复", onTrash)
-                SubMenuDivider()
-                SubMenuItemRow(Icons.Default.Person, "作者作品", "按作者归档浏览已下载作品", onAuthors)
-            }
-            GroupItemDivider()
-            ExpandableMenuSection(
-                icon = Icons.Default.Settings,
-                title = "下载器",
-                subtitle = "下载网络、自动下载与重试行为",
-                badge = "3",
-                isExpanded = expandedSection == SubMenu.DOWNLOADER,
-                onToggle = { onToggleSection(SubMenu.DOWNLOADER) }
-            ) {
-                SubMenuItemRow(Icons.Default.Lock, "网络与认证", "代理、Cookie 与受限内容解析", onNetwork)
-                SubMenuDivider()
-                SubMenuItemRow(Icons.Default.Download, "预下载", "攒批自动下载、作品订阅与网盘联动", onPreDownload)
-                SubMenuDivider()
-                SubMenuItemRow(Icons.Default.ContentPaste, "下载行为", "失败自动重试与后台状态核对", onCapture)
-            }
+        // 2026-10-15 IA 重做：去掉「组标题套同名卡」的套娃层级——卡即分组，
+        // 六张领域卡纵向排列，全部入口重命名（卡名/子项名/描述一次到位）。
+        // 心智模型：作品库（看与管）→ 订阅与自动化（让作品自己来）→ 网络与同步（连云端）
+        // → 外观与播放（观感）→ 存储与备份（数据放哪）→ 通用（版本维护）
+        ExpandableMenuSection(
+            icon = Icons.Default.VideoLibrary,
+            title = "作品库",
+            subtitle = "浏览与管理已下载的内容",
+            isExpanded = expandedSection == SubMenu.LIBRARY,
+            onToggle = { onToggleSection(SubMenu.LIBRARY) }
+        ) {
+            SubMenuItemRow(Icons.Default.Download, "下载中心", "正在下载与已完成的作品", onDownloadCenter)
+            SubMenuDivider()
+            SubMenuItemRow(Icons.Default.Delete, "回收站", "已删除项目保留 30 天，可随时恢复", onTrash)
+            SubMenuDivider()
+            SubMenuItemRow(Icons.Default.Person, "作者中心", "按作者归档浏览与订阅", onAuthors)
         }
-
-        // ② 偏好设置：全局界面观感
-        SettingsGroup(title = "偏好设置") {
-            ExpandableMenuSection(
-                icon = Icons.Default.AutoAwesome,
-                title = "外观",
-                subtitle = "主题颜色、玻璃质感与手势触感",
-                isExpanded = expandedSection == SubMenu.APPEARANCE,
-                onToggle = { onToggleSection(SubMenu.APPEARANCE) }
-            ) {
-                SubMenuItemRow(Icons.Default.AutoAwesome, "外观设置", "颜色 / 玻璃与底栏 / 显示 / 手势与触感", onAppearance)
-            }
-            GroupItemDivider()
-            // 2026-10-03 批次F 定案：真双播放器等播放行为设置入口（16GB 旗舰门槛在设置页有详细说明）
-            ExpandableMenuSection(
-                icon = Icons.Default.SmartDisplay,
-                title = "播放与媒体库",
-                subtitle = "滑动播放、真双播放器与退场定位",
-                isExpanded = expandedSection == SubMenu.PLAYBACK,
-                onToggle = { onToggleSection(SubMenu.PLAYBACK) }
-            ) {
-                SubMenuItemRow(
-                    Icons.Default.SmartDisplay,
-                    "播放设置",
-                    "真双播放器开关（含硬件门槛与当前设备说明）",
-                    onPlayback
-                )
-            }
+        ExpandableMenuSection(
+            icon = Icons.Default.Bolt,
+            title = "订阅与自动化",
+            subtitle = "让新作品自己找上门",
+            isExpanded = expandedSection == SubMenu.AUTOMATION,
+            onToggle = { onToggleSection(SubMenu.AUTOMATION) }
+        ) {
+            SubMenuItemRow(Icons.Default.NotificationsActive, "作品订阅", "订阅作者主页，新作品自动入库下载", onSubscription)
+            SubMenuDivider()
+            SubMenuItemRow(Icons.Default.Download, "预下载", "保存链接攒批自动下载，防下架", onPreDownload)
+            SubMenuDivider()
+            SubMenuItemRow(Icons.Default.ContentPaste, "下载规则", "失败自动重试与后台状态核对", onCapture)
         }
-
-        // ③ 系统与维护：文件与数据「存哪、怎么备份、怎么维护」+ 版本信息
-        //    （2026-09-30：新增「关于本机」行，版本/构建号从顶部身份块右侧移入其副标题）
-        SettingsGroup(title = "系统与维护") {
-            ExpandableMenuSection(
-                icon = Icons.Default.Save,
-                title = "存储与维护",
-                subtitle = "路径、备份与版本更新工具",
-                isExpanded = expandedSection == SubMenu.STORAGE,
-                onToggle = { onToggleSection(SubMenu.STORAGE) }
-            ) {
-                SubMenuItemRow(Icons.Default.Save, "存储路径", "① 下载存储 · ② 监控目录 · ③ 数据备份，三类路径分设", onStorage)
-                SubMenuDivider()
-                SubMenuItemRow(Icons.Default.Backup, "备份与恢复", "收件箱/回收站数据的本地备份与导入导出", onBackupRestore)
-                SubMenuDivider()
-                // 2026-10：网盘备份中心入口已整合进「WebDAV 同步」页，独立入口移除
-                SubMenuItemRow(Icons.Default.Sync, "WebDAV 同步", "私有云盘直连配置、自动同步与多网盘备份", onWebdav)
-                SubMenuDivider()
-                SubMenuItemRow(Icons.Default.Settings, "更新与工具", "版本更新、日志与调试工具", onUpdate)
-            }
-            GroupItemDivider()
-            StaticMenuRow(
-                icon = Icons.Default.Info,
-                title = "关于本机",
-                subtitle = "当前版本 v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
-                onClick = onAbout
-            )
+        ExpandableMenuSection(
+            icon = Icons.Default.Public,
+            title = "网络与同步",
+            subtitle = "连接方式与云端备份",
+            isExpanded = expandedSection == SubMenu.NETWORK,
+            onToggle = { onToggleSection(SubMenu.NETWORK) }
+        ) {
+            SubMenuItemRow(Icons.Default.Lock, "网络连接", "代理 / Cookie / 受限内容解析", onNetwork)
+            SubMenuDivider()
+            SubMenuItemRow(Icons.Default.Sync, "网盘同步", "WebDAV 直连私有云盘，双向同步备份", onWebdav)
         }
+        ExpandableMenuSection(
+            icon = Icons.Default.AutoAwesome,
+            title = "外观与播放",
+            subtitle = "界面观感与播放体验",
+            isExpanded = expandedSection == SubMenu.LOOK,
+            onToggle = { onToggleSection(SubMenu.LOOK) }
+        ) {
+            SubMenuItemRow(Icons.Default.AutoAwesome, "外观质感", "主题颜色 / 玻璃与底栏 / 显示 / 触感", onAppearance)
+            SubMenuDivider()
+            SubMenuItemRow(Icons.Default.SmartDisplay, "播放体验", "双播放器 / 滑动手势 / 退场定位", onPlayback)
+        }
+        ExpandableMenuSection(
+            icon = Icons.Default.Save,
+            title = "存储与备份",
+            subtitle = "数据放在哪、怎么保",
+            isExpanded = expandedSection == SubMenu.STORAGE,
+            onToggle = { onToggleSection(SubMenu.STORAGE) }
+        ) {
+            SubMenuItemRow(Icons.Default.Save, "存储路径", "下载存储 · 监控目录 · 数据备份", onStorage)
+            SubMenuDivider()
+            SubMenuItemRow(Icons.Default.Backup, "备份与恢复", "收件箱与回收站数据导入导出", onBackupRestore)
+        }
+        ExpandableMenuSection(
+            icon = Icons.Default.Settings,
+            title = "通用",
+            subtitle = "版本更新与维护工具",
+            isExpanded = expandedSection == SubMenu.GENERAL,
+            onToggle = { onToggleSection(SubMenu.GENERAL) }
+        ) {
+            SubMenuItemRow(Icons.Default.Settings, "更新与工具", "版本更新、日志与调试工具", onUpdate)
+        }
+        StaticMenuRow(
+            icon = Icons.Default.Info,
+            title = "关于本机",
+            subtitle = "当前版本 v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
+            onClick = onAbout
+        )
 
         Spacer(modifier = Modifier.height(80.dp))
     }
@@ -336,14 +330,6 @@ private fun SettingsGroup(
     }
 }
 
-@Composable
-private fun GroupItemDivider() {
-    HorizontalDivider(
-        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.10f),
-        thickness = 0.5.dp
-    )
-}
-
 /**
  * 分组内的可展开入口行（2026-09-30 版式对齐设计稿：32dp 图标座 + 15sp 标题 + 徽标可选）。
  * 折叠时箭头朝右「›」，展开后旋转 90° 朝下；badge 为 null 时不显示徽标。
@@ -363,14 +349,20 @@ private fun ExpandableMenuSection(
         label = "chevron"
     )
 
-    Column {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .pressableNoRipple { onToggle() }
-                .padding(horizontal = 16.dp, vertical = 14.dp)
-        ) {
+    // 2026-10-15 IA 重做：玻璃底从组级（SettingsGroup）移到卡级——每张领域卡
+    // 独立玻璃卡（同款 L1 / 20dp 圆角），展开内容收进同一块玻璃内
+    GlassSurface(
+        tier = GlassTier.L1,
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Column {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pressableNoRipple { onToggle() }
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
+            ) {
             Box(
                 modifier = Modifier
                     .size(32.dp)
@@ -442,6 +434,7 @@ private fun ExpandableMenuSection(
                 content()
             }
         }
+        }
     }
 }
 
@@ -456,6 +449,11 @@ private fun StaticMenuRow(
     subtitle: String,
     onClick: () -> Unit
 ) {
+    // 2026-10-15：与领域卡同款玻璃底（卡级统一，关于本机不再裸奔）
+    GlassSurface(
+        tier = GlassTier.L1,
+        shape = RoundedCornerShape(20.dp)
+    ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -500,6 +498,7 @@ private fun StaticMenuRow(
                 .padding(start = 8.dp)
                 .size(20.dp)
         )
+    }
     }
 }
 

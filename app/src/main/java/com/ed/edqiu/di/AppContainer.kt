@@ -1,20 +1,11 @@
 package com.ed.edqiu.di
 
 import android.content.Context
-import com.ed.edqiu.backup.data.BackupLedgerRepository
-import com.ed.edqiu.backup.data.BackupTaskStore
-import com.ed.edqiu.backup.data.CredentialStore
-import com.ed.edqiu.backup.data.EncryptedCredentialStore
-import com.ed.edqiu.backup.data.JsonBackupTaskStore
-import com.ed.edqiu.backup.engine.BackupEngine
-import com.ed.edqiu.backup.provider.AliPanTarget
-import com.ed.edqiu.backup.provider.BaiduPanTarget
-import com.ed.edqiu.backup.provider.Pan123OpenTarget
-import com.ed.edqiu.backup.provider.ProviderRegistry
 import com.ed.edqiu.capture.LinkCaptureCoordinator
 import com.ed.edqiu.data.backup.HistoryBackupRepository
 import com.ed.edqiu.data.db.EdqiuDatabase
 import com.ed.edqiu.data.metadata.MetadataFetcher
+import com.ed.edqiu.data.preferences.CloudSyncPreferences
 import com.ed.edqiu.data.preferences.PreDownloadPreferences
 import com.ed.edqiu.data.preferences.ProxyPreferences
 import com.ed.edqiu.data.preferences.SettingsRepository
@@ -84,25 +75,10 @@ class AppContainer(context: Context) {
     /** 独立下载器（Direct/yt-dlp）活跃任务的持久化仓库，供启动恢复与后台 Worker 使用。 */
     val downloadTaskRepo: DownloadTaskRepo = DownloadTaskRepo(context.applicationContext)
 
-    // ================= 网盘直连备份（T05 UI 集成） =================
-    // 凭证加密存储 / 任务持久化 / 适配器注册表 / 队列引擎：
-    // CloudBackupViewModel 与 BackupWorker 共享同一实例，队列互斥串行、状态互通。
-    val backupCredentialStore: CredentialStore = EncryptedCredentialStore(context.applicationContext)
-    val backupTaskStore: BackupTaskStore = JsonBackupTaskStore(context.applicationContext)
-    val backupLedgerRepository: BackupLedgerRepository =
-        BackupLedgerRepository(database.backupLedgerDao())
-    val backupProviderRegistry: ProviderRegistry = ProviderRegistry(context.applicationContext, backupCredentialStore)
-        .registerWebDavFamily() // 自定义 WebDAV + 123网盘(WebDAV) + CloudDrive2
-        .register(BaiduPanTarget(context.applicationContext, backupCredentialStore))
-        .register(AliPanTarget(context.applicationContext, backupCredentialStore))
-        .register(Pan123OpenTarget(context.applicationContext, backupCredentialStore)) // 123网盘官方 OAuth 登录
-    val backupEngine: BackupEngine = BackupEngine(
-        taskStore = backupTaskStore,
-        registry = backupProviderRegistry,
-        credentialStore = backupCredentialStore,
-        ledgerRepository = backupLedgerRepository,
-        ioScope = globalIoScope,
-    )
+    // ================= 网盘备份 → 2026-10 整体移除 =================
+    // 备份中心（BackupEngine 队列 / 多网盘适配器 / 账本 / 任务存储）随功能删除；
+    // WebDAV 同步链路（WebDavSyncService + WebDavEngine + CloudSyncPreferences）
+    // 直接对账远端，幂等不再依赖账本。预下载联动改走 WebDavSyncService。
 
     // ================= 预下载（自动攒批 + 代理通路检测 + 网盘联动） =================
     // 2026-08-31 18:22 恢复：此前误判为干扰收件箱下载而停用，真凶是 InternalMediaDownloader
@@ -112,15 +88,14 @@ class AppContainer(context: Context) {
         PreDownloadPreferences(context.applicationContext)
     val proxyPreferences: ProxyPreferences =
         ProxyPreferences(context.applicationContext)
+    val cloudSyncPreferences: CloudSyncPreferences =
+        CloudSyncPreferences(context.applicationContext)
     val preDownloadManager: PreDownloadManager = PreDownloadManager(
         context = context.applicationContext,
         savedLinkRepository = savedLinkRepository,
         preDownloadPreferences = preDownloadPreferences,
         proxyPreferences = proxyPreferences,
-        backupEngine = backupEngine,
-        backupProviderRegistry = backupProviderRegistry,
-        backupTaskStore = backupTaskStore,
-        backupLedgerRepository = backupLedgerRepository,
+        cloudSyncPreferences = cloudSyncPreferences,
         settingsRepository = settingsRepository,
         ioScope = globalIoScope,
     )

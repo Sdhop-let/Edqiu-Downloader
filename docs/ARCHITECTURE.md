@@ -34,7 +34,7 @@ app/src/main/java/com/ed/edqiu/
 │                       backup / settings / onboarding / splash / authors / components（玻璃组件）/ theme
 ├── data/         (49)  本地数据层：db + database（Room 双库）、preferences（DataStore）、
 │                       repository、model、metadata、proxy、backup（台账）
-├── backup/       (25)  网盘直连备份：引擎、分片上传、各家网盘适配器、HTTP 层
+├── backup/       (15)  网盘备份：引擎、任务/账本存储、WebDAV 族适配器（厂商直连通道已移除，见 WEBDAV-SYNC.md）
 ├── service/      (11)  FXTwitter 解析、yt-dlp 封装、直连下载、目录扫描、pHash 查重、
 │                       画质升级、发布时间补拉、订阅轮询、WebDAV 同步、应用内更新
 ├── background/    (7)  WorkManager 后台任务（后台同步 / 持久队列 / 收件箱备份）

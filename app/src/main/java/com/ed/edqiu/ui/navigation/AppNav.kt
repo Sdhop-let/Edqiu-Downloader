@@ -56,10 +56,10 @@ import com.ed.edqiu.ui.list.ListScreen
 import com.ed.edqiu.ui.list.ListViewModel
 import com.ed.edqiu.ui.authors.AuthorsScreen
 import com.ed.edqiu.ui.authors.AuthorsViewModel
-import com.ed.edqiu.ui.backup.CloudBackupScreen
-import com.ed.edqiu.ui.backup.CloudBackupViewModel
 import com.ed.edqiu.ui.backup.MediaBackupScreen
 import com.ed.edqiu.ui.backup.MediaBackupViewModel
+import com.ed.edqiu.ui.subscription.SubscriptionScreen
+import com.ed.edqiu.ui.subscription.SubscriptionViewModel
 import com.ed.edqiu.ui.screens.MineScreen
 import com.ed.edqiu.ui.settings.BackupViewModel
 import com.ed.edqiu.ui.settings.SettingsScreen as EdqiuSettingsScreen
@@ -80,8 +80,8 @@ val LocalSnackbarController = staticCompositionLocalOf<SnackbarController> {
 
 /** 浮层路由（2026-09-29 自绘跟手返回版）：主界面常驻底层，二级页为浮层 */
 private const val OVERLAY_DETAIL = "detail"
-private const val OVERLAY_BACKUP = "backup"
 private const val OVERLAY_MEDIA_BACKUP = "media_backup"
+private const val OVERLAY_SUBSCRIPTION = "subscription"
 
 @Composable
 fun EdqiuApp(container: AppContainer) {
@@ -153,11 +153,7 @@ fun EdqiuApp(container: AppContainer) {
                         linkCaptureCoordinator = container.linkCaptureCoordinator,
                         linkHistoryRepository = container.linkHistoryRepository,
                         historyBackupRepository = container.historyBackupRepository,
-                        backupProviderRegistry = container.backupProviderRegistry,
-                        backupTaskStore = container.backupTaskStore,
-                        backupEngine = container.backupEngine,
-                        backupCredentialStore = container.backupCredentialStore,
-                        backupLedgerRepository = container.backupLedgerRepository,
+                        cloudSyncPreferences = container.cloudSyncPreferences,
                         preDownloadManager = container.preDownloadManager,
                         downloadScope = container.globalIoScope,
                         application = application
@@ -357,8 +353,8 @@ fun EdqiuApp(container: AppContainer) {
                                                     section = section
                                                 )
                                             },
-                                            openCloudBackup = { openOverlay(OVERLAY_BACKUP) },
                                             onOpenMediaBackup = { openOverlay(OVERLAY_MEDIA_BACKUP) },
+                                            onOpenSubscription = { openOverlay(OVERLAY_SUBSCRIPTION) },
                                             authorsContent = { onBack ->
                                                 val vm = viewModel<AuthorsViewModel>(factory = factory)
                                                 AuthorsScreen(vm = vm, onBack = onBack)
@@ -454,9 +450,9 @@ fun EdqiuApp(container: AppContainer) {
                                                 closeOverlay()
                                             }
                                             when (route) {
-                                                OVERLAY_BACKUP -> {
-                                                    val vm = viewModel<CloudBackupViewModel>(factory = factory)
-                                                    CloudBackupScreen(vm = vm, onBack = { closeOverlay() })
+                                                OVERLAY_SUBSCRIPTION -> {
+                                                    val vm = viewModel<SubscriptionViewModel>(factory = factory)
+                                                    SubscriptionScreen(vm = vm, onBack = { closeOverlay() })
                                                 }
                                                 OVERLAY_MEDIA_BACKUP -> {
                                                     val vm = viewModel<MediaBackupViewModel>(factory = factory)

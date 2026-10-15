@@ -13,6 +13,12 @@ interface SubscriptionDao {
     @Query("SELECT * FROM subscriptions ORDER BY createdAt DESC")
     fun observeAll(): Flow<List<SubscriptionEntity>>
 
+    @Query(
+        "SELECT * FROM subscriptions WHERE screenName = :screenName AND platform = :platform LIMIT 1"
+    )
+    suspend fun get(platform: String, screenName: String): SubscriptionEntity?
+
+    /** 兼容旧调用（仅推特语义）。 */
     @Query("SELECT * FROM subscriptions WHERE screenName = :screenName LIMIT 1")
     suspend fun getByScreenName(screenName: String): SubscriptionEntity?
 
@@ -35,6 +41,11 @@ interface SubscriptionDao {
 
     @Update
     suspend fun update(entity: SubscriptionEntity)
+
+    @Query(
+        "DELETE FROM subscriptions WHERE screenName = :screenName AND platform = :platform"
+    )
+    suspend fun delete(platform: String, screenName: String)
 
     @Query("DELETE FROM subscriptions WHERE screenName = :screenName")
     suspend fun deleteByScreenName(screenName: String)

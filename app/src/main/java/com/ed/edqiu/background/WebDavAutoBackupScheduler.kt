@@ -53,18 +53,19 @@ class WebDavAutoBackupWorker(
 
     override suspend fun doWork(): Result {
         val prefs = CloudSyncPreferences(applicationContext)
-        Log.i(TAG, "doWork() 被调用, autoBackup=${prefs.autoBackupEnabled}, verified=${prefs.connectionVerified}, hasConfig=${prefs.hasWebDavConfig()}")
-        if (!prefs.autoBackupEnabled || !prefs.connectionVerified) {
+        val account = prefs.currentAccount()
+        Log.i(TAG, "doWork() 被调用, autoBackup=${prefs.autoBackupEnabled}, verified=${account.verified}, hasConfig=${account.isComplete}")
+        if (!prefs.autoBackupEnabled || !account.verified || !account.isComplete) {
             Log.i(TAG, "自动备份未开启或连接未验证，跳过")
             return Result.success()
         }
-        Log.i(TAG, "开始自动备份，server=${prefs.serverUrl}, remotePath=${prefs.remotePath}")
+        Log.i(TAG, "开始自动双向同步，server=${account.serverUrl}, remotePath=${account.remotePath}")
         val result = WebDavSyncService.syncDownloads(applicationContext, prefs)
         return result.fold(
-            onSuccess = { (new, skip) ->
-                Log.i(TAG, "自动备份完成：新增 $new，跳过 $skip")
-                if (new > 0) {
-                    prefs.syncedFileCount = prefs.syncedFileCount + new
+            onSuccess = { r ->
+                Log.i(TAG, "自动备份完成：上传 ${r.uploaded}，下载 ${r.downloaded}，跳过 ${r.skippedExisting}，冲突 ${r.conflicts}")
+                if (r.hasChanges) {
+                    prefs.syncedFileCount = prefs.syncedFileCount + r.uploaded
                     prefs.lastSyncTime = System.currentTimeMillis()
                 }
                 Result.success()

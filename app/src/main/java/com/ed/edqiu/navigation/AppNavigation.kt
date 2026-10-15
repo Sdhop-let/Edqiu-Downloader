@@ -163,7 +163,9 @@ class MineNav(
     val openTrash: () -> Unit,
     val openDownloaderSection: (String) -> Unit,
     val openEdqiuSection: (String) -> Unit,
-    val openAuthors: () -> Unit
+    val openAuthors: () -> Unit,
+    /** 作品订阅页（2026-10 真正作品订阅，独立二级页浮层）。 */
+    val openSubscription: () -> Unit = {}
 )
 
 @Composable
@@ -174,8 +176,8 @@ fun AppNavigation(
     trashContent: (@Composable (onBack: () -> Unit) -> Unit)? = null,
     settingsContent: (@Composable (downloaderSettings: @Composable () -> Unit, mineNav: MineNav) -> Unit)? = null,
     edqiuSettingsContent: (@Composable (section: String?, onBack: () -> Unit) -> Unit)? = null,
-    openCloudBackup: (() -> Unit)? = null,
     onOpenMediaBackup: (() -> Unit)? = null,
+    onOpenSubscription: (() -> Unit)? = null,
     authorsContent: (@Composable (onBack: () -> Unit) -> Unit)? = null,
     // 2026-10：胶囊反馈回调（宿主全局 CapsuleFeedbackController），接线到 PlayerScreen
     onFeedback: ((com.ed.edqiu.ui.components.FeedbackKind, String) -> Unit)? = null,
@@ -457,8 +459,7 @@ fun AppNavigation(
                     val downloaderSettings: @Composable () -> Unit = {
                         SettingsScreen(
                             onBack = { navController.navigate(Screen.Home.route) },
-                            onOpenMediaBackup = onOpenMediaBackup ?: {},
-                            onOpenCloudBackup = openCloudBackup ?: {}
+                            onOpenMediaBackup = onOpenMediaBackup ?: {}
                         )
                     }
                     if (settingsContent != null) {
@@ -481,6 +482,7 @@ fun AppNavigation(
                                     launchSingleTop = true
                                 }
                             },
+                            openSubscription = { onOpenSubscription?.invoke() },
                             openAuthors = {
                                 if (authorsContent != null) {
                                     navController.navigate(Screen.Authors.route) { launchSingleTop = true }
@@ -503,8 +505,7 @@ fun AppNavigation(
                         onBack = { navController.popBackStack() },
                         showBack = true,
                         section = section,
-                        onOpenMediaBackup = onOpenMediaBackup ?: {},
-                        onOpenCloudBackup = openCloudBackup ?: {}
+                        onOpenMediaBackup = onOpenMediaBackup ?: {}
                     )
                 }
 

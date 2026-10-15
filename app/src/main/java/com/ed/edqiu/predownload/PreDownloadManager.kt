@@ -4,25 +4,18 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
-import com.ed.edqiu.backup.BackupFiles
-import com.ed.edqiu.backup.BackupScope
-import com.ed.edqiu.backup.BackupSettings
-import com.ed.edqiu.backup.data.BackupLedgerRepository
-import com.ed.edqiu.backup.data.BackupTaskStore
-import com.ed.edqiu.backup.engine.BackupEngine
-import com.ed.edqiu.backup.model.BackupTaskStatus
-import com.ed.edqiu.backup.provider.ProviderRegistry
 import com.ed.edqiu.data.model.ProxySettings
+import com.ed.edqiu.data.preferences.CloudSyncPreferences
 import com.ed.edqiu.data.preferences.PreDownloadPreferences
 import com.ed.edqiu.data.preferences.ProxyPreferences
 import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.data.repository.SavedLinkRepository
+import com.ed.edqiu.service.WebDavSyncService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -46,19 +39,16 @@ import java.net.Socket
  * - 本地 HTTP 代理端口（127.0.0.1:7890 等）→ 显式设置该代理下载；
  * - 两者皆无 → 自动预下载跳过（避免 fxtwitter 直连失败反复重试堵队列），手动批量仍尝试并快速暴露失败。
  *
- * ## 网盘联动
- * 预下载完成后，把下载目录中「未备份 / 已失败」的媒体文件入队 [BackupEngine] 并串行上传
- * 到备份中心当前选中网盘（[BackupSettings.selectedProvider]）；账本 + 已完成任务自动跳过。
+ * ## 网盘联动（2026-10 统一 WebDAV 通道）
+ * 预下载完成后调用 [WebDavSyncService.syncDownloads] 做一轮双向同步：
+ * 远端已有的文件 HEAD 跳过（幂等），新文件断点续传上传；云端独有文件回补本地。
  */
 class PreDownloadManager(
     private val context: Context,
     private val savedLinkRepository: SavedLinkRepository,
     private val preDownloadPreferences: PreDownloadPreferences,
     private val proxyPreferences: ProxyPreferences,
-    private val backupEngine: BackupEngine,
-    private val backupProviderRegistry: ProviderRegistry,
-    private val backupTaskStore: BackupTaskStore,
-    private val backupLedgerRepository: BackupLedgerRepository,
+    private val cloudSyncPreferences: CloudSyncPreferences,
     private val settingsRepository: SettingsRepository,
     ioScope: CoroutineScope,
 ) {
@@ -258,37 +248,28 @@ class PreDownloadManager(
     }.getOrDefault(false)
 
     /**
-     * 联动网盘：把下载目录中「账本未记录 / 非已完成任务」的媒体文件入队并上传
-     * 到备份中心当前选中网盘。返回是否全部成功。
+     * 联动网盘（2026-10 统一 WebDAV 通道）：对当前选中网盘跑一轮双向同步——
+     * 远端已有的文件 HEAD 跳过（幂等），新文件断点续传上传，云端独有文件回补本地。
+     * 返回是否全部成功（冲突视为未完全成功）。
      */
     private suspend fun syncNewlyDownloadedToCloud(): Boolean = withContext(Dispatchers.IO) {
-        val providerId = BackupSettings.selectedProvider(context)
-        if (providerId.isNullOrBlank()) {
-            Log.i(TAG, "syncNewlyDownloadedToCloud() 未选择网盘，跳过联动")
+        val account = cloudSyncPreferences.currentAccount()
+        if (!cloudSyncPreferences.enabled || !account.verified || !account.isComplete) {
+            Log.i(TAG, "syncNewlyDownloadedToCloud() WebDAV 未启用/未验证，跳过联动")
             return@withContext false
         }
-        val target = backupProviderRegistry.get(providerId)
-        if (target == null || !runCatching { target.isConfigured() }.getOrDefault(false)) {
-            Log.i(TAG, "syncNewlyDownloadedToCloud() 目标网盘未配置：$providerId，跳过联动")
-            return@withContext false
-        }
-        val monitorUri = settingsRepository.monitorDirUriFlow.first()
-        val tasks = backupTaskStore.load().filter { it.targetId == providerId }
-        val doneTaskIds = tasks.filter { it.status == BackupTaskStatus.DONE }.map { it.taskId }.toSet()
-        val failedTaskIds = tasks.filter { it.status == BackupTaskStatus.FAILED }.map { it.taskId }.toSet()
-        val files = BackupFiles.collect(
-            context, monitorUri, BackupScope.ALL, providerId,
-            doneTaskIds, failedTaskIds, backupLedgerRepository,
+        val result = WebDavSyncService.syncDownloads(context, cloudSyncPreferences)
+        result.fold(
+            onSuccess = { r ->
+                Log.i(TAG, "syncNewlyDownloadedToCloud() 完成：上传 ${r.uploaded}，下载 ${r.downloaded}，" +
+                    "跳过 ${r.skippedExisting}，冲突 ${r.conflicts}")
+                r.conflicts == 0
+            },
+            onFailure = { e ->
+                Log.w(TAG, "syncNewlyDownloadedToCloud() 失败：${e.message}")
+                false
+            },
         )
-        if (files.isEmpty()) {
-            Log.i(TAG, "syncNewlyDownloadedToCloud() 没有待备份的新文件，跳过")
-            return@withContext true
-        }
-        Log.i(TAG, "syncNewlyDownloadedToCloud() 入队 ${files.size} 个文件到 $providerId")
-        backupEngine.enqueue(providerId, files)
-        val summary = backupEngine.runQueue(targetId = providerId).getOrNull() ?: return@withContext false
-        Log.i(TAG, "syncNewlyDownloadedToCloud() 完成：成功 ${summary.succeeded} 失败 ${summary.failed} 跳过 ${summary.skipped}")
-        summary.failed == 0
     }
 
     private fun buildMessage(

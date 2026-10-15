@@ -20,16 +20,22 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 本对象把执行作用域提升到应用级（[EdqiuApplication.container.globalIoScope]，
  * 与 App 更新下载同款方案）：
  * - 退出页面同步继续，上传到哪算哪，不再半途而废；
- * - [state] 暴露进行中/结果状态：设置页前台时实时驱动按钮与结果反馈，
+ * - [state] 暴露进行中/结果状态：设置页前台时实时驱动按钮、进度条与结果反馈，
  *   页面不在前台完成时保留结果，下次进入该页补提示。
+ * - 2026-10 统一 WebDAV 通道：Syncing 携带 [WebDavSyncProgress] 实时进度
+ *   （第 i/N 个文件 + 单文件字节进度），驱动设置页进度条。
  */
 object WebDavManualSync {
 
     /** 手动同步状态机：Idle ↔ Syncing → (Succeeded | Failed) → Idle（UI 消费后复位）。 */
     sealed interface State {
         data object Idle : State
-        data object Syncing : State
-        data class Succeeded(val added: Int, val skipped: Int) : State
+
+        /** @property progress 实时进度快照；逐文件阶段前的准备动作（建目录等）为 null。 */
+        data class Syncing(val progress: WebDavSyncProgress? = null) : State
+
+        /** @property result 双向同步账面（上传/下载/跳过/冲突）。 */
+        data class Succeeded(val result: WebDavSyncResult) : State
         data class Failed(val message: String) : State
     }
 
@@ -48,19 +54,21 @@ object WebDavManualSync {
     fun sync(context: Context) {
         if (!inFlight.compareAndSet(false, true)) return
         val appContext = context.applicationContext
-        _state.value = State.Syncing
+        _state.value = State.Syncing()
         val scope = (appContext as? EdqiuApplication)?.container?.globalIoScope
             ?: CoroutineScope(SupervisorJob() + Dispatchers.IO)
         scope.launch {
             val prefs = CloudSyncPreferences(appContext)
-            val result = WebDavSyncService.syncDownloads(appContext, prefs)
+            val result = WebDavSyncService.syncDownloads(appContext, prefs) { progress ->
+                _state.value = State.Syncing(progress)
+            }
             result.fold(
-                onSuccess = { (added, skipped) ->
-                    if (added > 0) {
-                        prefs.syncedFileCount = prefs.syncedFileCount + added
+                onSuccess = { syncResult ->
+                    if (syncResult.hasChanges) {
+                        prefs.syncedFileCount = prefs.syncedFileCount + syncResult.uploaded
                         prefs.lastSyncTime = System.currentTimeMillis()
                     }
-                    _state.value = State.Succeeded(added, skipped)
+                    _state.value = State.Succeeded(syncResult)
                 },
                 onFailure = { error ->
                     _state.value = State.Failed(error.message ?: "未知错误")

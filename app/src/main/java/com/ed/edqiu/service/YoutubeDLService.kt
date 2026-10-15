@@ -161,9 +161,24 @@ object YoutubeDLService {
         limit: Int = 8,
         proxyUrl: String? = null,
         cookieFilePath: String? = null
+    ): Result<List<String>> =
+        getFlatPlaylistIds("https://x.com/$screenName", limit, proxyUrl, cookieFilePath, digitOnly = true)
+
+    /**
+     * 通用 flat-playlist ID 提取（2026-10 真正作品订阅：多平台检测通道）。
+     * 只要 ID 不要媒体元数据（--flat-playlist + --dump-single-json，快且省流量）。
+     * @param digitOnly true = 仅保留纯数字 ID（X 推文）；false = 保留原样（IG shortcode 等）。
+     * @return ID 列表（新→旧），失败返回 failure（调用方静默跳过本轮）。
+     */
+    suspend fun getFlatPlaylistIds(
+        pageUrl: String,
+        limit: Int = 8,
+        proxyUrl: String? = null,
+        cookieFilePath: String? = null,
+        digitOnly: Boolean = false,
     ): Result<List<String>> = withContext(Dispatchers.IO) {
         try {
-            val request = YoutubeDLRequest("https://x.com/$screenName").apply {
+            val request = YoutubeDLRequest(pageUrl).apply {
                 addOption("--flat-playlist")
                 addOption("--dump-single-json")
                 addOption("--playlist-items", "1:$limit")
@@ -178,17 +193,18 @@ object YoutubeDLService {
             if (entries != null) {
                 for (i in 0 until entries.length()) {
                     val entry = entries.optJSONObject(i) ?: continue
-                    val id = entry.optString("id").takeWhile { it.isDigit() }
+                    val raw = entry.optString("id")
+                    val id = if (digitOnly) raw.takeWhile { it.isDigit() } else raw.trim()
                     if (id.isNotBlank()) ids += id
                 }
             }
             if (ids.isEmpty()) {
-                Result.failure(Exception("用户时间线未返回推文（可能改名/私密/无作品）"))
+                Result.failure(Exception("用户页未返回作品（可能改名/私密/无作品）"))
             } else {
                 Result.success(ids)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "getUserTimelineTweetIds error for $screenName", e)
+            Log.e(TAG, "getFlatPlaylistIds error for $pageUrl", e)
             Result.failure(translateLinkerFailure(e))
         }
     }

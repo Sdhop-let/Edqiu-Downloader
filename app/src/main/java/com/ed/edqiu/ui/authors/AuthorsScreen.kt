@@ -31,6 +31,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.outlined.Notifications
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -48,6 +51,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +70,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.ed.edqiu.data.model.SavedLink
+import com.ed.edqiu.data.database.SubscriptionEntity
+import com.ed.edqiu.service.SubscriptionManager
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.PlaceholderThumbnail
@@ -286,6 +292,12 @@ private fun AuthorCard(
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(Modifier.width(8.dp))
+                // 2026-10 真正作品订阅：一键订阅/取消该作者（新作品自动入库下载）
+                AuthorSubscribeButton(
+                    handle = author.handle,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
                 AuthorActionButton(
                     icon = Icons.Default.KeyboardArrowDown,
                     label = if (expanded) "收起作品" else "展开作品",
@@ -322,13 +334,45 @@ private fun AuthorCard(
     }
 }
 
+/**
+ * 作者订阅按钮（2026-10 真正作品订阅）：X 平台一键订阅/取消。
+ * 订阅后后台轮询该作者主页，新作品自动入收件箱并按下载链下载；
+ * 状态在「我的 → 作品订阅」页可统一管理。
+ */
+@Composable
+private fun AuthorSubscribeButton(handle: String, modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var subscribed by remember(handle) { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(handle) {
+        subscribed = SubscriptionManager.isSubscribed(
+            context, SubscriptionEntity.PLATFORM_TWITTER, handle
+        )
+    }
+    AuthorActionButton(
+        icon = if (subscribed) {
+            androidx.compose.material.icons.Icons.Filled.NotificationsActive
+        } else {
+            androidx.compose.material.icons.Icons.Outlined.Notifications
+        },
+        label = if (subscribed) "已订阅" else "订阅作者",
+        onClick = {
+            scope.launch {
+                subscribed = SubscriptionManager.toggle(
+                    context, SubscriptionEntity.PLATFORM_TWITTER, handle
+                )
+            }
+        },
+        modifier = modifier
+    )
+}
+
 @Composable
 private fun AuthorAvatar(
     avatarUrl: String?,
     name: String?,
     handle: String,
-    modifier: Modifier = Modifier
-) {
+    modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .clip(CircleShape)

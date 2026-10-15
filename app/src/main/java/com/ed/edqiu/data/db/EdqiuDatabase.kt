@@ -7,14 +7,12 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
-import com.ed.edqiu.backup.data.BackupLedgerDao
-import com.ed.edqiu.backup.data.BackupLedgerEntity
 import com.ed.edqiu.data.model.DeletedLinkHistory
 import com.ed.edqiu.data.model.SavedLink
 
 @Database(
-    entities = [SavedLink::class, DeletedLinkHistory::class, BackupLedgerEntity::class],
-    version = 9,
+    entities = [SavedLink::class, DeletedLinkHistory::class],
+    version = 10,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -23,8 +21,6 @@ abstract class EdqiuDatabase : RoomDatabase() {
     abstract fun savedLinkDao(): SavedLinkDao
 
     abstract fun deletedLinkHistoryDao(): DeletedLinkHistoryDao
-
-    abstract fun backupLedgerDao(): BackupLedgerDao
 
     companion object {
         private const val DB_NAME = "xinvox.db"
@@ -165,6 +161,23 @@ abstract class EdqiuDatabase : RoomDatabase() {
             "CREATE INDEX IF NOT EXISTS `index_saved_links_status_next_retry_at` ON `saved_links` (`status`, `next_retry_at`)"
         )
 
+        /**
+         * 2026-10 统一 WebDAV 通道（v10）：网盘备份中心功能整体移除——
+         * 备份账本（BackupEngine 增量同步依据）随之退场，DROP 掉旧表；
+         * WebDAV 同步的幂等由「HEAD 远端尺寸比对」天然保证，不再需要账本。
+         */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_9_10_SQL.forEach(db::execSQL)
+            }
+        }
+
+        val MIGRATION_9_10_SQL = listOf(
+            "DROP INDEX IF EXISTS index_backup_ledger_providerId",
+            "DROP INDEX IF EXISTS index_backup_ledger_state",
+            "DROP TABLE IF EXISTS backup_ledger"
+        )
+
         fun getDatabase(context: Context): EdqiuDatabase {
             return INSTANCE ?: synchronized(lock) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -173,7 +186,8 @@ abstract class EdqiuDatabase : RoomDatabase() {
                     DB_NAME
                 ).addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                    MIGRATION_9_10
                 )
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
