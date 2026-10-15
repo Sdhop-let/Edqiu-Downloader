@@ -31,10 +31,12 @@ Edqiu 的整体结构：单模块 Android 应用（`com.ed.Edqiu`），Jetpack C
 ```
 app/src/main/java/com/ed/edqiu/
 ├── ui/           (70)  Compose 界面：screens（收件箱）/ player / detail / list / history /
-│                       backup / settings / onboarding / splash / authors / components（玻璃组件）/ theme
+│                       backup（同步详情）/ settings / onboarding / splash / authors /
+│                       subscription（作品订阅）/ components（玻璃组件）/ theme
 ├── data/         (49)  本地数据层：db + database（Room 双库）、preferences（DataStore）、
-│                       repository、model、metadata、proxy、backup（台账）
-├── backup/       (15)  网盘备份：引擎、任务/账本存储、WebDAV 族适配器（厂商直连通道已移除，见 WEBDAV-SYNC.md）
+│                       repository、model、metadata、proxy、backup（收件箱数据备份）
+├── backup/       (4)   WebDAV 引擎与凭证（BackupException / http 工具 / WebDavEngine /
+│                       WebDavCredential —— 2026-10 网盘备份中心已移除，见 WEBDAV-SYNC.md）
 ├── service/      (11)  FXTwitter 解析、yt-dlp 封装、直连下载、目录扫描、pHash 查重、
 │                       画质升级、发布时间补拉、订阅轮询、WebDAV 同步、应用内更新
 ├── background/    (7)  WorkManager 后台任务（后台同步 / 持久队列 / 收件箱备份）
@@ -60,12 +62,15 @@ app/src/main/java/com/ed/edqiu/
                                         └─ 本地媒体 → ui/media（媒体库）→ ui/player（沉浸式播放器）
 ```
 
-**云备份**
+**网盘同步（WebDAV，2026-10 重构）**
 
 ```
-data（下载历史 / 台账）─→ backup（引擎 + 分片上传 + 各网盘适配器）
-                             ├─ 手动：service/WebDavManualSync（应用级任务，离开页面不中断）
-                             └─ 自动：background（WorkManager 周期任务）
+CloudSyncPreferences（每网盘独立配置 cfg_{pid}_*，测试成功才保存）
+        │
+        ├─ 手动/自动：service/WebDavSyncService（双向同步：上传对账 + 下载回补）
+        │       └── backup/provider/WebDavEngine（PROPFIND 对账 / PUT 断点续传 / Basic+Digest）
+        ├─ 应用级运行器：WebDavManualSync（离开页面同步不中断）
+        └─ 自动：background/WebDavAutoBackupWorker（WorkManager 周期任务）
 ```
 
 ## 相关文档
