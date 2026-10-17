@@ -1,0 +1,44 @@
+Downloading https://mirrors.cloud.tencent.com/gradle/gradle-9.7.1-bin.zip
+..............10%..............20%...............30%..............40%...............50%..............60%...............70%..............80%..............90%...............100%
+
+Welcome to Gradle 9.7.1!
+
+Here are the highlights of this release:
+ - Isolated Projects graduates to incubating
+ - Broader Configuration Cache compatibility
+ - Resilient Sync helps you fix broken builds
+ - More source locations in problem reports
+
+For more details see https://docs.gradle.org/9.7.1/release-notes.html
+
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.7.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+
+> Configure project :app
+WARNING: The option setting 'android.overridePathCheck=true' is experimental.
+The current default is 'false'.
+Add android.sync.suppressAgpWarnings=UNSUPPORTED_PROJECT_OPTION_USE to the gradle.properties file to suppress this warning.
+
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :app:generateDebugBuildConfig
+> Task :app:generateDebugResources
+> Task :app:packageDebugResources
+> Task :app:processDebugNavigationResources FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:processDebugNavigationResources' (registered by plugin 'com.android.internal.application').
+> Could not resolve all dependencies for configuration ':app:debugRuntimeClasspath'.
+   > Not a supported repository protocol 'D': valid protocols are [file, s3, gcs, http, https, sftp]
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 48s
+4 actionable tasks: 4 executed
