@@ -9,6 +9,7 @@ import android.util.Log
 import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.data.model.ProxySettings
 import com.ed.edqiu.data.model.SavedLink
+import com.ed.edqiu.downloader.DownloadLanes
 import com.ed.edqiu.domain.TweetIdExtractor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -37,6 +38,10 @@ class SavedLinkRepository(
 
     /** 当前 PENDING 条目的 tweetId 列表（自动预下载批量处理用）。 */
     suspend fun pendingTweetIds(): List<String> = dao.getTweetIdsByStatus(LinkStatus.PENDING)
+
+    /** 当前 PENDING + 指定来源线的 tweetId（自动预下载只取 user 线，2026-10-17 双线隔离）。 */
+    suspend fun pendingTweetIds(origin: String): List<String> =
+        dao.getTweetIdsByStatusAndOrigin(LinkStatus.PENDING, origin)
 
     suspend fun getByTweetId(tweetId: String): SavedLink? = dao.getByTweetId(tweetId)
 
@@ -73,19 +78,13 @@ class SavedLinkRepository(
     private fun mutexFor(tweetId: String): Mutex = downloadMutexes.getOrPut(tweetId) { Mutex() }
 
     /**
-     * 捕获成功回调（自动预下载挂载点）。
-     * 由 AppContainer 在装配 [PreDownloadManager] 后挂载，避免仓库反向依赖预下载模块。
-     */
-    var onCaptured: ((String) -> Unit)? = null
-
-    /**
      * 下载请求登记回调（2026-09-15 P0-4 持久队列挂载点）：
      * 每次 [requestDownload] 执行时把任务登记进 WorkManager 持久队列，
      * 进程被杀后由 Worker 自动续跑。由 AppContainer 挂载到 DownloadQueue.enqueue。
      */
     var onDownloadRequested: ((String) -> Unit)? = null
 
-    suspend fun capture(text: String): CaptureResult {
+    suspend fun capture(text: String, origin: String = SavedLink.ORIGIN_USER): CaptureResult {
         val canonicalUrl = TweetIdExtractor.canonicalUrlFromText(text)
             ?: return CaptureResult.Invalid
         val tweetId = TweetIdExtractor.fromUrl(canonicalUrl)
@@ -95,7 +94,8 @@ class SavedLinkRepository(
             SavedLink(
                 tweetId = tweetId,
                 rawUrl = canonicalUrl,
-                savedAt = System.currentTimeMillis()
+                savedAt = System.currentTimeMillis(),
+                origin = origin
             )
         )
         if (insertedRowId == -1L) return CaptureResult.Duplicate
@@ -107,7 +107,6 @@ class SavedLinkRepository(
         } else {
             fetchAndApplyMetadata(tweetId)
         }
-        onCaptured?.invoke(tweetId)
         return CaptureResult.Added(tweetId)
     }
 
@@ -145,7 +144,11 @@ class SavedLinkRepository(
 
         val now = System.currentTimeMillis()
         val attemptNumber = link.attemptCount + 1
-        return when (val result = downloaderClient.launch(link.rawUrl, proxy)) {
+        // 双线隔离（2026-10-17）：用户下载进行中→置位车道信号，订阅线队列让位；
+        // manual 同时决定引擎失败是否记全局熔断（见 DownloaderClient）
+        if (manual) DownloadLanes.enterUserDownload()
+        return try {
+            when (val result = downloaderClient.launch(link.rawUrl, proxy, manual)) {
             DownloaderClient.LaunchResult.LaunchedExternal -> {
                 dao.markDownloadDispatched(tweetId, now)
                 DownloadRequestResult.Launched
@@ -185,16 +188,24 @@ class SavedLinkRepository(
                 dao.markTweetGone(tweetId, now)
                 DownloadRequestResult.Gone
             }
+            }
+        } finally {
+            if (manual) DownloadLanes.exitUserDownload()
         }
     }
 
-    suspend fun requestDownloads(tweetIds: Collection<String>, proxy: ProxySettings? = null): BatchDownloadResult {
+    suspend fun requestDownloads(
+        tweetIds: Collection<String>,
+        proxy: ProxySettings? = null,
+        /** false = 系统/后台线（自动预下载）——失败不记全局熔断；true = 用户线（手动批量）。 */
+        manual: Boolean = true,
+    ): BatchDownloadResult {
         var launched = 0
         var failed = 0
         var skipped = 0
 
         tweetIds.distinct().forEach { tweetId ->
-            when (requestDownload(tweetId, manual = true, proxy = proxy)) {
+            when (requestDownload(tweetId, manual = manual, proxy = proxy)) {
                 DownloadRequestResult.Launched,
                 DownloadRequestResult.Downloaded -> launched++
                 is DownloadRequestResult.Failed -> failed++
@@ -208,6 +219,9 @@ class SavedLinkRepository(
 
     suspend fun retryDueDownloads(now: Long = System.currentTimeMillis()): Int {
         val failures = dao.getRetryableFailures(now, DownloadRetryPolicy.MAX_ATTEMPTS)
+            // 双线隔离（2026-10-17）：订阅来源的失败重试归订阅线自己管（独立退避 5min/15min），
+            // 不混入全局重试风暴（DownloadSyncWorker/收件箱刷新每轮都抽它）
+            .filter { it.origin != SavedLink.ORIGIN_SUBSCRIPTION }
         var launched = 0
         failures.forEach { link ->
             val result = requestDownload(link.tweetId)

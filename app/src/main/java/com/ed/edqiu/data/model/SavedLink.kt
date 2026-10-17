@@ -26,6 +26,9 @@ import androidx.room.PrimaryKey
  * @param lastAttemptAt 最近一次尝试时间
  * @param lastError 最近一次启动失败原因
  * @param nextRetryAt 自动重试时间；null 表示无需或不再自动重试
+ * @param origin 来源线（2026-10-17 双线隔离）：[ORIGIN_USER] 用户分享/手动捕获，
+ *   [ORIGIN_SUBSCRIPTION] 作者订阅轮询自动捕获。两线的下载失败记账、重试节奏、
+ *   并发调度互相隔离（订阅线不再打全局熔断器、不进全局重试风暴）。
  */
 // 2026-10 整改：重试轮询（status=FAILED AND next_retry_at<=now）此前全表扫描
 @Entity(
@@ -83,5 +86,16 @@ data class SavedLink(
 
     /** 推文发布时间（epoch ms，来自下载 sidecar；2026-09-15 作者页按发布时间排序）。 */
     @ColumnInfo(name = "published_at")
-    val publishedAt: Long? = null
-)
+    val publishedAt: Long? = null,
+
+    /** 来源线：user（默认，存量）/ subscription（作者订阅自动捕获）。 */
+    @ColumnInfo(name = "origin", defaultValue = ORIGIN_USER)
+    val origin: String = ORIGIN_USER
+) {
+    companion object {
+        /** 用户分享/手动捕获线。 */
+        const val ORIGIN_USER = "user"
+        /** 作者订阅自动捕获线（独立下载队列/重试/失败记账）。 */
+        const val ORIGIN_SUBSCRIPTION = "subscription"
+    }
+}

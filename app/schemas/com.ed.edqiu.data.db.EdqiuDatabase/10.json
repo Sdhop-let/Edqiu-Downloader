@@ -2,11 +2,11 @@
   "formatVersion": 1,
   "database": {
     "version": 10,
-    "identityHash": "3b98d2a4b3b652ce599d4eb624863176",
+    "identityHash": "4b4a26c5d63f8208a8f01934235d7827",
     "entities": [
       {
         "tableName": "saved_links",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`tweetId` TEXT NOT NULL, `raw_url` TEXT NOT NULL, `author_id` TEXT, `author_name` TEXT, `caption` TEXT, `thumbnail_url` TEXT, `avatar_url` TEXT, `author_bio` TEXT, `saved_at` INTEGER NOT NULL, `status` TEXT NOT NULL, `file_path` TEXT, `downloaded_at` INTEGER, `attempt_count` INTEGER NOT NULL, `last_attempt_at` INTEGER, `last_error` TEXT, `next_retry_at` INTEGER, `published_at` INTEGER, PRIMARY KEY(`tweetId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`tweetId` TEXT NOT NULL, `raw_url` TEXT NOT NULL, `author_id` TEXT, `author_name` TEXT, `caption` TEXT, `thumbnail_url` TEXT, `avatar_url` TEXT, `author_bio` TEXT, `saved_at` INTEGER NOT NULL, `status` TEXT NOT NULL, `file_path` TEXT, `downloaded_at` INTEGER, `attempt_count` INTEGER NOT NULL, `last_attempt_at` INTEGER, `last_error` TEXT, `next_retry_at` INTEGER, `published_at` INTEGER, `origin` TEXT NOT NULL DEFAULT 'user', PRIMARY KEY(`tweetId`))",
         "fields": [
           {
             "fieldPath": "tweetId",
@@ -97,6 +97,13 @@
             "fieldPath": "publishedAt",
             "columnName": "published_at",
             "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "origin",
+            "columnName": "origin",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'user'"
           }
         ],
         "primaryKey": {
@@ -261,7 +268,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '3b98d2a4b3b652ce599d4eb624863176')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '4b4a26c5d63f8208a8f01934235d7827')"
     ]
   }
 }

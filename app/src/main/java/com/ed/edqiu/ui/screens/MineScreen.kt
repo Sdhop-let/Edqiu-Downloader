@@ -98,7 +98,6 @@ fun MineScreen(mineNav: MineNav) {
         onNetwork = { mineNav.openDownloaderSection(DlSection.NETWORK) },
         onWebdav = { mineNav.openDownloaderSection(DlSection.WEBDAV) },
         onSubscription = { mineNav.openSubscription() },
-        onPreDownload = { mineNav.openDownloaderSection(DlSection.PREDOWNLOAD) },
         onUpdate = { mineNav.openDownloaderSection(DlSection.UPDATE) },
         onAbout = { mineNav.openDownloaderSection(DlSection.ABOUT) },
         onAppearance = { mineNav.openEdqiuSection(XSection.APPEARANCE) },
@@ -120,7 +119,6 @@ private fun MineMainView(
     onNetwork: () -> Unit,
     onWebdav: () -> Unit,
     onSubscription: () -> Unit,
-    onPreDownload: () -> Unit,
     onUpdate: () -> Unit,
     onAbout: () -> Unit,
     onAppearance: () -> Unit,
@@ -174,8 +172,6 @@ private fun MineMainView(
             onToggle = { onToggleSection(SubMenu.AUTOMATION) }
         ) {
             SubMenuItemRow(Icons.Default.NotificationsActive, "作品订阅", "订阅作者主页，新作品自动入库下载", onSubscription)
-            SubMenuDivider()
-            SubMenuItemRow(Icons.Default.Download, "预下载", "保存链接攒批自动下载，防下架", onPreDownload)
             SubMenuDivider()
             SubMenuItemRow(Icons.Default.ContentPaste, "下载规则", "失败自动重试与后台状态核对", onCapture)
         }

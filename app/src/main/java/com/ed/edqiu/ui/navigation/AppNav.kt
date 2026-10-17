@@ -154,7 +154,6 @@ fun EdqiuApp(container: AppContainer) {
                         linkHistoryRepository = container.linkHistoryRepository,
                         historyBackupRepository = container.historyBackupRepository,
                         cloudSyncPreferences = container.cloudSyncPreferences,
-                        preDownloadManager = container.preDownloadManager,
                         downloadScope = container.globalIoScope,
                         application = application
                     )

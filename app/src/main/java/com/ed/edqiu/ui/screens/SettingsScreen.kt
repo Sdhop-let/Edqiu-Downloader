@@ -91,7 +91,6 @@ import com.ed.edqiu.data.model.ProxySettings
 import com.ed.edqiu.data.preferences.CloudSyncPreferences
 import com.ed.edqiu.data.preferences.CookiePreferences
 import com.ed.edqiu.data.preferences.DownloadPathPreferences
-import com.ed.edqiu.data.preferences.PreDownloadPreferences
 import com.ed.edqiu.data.preferences.ProxyPreferences
 import com.ed.edqiu.data.preferences.ThirdPartyApiPreferences
 import com.ed.edqiu.data.proxy.ProxyDetector
@@ -131,7 +130,6 @@ object DlSection {
     const val UPDATE = "update"
     const val NETWORK = "network"
     const val WEBDAV = "webdav"
-    const val PREDOWNLOAD = "predownload"
     const val ABOUT = "about"
 }
 
@@ -151,7 +149,6 @@ fun SettingsScreen(
     val cookiePreferences = remember { CookiePreferences(context) }
     val pathPreferences = remember { DownloadPathPreferences(context) }
     val cloudSyncPreferences = remember { CloudSyncPreferences(context) }
-    val preDownloadPrefs = remember { PreDownloadPreferences(context) }
 
     var updateStatus by remember { mutableStateOf<String?>(null) }
     var isUpdatingYtdlp by remember { mutableStateOf(false) }
@@ -1163,170 +1160,7 @@ fun SettingsScreen(
             }
             }
 
-            if (section == null || section == DlSection.PREDOWNLOAD) {
-            item {
-                SectionCard(title = "预下载", subtitle = "保存攒批自动下载与网盘联动", icon = Icons.Outlined.Download) {
-                    var autoPreDownload by remember { mutableStateOf(preDownloadPrefs.autoPreDownload) }
-                    var autoStart by remember { mutableStateOf(preDownloadPrefs.autoStartDownload) }
-                    var syncCloud by remember { mutableStateOf(preDownloadPrefs.syncToCloud) }
-                    var batchSizeText by remember { mutableStateOf(preDownloadPrefs.batchSize.toString()) }
-
-                    // 预下载总开关
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("预下载功能", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-                            Text("保存链接后攒批自动后台下载，防止视频下架", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        DynamicSwitch(
-                            checked = autoPreDownload,
-                            onCheckedChange = {
-                                autoPreDownload = it
-                                preDownloadPrefs.autoPreDownload = it
-                            }
-                        )
-                    }
-
-                    if (autoPreDownload) {
-                        Spacer(Modifier.height(12.dp))
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
-                        Spacer(Modifier.height(12.dp))
-
-                        // 攒批条数
-                        Text("攒到多少条开始", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(6.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(5, 10, 20).forEach { n ->
-                                PillChip(
-                                    label = "$n 条",
-                                    selected = batchSizeText == n.toString(),
-                                    onClick = {
-                                        batchSizeText = n.toString()
-                                        preDownloadPrefs.batchSize = n
-                                    },
-                                )
-                            }
-                            EdqiuTextField(
-                                value = batchSizeText,
-                                onValueChange = { value ->
-                                    batchSizeText = value.filter(Char::isDigit).take(2)
-                                    batchSizeText.toIntOrNull()?.let { preDownloadPrefs.batchSize = it }
-                                },
-                                modifier = Modifier.width(96.dp),
-                                label = "自定义",
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                            )
-                        }
-                        Spacer(Modifier.height(12.dp))
-
-                        // 自动开始下载
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("自动开始下载", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-                                Text("攒满后立即开始；关闭则等待手动批量下载", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            DynamicSwitch(
-                                checked = autoStart,
-                                onCheckedChange = {
-                                    autoStart = it
-                                    preDownloadPrefs.autoStartDownload = it
-                                }
-                            )
-                        }
-                        Spacer(Modifier.height(8.dp))
-
-                        // 预下载上传网盘
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("预下载上传到网盘", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-                                Text("完成后自动同步到备份中心选中网盘", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            DynamicSwitch(
-                                checked = syncCloud,
-                                onCheckedChange = {
-                                    syncCloud = it
-                                    preDownloadPrefs.syncToCloud = it
-                                }
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "关闭预下载后，手动下载完成仍会自动联动网盘同步",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            }
-
             // ── 作品订阅管理（2026-09-15 v2 批次4：P2-1 作者订阅自动下载）──
-            if (section == null || section == DlSection.PREDOWNLOAD) {
-            item {
-                val subs by com.ed.edqiu.service.SubscriptionManager.observe(context)
-                    .collectAsState(initial = emptyList())
-                SectionCard(title = "作品订阅", subtitle = "关注的作者发新视频自动下载", icon = Icons.Outlined.Notifications) {
-                    if (subs.isEmpty()) {
-                        Text(
-                            "暂无订阅——进入播放页点右上 ⋮ 选「订阅该作者」即可。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    subs.forEach { sub ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "@${sub.screenName}",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = buildString {
-                                        append(if (sub.enabled) "订阅中" else "已暂停")
-                                        sub.lastVideoAt?.let {
-                                            append(" · 上次新作品 ")
-                                            append(SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(it)))
-                                        }
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            DynamicSwitch(
-                                checked = sub.enabled,
-                                onCheckedChange = { enabled ->
-                                    scope.launch {
-                                        com.ed.edqiu.service.SubscriptionManager.setEnabled(context, sub.platform, sub.screenName, enabled)
-                                    }
-                                }
-                            )
-                            TextButton(onClick = {
-                                scope.launch {
-                                    com.ed.edqiu.service.SubscriptionManager.remove(context, sub.platform, sub.screenName)
-                                }
-                            }) {
-                                Text("删除", color = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "后台每 25 分钟检测一轮（每轮最多 3 个作者，每作者最多自动下载 3 条新作品）。" +
-                            "检测走 yt-dlp 用户页，需网络可达 X（自动套用代理设置）。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            }
-
             if (section == null || section == DlSection.ABOUT) {
             item {
                 SectionCard(title = "关于", subtitle = "版本与使用说明", icon = Icons.Outlined.Info) {

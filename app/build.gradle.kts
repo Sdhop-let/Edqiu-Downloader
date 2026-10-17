@@ -40,8 +40,8 @@ android {
         //   16KB 页设备上 ffmpeg 功能不可用——需升级上游依赖或等待重打包后复测。
         targetSdk = 37
         // 2026-10-10 v1.9.0：全量 UI 重构——Monet 取色移除+固定 iOS 式配色 / 大标题折叠体系 / 回收站玻璃化 / 按压缩放反馈
-        versionCode = 51
-        versionName = "1.9.2"
+        versionCode = 52
+        versionName = "1.9.3"
 
         // 2026-09-15：只保留 arm64-v8a（Android 16/17 手机端均为 arm64），APK 从 225.9MB 降至约 80MB；
         // ffmpeg/yt-dlp 功能完整保留，x86 系模拟器不再支持

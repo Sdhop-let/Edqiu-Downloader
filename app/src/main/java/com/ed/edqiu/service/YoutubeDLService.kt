@@ -152,23 +152,13 @@ object YoutubeDLService {
     }
 
     /**
-     * 拉取作者最新推文 ID 列表（2026-09-15 v2 批次4：P2-1 作者订阅的检测通道）。
-     * 用 yt-dlp 用户页 + --flat-playlist（只要 ID 不要媒体元数据，快且省流量）。
-     * @return 最新推文的纯数字 ID 列表（新→旧），失败返回 failure（调用方静默跳过本轮）。
-     */
-    suspend fun getUserTimelineTweetIds(
-        screenName: String,
-        limit: Int = 8,
-        proxyUrl: String? = null,
-        cookieFilePath: String? = null
-    ): Result<List<String>> =
-        getFlatPlaylistIds("https://x.com/$screenName", limit, proxyUrl, cookieFilePath, digitOnly = true)
-
-    /**
      * 通用 flat-playlist ID 提取（2026-10 真正作品订阅：多平台检测通道）。
      * 只要 ID 不要媒体元数据（--flat-playlist + --dump-single-json，快且省流量）。
      * @param digitOnly true = 仅保留纯数字 ID（X 推文）；false = 保留原样（IG shortcode 等）。
      * @return ID 列表（新→旧），失败返回 failure（调用方静默跳过本轮）。
+     *
+     * 注：X 作者页提取已于 2026-10-17 废弃——yt-dlp 不支持 `x.com/<user>` 主页
+     * （`Unsupported URL`，从来就不支持），twitter 订阅检测改走 data.xapi.XTimelineDetector。
      */
     suspend fun getFlatPlaylistIds(
         pageUrl: String,

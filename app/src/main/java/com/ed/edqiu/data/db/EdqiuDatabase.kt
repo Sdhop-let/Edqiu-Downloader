@@ -12,7 +12,7 @@ import com.ed.edqiu.data.model.SavedLink
 
 @Database(
     entities = [SavedLink::class, DeletedLinkHistory::class],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -178,6 +178,20 @@ abstract class EdqiuDatabase : RoomDatabase() {
             "DROP TABLE IF EXISTS backup_ledger"
         )
 
+        /**
+         * 2026-10-17 双线隔离（v11）：saved_links 加 origin 列（user/subscription）——
+         * 订阅来源链接的下载失败记账/重试节奏/并发调度与用户下载线分离，存量行默认 user。
+         */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_10_11_SQL.forEach(db::execSQL)
+            }
+        }
+
+        val MIGRATION_10_11_SQL = listOf(
+            "ALTER TABLE saved_links ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"
+        )
+
         fun getDatabase(context: Context): EdqiuDatabase {
             return INSTANCE ?: synchronized(lock) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -187,7 +201,7 @@ abstract class EdqiuDatabase : RoomDatabase() {
                 ).addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                    MIGRATION_9_10
+                    MIGRATION_9_10, MIGRATION_10_11
                 )
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .build()

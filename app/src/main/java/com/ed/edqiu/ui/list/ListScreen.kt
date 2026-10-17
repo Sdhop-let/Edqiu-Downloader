@@ -108,7 +108,9 @@ import com.ed.edqiu.ui.components.titleCollapseAlpha
 import com.ed.edqiu.ui.components.titleCollapseSize
 import com.ed.edqiu.ui.components.LinkCard
 import com.ed.edqiu.ui.components.SkeletonCard
+import com.ed.edqiu.ui.components.FeedbackDialog
 import com.ed.edqiu.ui.components.FeedbackKind
+import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.navigation.LocalSnackbarController
 import com.ed.edqiu.ui.util.copyToClipboard
 import kotlinx.coroutines.launch
@@ -136,7 +138,6 @@ fun ListScreen(
     // 筛选 tab 用 rememberSaveable：详情页/二级页往返后保留进入前的筛选，
     // 避免返回时被重置回「全部」（曾出现：失败 tab 进详情，返回后跳回全部列表）
     var filter by rememberSaveable(stateSaver = FilterSaver) { mutableStateOf(Filter.ALL) }
-    var showPreDownloadPrompt by remember { mutableStateOf(false) }
     var showBatchPreview by remember { mutableStateOf(false) }
     var showPasteDialog by remember { mutableStateOf(false) }
     var pasteText by remember { mutableStateOf("") }
@@ -167,6 +168,10 @@ fun ListScreen(
         }
     }
 
+    // 操作结果中央弹窗（2026-10-17）：下载结果/批量汇总/无效链接等带原因的操作反馈
+    // 从底部胶囊升级为居中弹窗——胶囊仅保留瞬时状态类（已复制/正在下载进度等）
+    var centerDialog by remember { mutableStateOf<FeedbackMessage?>(null) }
+
     LaunchedEffect(captureFeedback) {
         captureFeedback?.let {
             val msg = when (it) {
@@ -174,39 +179,41 @@ fun ListScreen(
                 ListViewModel.CaptureFeedback.Duplicate -> "这条链接已存在"
                 ListViewModel.CaptureFeedback.NotTwitter -> "不是有效的 X/Twitter 链接"
             }
-            // 2026-09-15：保存/粘贴结果为状态类反馈 → 玻璃胶囊（成功✓ / 中性ℹ / 失败✕），
-            // 不再走传统 Snackbar 矩形块
-            snackbar.show(
-                message = msg,
-                kind = when (it) {
-                    ListViewModel.CaptureFeedback.Added -> FeedbackKind.SUCCESS
-                    ListViewModel.CaptureFeedback.NotTwitter -> FeedbackKind.ERROR
-                    else -> FeedbackKind.NEUTRAL
-                }
-            )
-            vm.clearFeedback()
-            // 新保存后待处理达到 5 条及以上：提示批量预下载
-            if (it == ListViewModel.CaptureFeedback.Added &&
-                links.count { link -> link.status == LinkStatus.PENDING } >= PRE_DOWNLOAD_PROMPT_THRESHOLD
-            ) {
-                showPreDownloadPrompt = true
+            // 2026-10-17：成功=瞬时状态走胶囊；无效链接=需要用户注意的错误 → 中央弹窗
+            if (it == ListViewModel.CaptureFeedback.NotTwitter) {
+                centerDialog = FeedbackMessage(msg, FeedbackKind.ERROR)
+            } else {
+                snackbar.show(
+                    message = msg,
+                    kind = when (it) {
+                        ListViewModel.CaptureFeedback.Added -> FeedbackKind.SUCCESS
+                        else -> FeedbackKind.NEUTRAL
+                    }
+                )
             }
+            vm.clearFeedback()
         }
     }
 
     LaunchedEffect(actionFeedback) {
         actionFeedback?.let { feedback ->
-            // 2026-09-14：下载结果不再弹 AlertDialog（打断操作流），改为底部玻璃胶囊提醒
-            // 带操作按钮的消息（如删除+撤销）仍走 Snackbar；纯状态反馈走胶囊
-            // success 标志映射为胶囊图标（成功✓ / 失败✕ / 中性ℹ）
-            if (feedback.actionLabel != null) {
-                snackbar.show(
+            // 2026-10-17：asDialog（下载类结果，含失败原因）→ 中央弹窗；
+            // 带撤销按钮 → 胶囊（可操作，不打断）；其余瞬时状态 → 胶囊
+            when {
+                feedback.asDialog -> centerDialog = FeedbackMessage(
+                    text = feedback.message,
+                    kind = when (feedback.success) {
+                        true -> FeedbackKind.SUCCESS
+                        false -> FeedbackKind.ERROR
+                        null -> FeedbackKind.NEUTRAL
+                    },
+                )
+                feedback.actionLabel != null -> snackbar.show(
                     message = feedback.message,
                     actionLabel = feedback.actionLabel,
                     onAction = feedback.onAction
                 )
-            } else {
-                snackbar.show(
+                else -> snackbar.show(
                     message = feedback.message,
                     kind = when (feedback.success) {
                         true -> FeedbackKind.SUCCESS
@@ -410,36 +417,20 @@ fun ListScreen(
         )
     }
 
-    // 批量下载状态：进行中显示底部进度胶囊（不遮挡列表，2026-09-14 由中央弹窗改造）；
-    // 完成态走结果胶囊提示并自动收起
+    // 批量下载状态：进行中显示底部进度胶囊（实时剩余+百分比，不遮挡列表）；
+    // 完成态汇总（成功/失败/跳过条数）→ 中央弹窗（2026-10-17：失败条数需要用户点掉确认）
     LaunchedEffect(batchDownloadState?.running, batchDownloadState?.success) {
         val state = batchDownloadState
         if (state != null && !state.running && state.success != null) {
-            snackbar.show(
-                message = state.message,
-                kind = if (state.success == true) FeedbackKind.SUCCESS else FeedbackKind.ERROR
+            centerDialog = FeedbackMessage(
+                text = state.message,
+                kind = if (state.success == true) FeedbackKind.SUCCESS else FeedbackKind.ERROR,
             )
             vm.dismissBatchDownloadState()
         }
     }
 
-    if (showPreDownloadPrompt) {
-        val pendingIds = links.filter { it.status == LinkStatus.PENDING }.map { it.tweetId }
-        SmoothAlertDialog(
-            onDismissRequest = { showPreDownloadPrompt = false },
-            title = { Text("批量预下载") },
-            text = { Text("收件箱已有 ${pendingIds.size} 条待处理链接，是否立即批量预下载？") },
-            confirmButton = {
-                Button(onClick = {
-                    showPreDownloadPrompt = false
-                    vm.downloadPending(pendingIds)
-                }) { Text("立即下载") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showPreDownloadPrompt = false }) { Text("稍后") }
-            }
-        )
-    }
+    FeedbackDialog(message = centerDialog, onDismiss = { centerDialog = null })
 
     if (showPasteDialog) {
         SmoothAlertDialog(
@@ -1182,5 +1173,3 @@ private fun BatchDownloadPreviewDialog(
     )
 }
 
-/** 待处理链接达到该数量时，在新增保存后提示批量预下载。 */
-private const val PRE_DOWNLOAD_PROMPT_THRESHOLD = 5

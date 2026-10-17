@@ -31,8 +31,11 @@ import java.io.File
  *   **默认关闭**（设置页「网络与认证 → 第三方解析兜底」填入端点才启用）。
  *
  * 可靠性机制（[DownloadEngineHealth]）：
- * - 引擎熔断：单引擎连续 3 次失败 → 冷却 10 分钟直接跳过，不再每次下载先撞一遍必死层；
- * - 单推文亲和：24h 内失败过的引擎不再重复尝试（自动重试直达可用引擎）；
+ * - 引擎熔断：**用户下载线**（[launch] manual=true）单引擎连续 3 次失败 → 冷却 10 分钟
+ *   直接跳过，不再每次下载先撞一遍必死层；
+ * - 订阅线（manual=false，后台自动下载）失败**只记推文亲和，不记全局熔断**——
+ *   2026-10-17 双线隔离：订阅失败曾打满全局熔断器，误伤用户手动下载；
+ * - 单推文亲和：24h 内失败过的引擎不再重复尝试（两线通用，自动重试直达可用引擎）；
  * - TweetGone 是确定性知识：永久失败不回退、不计熔断。
  *
  * 不再拉起外部下载器 Activity（旧逻辑 startActivity 自己包名 MainActivity 会把 App
@@ -50,7 +53,11 @@ class DownloaderClient(private val context: Context) {
 
     private val internalDownloader = InternalMediaDownloader(context)
 
-    suspend fun launch(rawUrl: String, proxy: ProxySettings? = null): LaunchResult {
+    /**
+     * @param manual 是否用户下载线（用户点下载/详情页/重试= true；订阅轮询自动下载 = false）。
+     *   仅 manual 的引擎失败计入全局熔断器（[DownloadEngineHealth]），订阅线失败不影响手动下载。
+     */
+    suspend fun launch(rawUrl: String, proxy: ProxySettings? = null, manual: Boolean = false): LaunchResult {
         val tweetId = TweetIdExtractor.fromUrl(rawUrl)
             ?: return LaunchResult.Failed("链接中没有有效的推文 ID")
         val normalizedUrl = "https://x.com/i/status/$tweetId"
@@ -86,15 +93,24 @@ class DownloaderClient(private val context: Context) {
                         health.recordEngineSuccess(DownloadEngineHealth.ENGINE_FXTWITTER)
                         return ytdlpFallback(normalizedUrl, tweetId, error.message ?: "存在 HLS 高画质源")
                     }
-                    health.recordEngineFailure(DownloadEngineHealth.ENGINE_FXTWITTER, error.message)
+                    // 双线隔离（2026-10-17）：仅用户线失败计入全局熔断，
+                    // 订阅线失败只记推文亲和（下方 markTweetFailed），不打熔断器
+                    if (manual) {
+                        health.recordEngineFailure(DownloadEngineHealth.ENGINE_FXTWITTER, error.message)
+                    }
                     health.markTweetFailed(tweetId, DownloadEngineHealth.ENGINE_FXTWITTER)
                     error.message ?: "内部下载失败"
                 },
             )
         } else {
-            internalError = "FXTwitter 引擎熔断中${health.engineBreakerNote(DownloadEngineHealth.ENGINE_FXTWITTER) ?: ""}"
+            // 2026-10-17：区分两种跳过——全局熔断（该说冷却）vs 本推文亲和（该说近期失败过），
+            // 旧文案一律显示「引擎熔断中」，把普通重试跳过误报成熔断故障
+            internalError = if (health.failedBefore(tweetId, DownloadEngineHealth.ENGINE_FXTWITTER)) {
+                "FXTwitter 近期失败过已跳过"
+            } else {
+                "FXTwitter 引擎熔断中${health.engineBreakerNote(DownloadEngineHealth.ENGINE_FXTWITTER) ?: ""}"
+            }
         }
-
         // ---------- 引擎二：yt-dlp（代理 + Cookie） ----------
         var ytdlpError: String? = null
         if (health.isEngineAvailable(DownloadEngineHealth.ENGINE_YTDLP) &&
@@ -117,7 +133,7 @@ class DownloaderClient(private val context: Context) {
         }
 
         // ---------- 引擎三：第三方 API 兜底（默认关闭，设置页配置后启用） ----------
-        return when (val thirdParty = thirdPartyFallback(normalizedUrl, tweetId, effectiveProxy)) {
+        return when (val thirdParty = thirdPartyFallback(normalizedUrl, tweetId, effectiveProxy, manual)) {
             is LaunchResult.Downloaded -> thirdParty
             else -> {
                 val tpReason = (thirdParty as? LaunchResult.Failed)?.reason
@@ -236,7 +252,12 @@ class DownloaderClient(private val context: Context) {
      * 注意：任务 ID 前缀 tpapi_ 不在收件箱实时进度归并正则内（xinvox_/ytdlp_），
      * 下载中心仍可见任务，收件箱卡片以最终落库状态为准。
      */
-    private suspend fun thirdPartyFallback(url: String, tweetId: String, proxy: ProxySettings?): LaunchResult {
+    private suspend fun thirdPartyFallback(
+        url: String,
+        tweetId: String,
+        proxy: ProxySettings?,
+        manual: Boolean,
+    ): LaunchResult {
         val apiPrefs = ThirdPartyApiPreferences(context)
         if (!apiPrefs.isConfigured) {
             return LaunchResult.Failed("第三方 API 兜底未配置（设置 → 网络与认证）")
@@ -253,7 +274,9 @@ class DownloaderClient(private val context: Context) {
             .fold(
                 onSuccess = { it },
                 onFailure = { error ->
-                    health.recordEngineFailure(DownloadEngineHealth.ENGINE_THIRD_PARTY, error.message)
+                    if (manual) {
+                        health.recordEngineFailure(DownloadEngineHealth.ENGINE_THIRD_PARTY, error.message)
+                    }
                     health.markTweetFailed(tweetId, DownloadEngineHealth.ENGINE_THIRD_PARTY)
                     return LaunchResult.Failed("第三方 API 解析失败：${error.message ?: "未知错误"}")
                 },
@@ -336,7 +359,9 @@ class DownloaderClient(private val context: Context) {
                 health.markTweetSuccess(tweetId)
                 LaunchResult.Downloaded(files)
             } else {
-                health.recordEngineFailure(DownloadEngineHealth.ENGINE_THIRD_PARTY, lastError)
+                if (manual) {
+                    health.recordEngineFailure(DownloadEngineHealth.ENGINE_THIRD_PARTY, lastError)
+                }
                 health.markTweetFailed(tweetId, DownloadEngineHealth.ENGINE_THIRD_PARTY)
                 LaunchResult.Failed("第三方 API 链接下载失败：${lastError ?: "未知错误"}")
             }

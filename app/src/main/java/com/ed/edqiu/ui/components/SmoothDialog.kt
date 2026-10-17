@@ -1,5 +1,7 @@
 package com.ed.edqiu.ui.components
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -7,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.AlertDialogDefaults
@@ -64,8 +67,12 @@ fun AnimatedDialog(
     }
     LaunchedEffect(dismissing) {
         if (dismissing) {
-            scale.animateTo(0.94f, tween(160, easing = FastOutSlowInEasing))
-            alpha.animateTo(0f, tween(160, easing = FastOutSlowInEasing))
+            // 2026-10-17：退场改并行单段——旧实现 scale 160ms 播完再淡出 160ms
+            // （顺序双段共 320ms，中段肉眼可感的停顿=卡顿感）；现在缩放与淡出同一
+            // tween 并行，180ms 一次完成，跟手且利落
+            launch { scale.animateTo(0.96f, tween(180, easing = FastOutSlowInEasing)) }
+            launch { alpha.animateTo(0f, tween(180, easing = FastOutSlowInEasing)) }
+            delay(180)
             if (!dismissRequested) {
                 dismissRequested = true
                 onDismissRequest()
@@ -85,7 +92,16 @@ fun AnimatedDialog(
                 onDismissRequest()
             }
         },
-        properties = properties
+        // 2026-10-17：关掉平台默认弹窗宽度钳制——它会把窗口先钳到 ~70% 屏宽，
+        // 上层的 fillMaxWidth 比例全变成"钳后窗口的比例"。关掉后窗口=全屏约束，
+        // SmoothAlertDialog 的 86% 比例才是真正的屏宽比例
+        properties = DialogProperties(
+            dismissOnBackPress = properties.dismissOnBackPress,
+            dismissOnClickOutside = properties.dismissOnClickOutside,
+            securePolicy = properties.securePolicy,
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = properties.decorFitsSystemWindows,
+        )
     ) {
         Box(
             modifier = Modifier.graphicsLayer {
@@ -123,12 +139,17 @@ fun SmoothAlertDialog(
 ) {
     AnimatedDialog(onDismissRequest = onDismissRequest, properties = properties) {
         Surface(
-            modifier = modifier.widthIn(max = 560.dp),
+            modifier = modifier
+                // 2026-10-17：大屏适配——旧实现只有 widthIn(max) 无填充比例，
+                // 内容多窄弹窗多宽，1272px 大屏上就是个迷你块。默认 86% 屏宽、
+                // 上限 560dp，短文案也有合格的存在感
+                .fillMaxWidth(DIALOG_WIDTH_FRACTION)
+                .widthIn(max = 560.dp),
             shape = shape,
             color = containerColor,
             tonalElevation = tonalElevation
         ) {
-            Column(Modifier.padding(horizontal = 24.dp, vertical = 20.dp)) {
+            Column(Modifier.padding(horizontal = 24.dp, vertical = 22.dp)) {
                 icon?.let {
                     Box(
                         Modifier
@@ -158,7 +179,11 @@ fun SmoothAlertDialog(
                     }
                 }
                 Row(
-                    Modifier.align(Alignment.End),
+                    // 2026-10-17：无次要按钮时单按钮居中（iOS 单动作弹窗规范）——
+                    // 宽弹窗里右对齐的孤按钮会让右侧大片留白，失衡
+                    Modifier.align(
+                        if (dismissButton == null) Alignment.CenterHorizontally else Alignment.End
+                    ),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -170,10 +195,16 @@ fun SmoothAlertDialog(
     }
 }
 
+/** 弹窗宽度占屏比例（2026-10-17）：86% 屏宽 + 560dp 上限，兼顾大屏存在感与平板可读性。 */
+private const val DIALOG_WIDTH_FRACTION = 0.86f
+
 /**
  * 操作结果反馈的统一弹窗（2026-09-28）：替代卡片内嵌的 InlineFeedbackBar 通知条。
  * 按 [FeedbackKind] 定标题（操作成功/操作失败/提示），正文为完整消息文本，
  * 单按钮「知道了」——用户此前明确偏好弹窗形式的操作结果反馈。
+ *
+ * 2026-10-17：弹窗加宽至 86% 屏宽（见 [SmoothAlertDialog]），正文字号同步放大到
+ * bodyLarge、按钮 labelLarge——大弹窗配小字会更显空。
  */
 @Composable
 fun FeedbackDialog(
@@ -192,9 +223,16 @@ fun FeedbackDialog(
                 }
             )
         },
-        text = { Text(message.text) },
+        text = {
+            Text(
+                text = message.text,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("知道了") }
+            TextButton(onClick = onDismiss) {
+                Text("知道了", style = MaterialTheme.typography.labelLarge)
+            }
         }
     )
 }

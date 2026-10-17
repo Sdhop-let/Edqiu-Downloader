@@ -6,7 +6,6 @@ import com.ed.edqiu.data.backup.HistoryBackupRepository
 import com.ed.edqiu.data.db.EdqiuDatabase
 import com.ed.edqiu.data.metadata.MetadataFetcher
 import com.ed.edqiu.data.preferences.CloudSyncPreferences
-import com.ed.edqiu.data.preferences.PreDownloadPreferences
 import com.ed.edqiu.data.preferences.ProxyPreferences
 import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.data.repository.DownloadMonitor
@@ -14,7 +13,6 @@ import com.ed.edqiu.data.repository.DownloadTaskRepo
 import com.ed.edqiu.data.repository.DownloaderClient
 import com.ed.edqiu.data.repository.LinkHistoryRepository
 import com.ed.edqiu.data.repository.SavedLinkRepository
-import com.ed.edqiu.predownload.PreDownloadManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -78,30 +76,16 @@ class AppContainer(context: Context) {
     // ================= 网盘备份 → 2026-10 整体移除 =================
     // 备份中心（BackupEngine 队列 / 多网盘适配器 / 账本 / 任务存储）随功能删除；
     // WebDAV 同步链路（WebDavSyncService + WebDavEngine + CloudSyncPreferences）
-    // 直接对账远端，幂等不再依赖账本。预下载联动改走 WebDavSyncService。
-
-    // ================= 预下载（自动攒批 + 代理通路检测 + 网盘联动） =================
-    // 2026-08-31 18:22 恢复：此前误判为干扰收件箱下载而停用，真凶是 InternalMediaDownloader
-    // openConnection(null) 抛 "proxy can not be null"（已修）。手动批量下载保持直接链路，
-    // 自动预下载（onCaptured 攒批）独立走本协调器，互不阻塞。
-    val preDownloadPreferences: PreDownloadPreferences =
-        PreDownloadPreferences(context.applicationContext)
+    // 直接对账远端，幂等不再依赖账本。
+    //
+    // 2026-10-17：预下载功能整体退役（自动攒批是订阅/手动之外的第三条下载路径，
+    // 曾打满全局熔断器误伤手动下载；保留价值仅剩"省一次点击"）。下载后的网盘联动
+    // 保留在 service/DownloadCloudSync。
     val proxyPreferences: ProxyPreferences =
         ProxyPreferences(context.applicationContext)
     val cloudSyncPreferences: CloudSyncPreferences =
         CloudSyncPreferences(context.applicationContext)
-    val preDownloadManager: PreDownloadManager = PreDownloadManager(
-        context = context.applicationContext,
-        savedLinkRepository = savedLinkRepository,
-        preDownloadPreferences = preDownloadPreferences,
-        proxyPreferences = proxyPreferences,
-        cloudSyncPreferences = cloudSyncPreferences,
-        settingsRepository = settingsRepository,
-        ioScope = globalIoScope,
-    )
     init {
-        // 捕获挂载：收件箱保存链接成功后 → 攒批自动预下载（受开关控制）
-        savedLinkRepository.onCaptured = preDownloadManager::onLinkCaptured
         // P0-4 持久队列挂载（2026-09-15）：每次请求下载 → 登记 WorkManager 唯一任务，
         // 下载中途进程被杀后由 Worker 在进程恢复时自动续跑（不改变收件箱手动模式语义）
         savedLinkRepository.onDownloadRequested = { tweetId ->

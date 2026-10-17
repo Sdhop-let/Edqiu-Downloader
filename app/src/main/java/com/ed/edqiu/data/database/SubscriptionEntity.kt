@@ -26,6 +26,20 @@ data class SubscriptionEntity(
     val lastCheckedAt: Long? = null,
     /** 上次发现新作品时间（epoch ms，展示用）。 */
     val lastVideoAt: Long? = null,
+    /**
+     * 最近一次检测失败/数据降级的原因（null=正常）。
+     * 2026-10-17：修复 twitter 通道静默失败 bug——失败原因落库，订阅页直接展示，
+     * 不再把「通道挂了」伪装成「暂无新作品」。
+     */
+    val lastError: String? = null,
+    /** lastError 写入时间（epoch ms，展示用）。 */
+    val lastErrorAt: Long? = null,
+    /**
+     * 订阅起始检测日期（epoch ms，null = 不限/从订阅日起）。
+     * 2026-10-17：用户自定义（如 10-17）——轮询只把**该日期之后发布**的推文视为新作品，
+     * 之前的旧帖不再涌进收件箱。
+     */
+    val startFromAt: Long? = null,
     val createdAt: Long
 ) {
     companion object {

@@ -66,7 +66,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.data.model.SavedLink
+import com.ed.edqiu.ui.components.FeedbackDialog
 import com.ed.edqiu.ui.components.FeedbackKind
+import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.StatusBadge
@@ -91,22 +93,28 @@ fun DetailScreen(
     val downloadProgress by vm.downloadProgress.collectAsStateWithLifecycle()
 
     LaunchedEffect(tweetId) { vm.load(tweetId) }
-    // 下载结果走底部玻璃胶囊（2026-09-15：原居中 AlertDialog 打断浏览，状态类反馈统一胶囊化）
+    // 下载结果（2026-10-17）：成功=瞬时状态走胶囊；失败=带具体原因（引擎链/熔断/代理）
+    // → 中央弹窗，必须用户点掉才消失，不再一闪而过
+    var downloadErrorDialog by remember { mutableStateOf<FeedbackMessage?>(null) }
     LaunchedEffect(downloadFeedback) {
         downloadFeedback?.let { feedback ->
-            snackbar.show(
-                message = feedback.message,
-                kind = when (feedback.success) {
-                    true -> FeedbackKind.SUCCESS
-                    false -> FeedbackKind.ERROR
-                    null -> FeedbackKind.NEUTRAL
-                }
-            )
+            if (feedback.success == false) {
+                downloadErrorDialog = FeedbackMessage(feedback.message, FeedbackKind.ERROR)
+            } else {
+                snackbar.show(
+                    message = feedback.message,
+                    kind = when (feedback.success) {
+                        true -> FeedbackKind.SUCCESS
+                        else -> FeedbackKind.NEUTRAL
+                    }
+                )
+            }
             vm.clearDownloadFeedback()
         }
     }
 
     val data = link
+    FeedbackDialog(message = downloadErrorDialog, onDismiss = { downloadErrorDialog = null })
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0)

@@ -10,7 +10,6 @@ import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.data.repository.DownloadTaskBus
 import com.ed.edqiu.data.repository.SavedLinkRepository
 import com.ed.edqiu.domain.TweetIdExtractor
-import com.ed.edqiu.predownload.PreDownloadManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,7 +28,6 @@ class ListViewModel(
     private val repo: SavedLinkRepository,
     private val settings: SettingsRepository,
     private val captureCoordinator: LinkCaptureCoordinator,
-    private val preDownloadManager: PreDownloadManager,
     // 应用级下载作用域（AppContainer.globalIoScope，SupervisorJob）：下载执行不随
     // Activity/ViewModel 销毁中断——用户退后台后只要不划掉 App，下载持续进行。
     // 下载期间的 UI 状态写 StateFlow（线程安全），页面回来即可恢复订阅。
@@ -199,7 +197,7 @@ class ListViewModel(
             )
             clearSelection()
             // 手动下载完成 → 联动网盘同步（无论预下载开关状态）
-            if (result.launched > 0) preDownloadManager.syncAfterManualDownload()
+            if (result.launched > 0) com.ed.edqiu.service.DownloadCloudSync.syncAfterDownloads(getApplication())
         }
     }
 
@@ -231,20 +229,10 @@ class ListViewModel(
                     success = result.launched > 0,
                     message = "成功 ${result.launched} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条"
                 )
-                if (result.launched > 0) preDownloadManager.syncAfterManualDownload()
+                if (result.launched > 0) com.ed.edqiu.service.DownloadCloudSync.syncAfterDownloads(getApplication())
             } finally {
                 downloadAllInFlight.set(false)
             }
-        }
-    }
-
-    /** 预下载提示：批量派发指定 tweetId 的下载请求（直接走收件箱下载，应用级 scope 后台不中断）。 */
-    fun downloadPending(tweetIds: Collection<String>) {
-        if (tweetIds.isEmpty()) return
-        downloadScope.launch {
-            val result = repo.requestDownloads(tweetIds)
-            // 手动批量下载完成 → 联动网盘同步
-            if (result.launched > 0) preDownloadManager.syncAfterManualDownload()
         }
     }
 

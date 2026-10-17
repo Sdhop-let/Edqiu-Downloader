@@ -11,8 +11,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.ed.edqiu.data.model.MediaType
 
 @Database(
-    entities = [DownloadHistoryEntity::class, DownloadTaskEntity::class, SubscriptionEntity::class],
-    version = 12,
+    entities = [
+        DownloadHistoryEntity::class,
+        DownloadTaskEntity::class,
+        SubscriptionEntity::class,
+        SubscriptionMessageEntity::class,
+    ],
+    version = 15,
     exportSchema = false
 )
 @TypeConverters(AppDatabase.Converters::class)
@@ -23,6 +28,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun downloadTaskDao(): DownloadTaskDao
 
     abstract fun subscriptionDao(): SubscriptionDao
+
+    abstract fun subscriptionMessageDao(): SubscriptionMessageDao
 
     class Converters {
         @TypeConverter
@@ -235,6 +242,48 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 2026-10-17（v13）：subscriptions 加 lastError/lastErrorAt——检测失败原因持久化，
+         * 订阅页展示具体原因（未走代理/代理超时/账号被限/Cookie 失效/接口轮换失败），
+         * 杜绝旧版 twitter 通道静默失败却显示「暂无新作品」。
+         */
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE subscriptions ADD COLUMN lastError TEXT")
+                database.execSQL("ALTER TABLE subscriptions ADD COLUMN lastErrorAt INTEGER")
+            }
+        }
+
+        /**
+         * 2026-10-17（v14）：新建 subscription_messages 表——订阅事件收纳箱
+         * （新作品/失败/恢复正常/降级提示），供「作品订阅」页订阅消息分区展示。
+         */
+        private val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `subscription_messages` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `kind` TEXT NOT NULL,
+                        `text` TEXT NOT NULL,
+                        `read` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        /**
+         * 2026-10-17（v15）：subscriptions 加 startFromAt——订阅起始检测日期
+         * （null=不限），轮询只捞该日期后发布的推文；存量订阅默认 null 行为不变。
+         */
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE subscriptions ADD COLUMN startFromAt INTEGER")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -245,7 +294,8 @@ abstract class AppDatabase : RoomDatabase() {
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                    MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
+                    MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
+                    MIGRATION_13_14, MIGRATION_14_15
                 )
                 // 2026-10 安全整改：移除 fallbackToDestructiveMigration()——
                 // 升级路径 schema 漂移时它会把整库（下载历史/任务/订阅）静默删除重建。

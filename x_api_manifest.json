@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "updatedAt": "2026-10-17",
+  "note": "Edqiu 作者订阅 X 检测接口 manifest。App 内置默认值与本地缓存失效时拉取本文件热更新 queryId/bearer——改这里等于热更新所有客户端，无需发版。queryId 取自 X 网页版当前在线值。",
+  "bearer": "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
+  "queryIds": {
+    "userByScreenName": "sLVLhk0bGj3MVFEKTdax1w",
+    "userTweets": "E3opETHurmVJflFsUBVuUQ"
+  }
+}

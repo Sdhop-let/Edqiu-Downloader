@@ -209,4 +209,10 @@ interface SavedLinkDao {
     /** 按状态取 tweetId 列表（自动预下载攒批用）。 */
     @Query("SELECT tweetId FROM saved_links WHERE status = :status ORDER BY saved_at DESC")
     suspend fun getTweetIdsByStatus(status: LinkStatus): List<String>
+
+    /** 按状态 + 来源线取 tweetId（自动预下载只取 user 线；订阅线归订阅队列）。 */
+    @Query(
+        "SELECT tweetId FROM saved_links WHERE status = :status AND origin = :origin ORDER BY saved_at DESC"
+    )
+    suspend fun getTweetIdsByStatusAndOrigin(status: LinkStatus, origin: String): List<String>
 }

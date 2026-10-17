@@ -143,7 +143,9 @@ fun CapsuleFeedbackHost(
         modifier = modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(bottom = 20.dp),
+            // 2026-10-17：抬到底部液态 Tab 栏之上——Tab 栏 = navigationBar + 8dp 起、高 50dp
+            // （占 8~58dp），胶囊底部再留 12dp 间距 → 8 + 50 + 12 = 70dp，不遮挡 Tab 栏
+            .padding(bottom = 70.dp),
         contentAlignment = Alignment.BottomCenter
     ) {
         AnimatedVisibility(
