@@ -33,8 +33,8 @@ import kotlin.coroutines.resume
  *   - **bluesky**：公共 AppView API `public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed`
  *     （无需登录，JSON）检测最新 post rkey——Bluesky 域名需走用户代理；
  *   - **instagram**：yt-dlp 用户页（实验性；IG 风控严，失败静默下轮再试）；
- * - 新作品处理（2026-10-17 改）：**只 capture 入收件箱（PENDING），不自动下载**——
- *   用户在订阅消息/收件箱看到新作品后自己点按下载（用户线 manual=true）。
+ * - 新作品处理（2026-10-17 改）：**只 capture 成订阅线作品（PENDING），不自动下载**——
+ *   用户在「作品订阅」页看到新作品后自己点按下载（用户线 manual=true）。
  *   订阅起始日期 [SubscriptionEntity.startFromAt] 可自定义：只捞该日期后发布的推文；
  * - 限速：每作者每轮最多 [NEW_PER_AUTHOR] 条，防风控；轮询失败静默跳过（下一轮再试）。
  */
@@ -279,8 +279,8 @@ object SubscriptionManager {
             if (dedupeId.isBlank()) continue
             if (container.savedLinkRepository.getByTweetId(dedupeId) != null) continue
 
-            // 2026-10-17：只入收件箱（PENDING），不自动下载——用户在订阅消息/收件箱
-            // 看到新作品后自己点按下载（用户线 manual=true，熔断语义与手动一致）
+            // 2026-10-17：只 capture 成订阅线作品（PENDING），不自动下载——用户在
+            // 「作品订阅」页看到新作品后自己点按下载（用户线 manual=true，熔断语义与手动一致）
             val captureResult = container.savedLinkRepository.capture(
                 text = statusUrl,
                 origin = SavedLink.ORIGIN_SUBSCRIPTION,
@@ -346,7 +346,7 @@ object SubscriptionManager {
                 dao.insert(
                     SubscriptionMessageEntity(
                         kind = SubscriptionMessageEntity.KIND_NEW_WORKS,
-                        text = "@${sub.screenName}：发现 $taken 个新作品，已加入收件箱，点按下载",
+                        text = "@${sub.screenName}：发现 $taken 个新作品，已加入订阅作品，点按下载",
                         createdAt = now,
                     )
                 )

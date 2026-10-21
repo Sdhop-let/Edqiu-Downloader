@@ -48,9 +48,6 @@ object Motion {
 
     // ===== 缓动曲线 =====
 
-    /** 全局主曲线（对应 FastOutSlowIn 语义，显式声明以便统一替换）。 */
-    val Standard = CubicBezierEasing(0.2f, 0f, 0f, 1f)
-
     /** 出场/展开类（容器变形、面板滑入的减速度）。 */
     val EaseOutCubic = CubicBezierEasing(0.33f, 1f, 0.68f, 1f)
 
@@ -62,6 +59,5 @@ object Motion {
     /** 滑杆 thumb / 播放进度 thumb 增强。 */
     fun thumb() = spring<Float>(dampingRatio = 0.8f, stiffness = 500f)
 
-    /** 通用弹性（浮层滑入等既有手感）。 */
-    fun standard() = spring<Float>(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow)
 }
+    

@@ -15,9 +15,6 @@ interface SubscriptionMessageDao {
     @Query("SELECT COUNT(*) FROM subscription_messages WHERE read = 0")
     fun observeUnreadCount(): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM subscription_messages WHERE read = 0")
-    suspend fun countUnread(): Int
-
     @Insert
     suspend fun insert(entity: SubscriptionMessageEntity): Long
 

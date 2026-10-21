@@ -77,6 +77,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -99,6 +100,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.ed.edqiu.data.model.LinkStatus
+import com.ed.edqiu.ui.theme.statusColor
 import com.ed.edqiu.data.model.SavedLink
 import com.ed.edqiu.ui.components.EdqiuTextField
 import com.ed.edqiu.ui.components.GlassSurface
@@ -141,6 +143,27 @@ fun ListScreen(
     var showBatchPreview by remember { mutableStateOf(false) }
     var showPasteDialog by remember { mutableStateOf(false) }
     var pasteText by remember { mutableStateOf("") }
+    // 2026-10-21 粘贴升级（一键读剪贴板）：点按先看剪贴板——含 X 链接直接捕获
+    // （单条走原提示、多条走批量汇总），没有链接才弹手输框并把剪贴板原文预填进去。
+    // Android 12+ 首次读取会由系统弹出「已粘贴」提示，属正常。
+    val pasteFromClipboard: () -> Unit = {
+        val clip = (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+            as? android.content.ClipboardManager)?.primaryClip
+        val clipText = if (clip != null && clip.itemCount > 0) {
+            clip.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+        } else {
+            ""
+        }
+        val hasLink = clipText.isNotBlank() &&
+            com.ed.edqiu.domain.BatchTweetUrlExtractor
+                .extractWithOriginals(clipText).isNotEmpty()
+        if (hasLink) {
+            vm.captureText(clipText)
+        } else {
+            pasteText = if (clipText.length <= 2000) clipText else ""
+            showPasteDialog = true
+        }
+    }
     var sortExpanded by remember { mutableStateOf(false) }
     var longPressedLink by remember { mutableStateOf<SavedLink?>(null) }
     var isFirstLoad by remember { mutableStateOf(true) }
@@ -268,7 +291,7 @@ fun ListScreen(
                     onSearchChange = vm::setSearchQuery,
                     selectedFilter = filter,
                     onFilterChange = { filter = it },
-                    onPaste = { showPasteDialog = true },
+                    onPaste = pasteFromClipboard,
                     onToggleSelection = vm::toggleSelectionMode,
                     selectionMode = selectionMode,
                     selectedCount = selectedIds.size,
@@ -313,7 +336,7 @@ fun ListScreen(
                         item {
                             EmptyStateCard(
                                 searching = searchQuery.isNotBlank(),
-                                onPaste = { showPasteDialog = true }
+                                onPaste = pasteFromClipboard
                             )
                         }
                     } else {
@@ -636,27 +659,71 @@ private fun InboxHeader(
         }
 
         Column {
+            // ── 收件箱统计卡（2026-10-21 重设计）：语义色数字 + 等宽排版 + 底部完成度条 ──
+            // 三段各带状态色圆点（待处理=橙/已完成=绿/失败=红，与 statusColor 同源），
+            // 数字 tabular-nums 防跳动；卡底 3dp 完成度条把"队列消化进度"变成可感知的内容，
+            // 玻璃透出色场时有物可衬（对齐液态玻璃教程：背景要有内容玻璃才生动）
+            val inboxTotal = (pendingCount + downloadedCount + failedCount).coerceAtLeast(1)
             GlassSurface(
-                    tier = GlassTier.L1,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 14.dp)
-                ) {
+                tier = GlassTier.L1,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 14.dp)
+            ) {
+                Column {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 14.dp),
+                            .padding(horizontal = 8.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        MetricItem("待处理", pendingCount.toString())
+                        MetricItem(
+                            label = "待处理",
+                            value = pendingCount.toString(),
+                            dotColor = statusColor(LinkStatus.PENDING),
+                            emphasize = pendingCount > 0
+                        )
                         MetricDivider()
-                        MetricItem("已完成", downloadedCount.toString())
+                        MetricItem(
+                            label = "已完成",
+                            value = downloadedCount.toString(),
+                            dotColor = statusColor(LinkStatus.DOWNLOADED)
+                        )
                         MetricDivider()
-                        MetricItem("失败", failedCount.toString())
+                        MetricItem(
+                            label = "失败",
+                            value = failedCount.toString(),
+                            dotColor = statusColor(LinkStatus.FAILED),
+                            emphasize = failedCount > 0
+                        )
+                    }
+                    // 完成度条：已完成 / 总数，primary→tertiary 渐变（收件箱消化进度一眼可读）
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(3.dp)
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+                    ) {
+                        if (downloadedCount > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(fraction = downloadedCount.toFloat() / inboxTotal)
+                                    .fillMaxHeight()
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            colors = listOf(
+                                                MaterialTheme.colorScheme.primary,
+                                                MaterialTheme.colorScheme.tertiary
+                                            )
+                                        )
+                                    )
+                            )
+                        }
                     }
                 }
+            }
 
         GlassSurface(
             tier = GlassTier.L1,
@@ -788,15 +855,42 @@ private fun InboxHeader(
     }
 }
 
+/**
+ * 统计指标单元（2026-10-21 重设计）。
+ *
+ * - 状态色圆点：与 [statusColor] 语义同源（橙/绿/红），数字颜色不再各自为政
+ * - tabular-nums 等宽数字：计数变化时不抖动（iOS 数字排版惯例）
+ * - [emphasize]：有待处理/失败时数字提为语义色并加重——异常状态自己浮出来，
+ *   平静态保持中性（主次分明，非异常不抢眼）
+ */
 @Composable
-private fun MetricItem(label: String, value: String) {
+private fun MetricItem(
+    label: String,
+    value: String,
+    dotColor: Color,
+    emphasize: Boolean = false
+) {
+    val accentColor = if (emphasize) dotColor else MaterialTheme.colorScheme.onSurface
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            value,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.ExtraBold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(dotColor.copy(alpha = if (value == "0") 0.30f else 0.95f))
+            )
+            Text(
+                value,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-0.02).sp,
+                color = accentColor,
+                style = LocalTextStyle.current.copy(fontFeatureSettings = "tnum")
+            )
+        }
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             label,
@@ -807,14 +901,21 @@ private fun MetricItem(label: String, value: String) {
     }
 }
 
+/** 渐变淡出分隔线：两端透明中段显形，比实线更轻（2026-10-21 统计卡重设计配套）。 */
 @Composable
 private fun MetricDivider() {
     Box(
         modifier = Modifier
             .width(1.dp)
-            .height(28.dp)
+            .height(30.dp)
             .background(
-                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f)
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f),
+                        Color.Transparent
+                    )
+                )
             )
     )
 }

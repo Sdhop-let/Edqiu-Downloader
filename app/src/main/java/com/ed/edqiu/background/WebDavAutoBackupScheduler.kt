@@ -10,6 +10,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.ed.edqiu.data.preferences.CloudSyncPreferences
+import com.ed.edqiu.data.preferences.SyncHistoryRecord
 import com.ed.edqiu.service.WebDavSyncService
 import java.util.concurrent.TimeUnit
 
@@ -60,6 +61,9 @@ class WebDavAutoBackupWorker(
             return Result.success()
         }
         Log.i(TAG, "开始自动双向同步，server=${account.serverUrl}, remotePath=${account.remotePath}")
+        // 备份中心历史前置快照（2026-10）：同 WebDavManualSync 口径
+        val firstEver = prefs.lastSyncTime == 0L
+        val recovering = prefs.syncInProgress
         val result = WebDavSyncService.syncDownloads(applicationContext, prefs)
         return result.fold(
             onSuccess = { r ->
@@ -68,10 +72,28 @@ class WebDavAutoBackupWorker(
                     prefs.syncedFileCount = prefs.syncedFileCount + r.uploaded
                     prefs.lastSyncTime = System.currentTimeMillis()
                 }
+                prefs.addSyncHistory(
+                    SyncHistoryRecord(
+                        timestamp = System.currentTimeMillis(),
+                        mode = if (firstEver) "full" else "incremental",
+                        files = r.uploaded + r.downloaded,
+                        bytes = r.bytesTransferred,
+                        status = if (recovering) "frozen_healed" else "success",
+                    )
+                )
                 Result.success()
             },
             onFailure = { e ->
                 Log.e(TAG, "自动备份失败 (attempt=$runAttemptCount)", e)
+                prefs.addSyncHistory(
+                    SyncHistoryRecord(
+                        timestamp = System.currentTimeMillis(),
+                        mode = if (firstEver) "full" else "incremental",
+                        files = 0,
+                        bytes = 0L,
+                        status = "failed",
+                    )
+                )
                 // 2026-10 整改：配置性失败（密码改了/服务器下线）旧实现无限退避重试——
                 // 3 次后放弃本轮，等下一个调度周期（下轮配置若修复会自动恢复）
                 if (runAttemptCount < 3) Result.retry() else Result.failure()

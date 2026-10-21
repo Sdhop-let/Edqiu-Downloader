@@ -37,8 +37,6 @@ class DownloadPathPreferences(context: Context) {
         get() = prefs.getString(KEY_CUSTOM_DISPLAY_PATH, "") ?: ""
         set(value) = prefs.edit().putString(KEY_CUSTOM_DISPLAY_PATH, value).apply()
 
-    val hasCustomTreeUri: Boolean
-        get() = customTreeUri.isNotBlank()
 
     fun saveCustomTreeUri(uri: String, displayPath: String) {
         prefs.edit()

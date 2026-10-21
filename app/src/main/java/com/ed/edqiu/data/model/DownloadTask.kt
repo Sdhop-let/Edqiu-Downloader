@@ -28,9 +28,6 @@ data class DownloadTask(
     val progressInt: Int
         get() = progress.toInt()
 
-    val isCompleted: Boolean
-        get() = status == DownloadStatus.COMPLETED
-
     val isActive: Boolean
         get() = status == DownloadStatus.PENDING ||
                 status == DownloadStatus.RESOLVING ||

@@ -50,6 +50,7 @@ data class WebDavSyncProgress(
  * @property conflicts 冲突数（两端同名但内容不同；本地始终保留不覆盖，云端旧版本
  *                     尽力改名 `xxx.conflict-<时间戳>.ext` 保留，MOVE 不可用时跳过该文件）
  * @property pausedCount 用户暂停跳过的文件数（队列级跳过 + 传输中中断）
+ * @property bytesTransferred 本轮实际传输字节数（上传成功 + 下载成功，2026-10 备份中心历史用）
  */
 data class WebDavSyncResult(
     val uploaded: Int = 0,
@@ -57,6 +58,7 @@ data class WebDavSyncResult(
     val downloaded: Int = 0,
     val conflicts: Int = 0,
     val pausedCount: Int = 0,
+    val bytesTransferred: Long = 0L,
 ) {
     /** 是否有任何实际数据变动（驱动提示文案与计数器更新）。 */
     val hasChanges: Boolean get() = uploaded > 0 || downloaded > 0
@@ -106,6 +108,9 @@ object WebDavSyncService {
             Log.i(TAG, "已有同步轮在执行，跳过本轮 syncDownloads")
             return Result.success(WebDavSyncResult())
         }
+        // 运行标记（2026-10 备份中心「冻结自愈恢复」判定）：进程被杀/冻结时残留 true，
+        // 下一轮开始前读到此值 = 上一轮未正常收尾
+        prefs.syncInProgress = true
         try {
             return withContext(Dispatchers.IO) {
                 runCatching {
@@ -130,21 +135,22 @@ object WebDavSyncService {
                         ?: return@runCatching WebDavSyncResult()
                     if (!sourceDir.exists() || !sourceDir.isDirectory) return@runCatching WebDavSyncResult()
 
-                    val (uploaded, skipped, conflicts, pausedCount) =
-                        uploadPhase(engine, credential, sourceDir, prefs.syncSmallFirst, onProgress)
-                    val downloaded = downloadPhase(engine, credential, sourceDir, onProgress)
+                    val up = uploadPhase(engine, credential, sourceDir, prefs.syncSmallFirst, onProgress)
+                    val down = downloadPhase(engine, credential, sourceDir, onProgress)
                     WebDavSyncResult(
-                        uploaded = uploaded,
-                        skippedExisting = skipped,
-                        conflicts = conflicts,
-                        downloaded = downloaded,
-                        pausedCount = pausedCount,
+                        uploaded = up.uploaded,
+                        skippedExisting = up.skipped,
+                        conflicts = up.conflicts,
+                        downloaded = down.downloaded,
+                        pausedCount = up.pausedCount,
+                        bytesTransferred = up.bytes + down.bytes,
                     )
                 }.onFailure { error ->
                     Log.e(TAG, "WebDAV sync failed", error)
                 }
             }
         } finally {
+            prefs.syncInProgress = false
             SyncTaskControl.endRun()
         }
     }
@@ -178,7 +184,7 @@ object WebDavSyncService {
         engine.buildRemoteUrl(credential, "").let { if (it.endsWith("/")) it else "$it/" }
 
     /**
-     * 上传阶段：本地 → 云端。返回 [uploaded, skipped, conflicts, pausedCount]。
+     * 上传阶段：本地 → 云端。返回 [UploadOutcome]（账面 + 传输字节）。
      *
      * 2026-10 详情页重设计：顺序遍历升级为**可控队列**——
      * - 优先同步：[SyncTaskControl.prioritized] 中的文件每轮插队到最前；
@@ -193,7 +199,7 @@ object WebDavSyncService {
         sourceDir: File,
         smallFirst: Boolean,
         onProgress: (WebDavSyncProgress) -> Unit,
-    ): List<Int> {
+    ): UploadOutcome {
         val localFiles = if (smallFirst) {
             scanMediaUnder(sourceDir).sortedBy { it.first.length() }
         } else {
@@ -204,6 +210,7 @@ object WebDavSyncService {
         var skipped = 0
         var conflicts = 0
         var pausedCount = 0
+        var bytes = 0L
         // 单次 PROPFIND 得到权威远端清单（存在性 + 尺寸），替代逐文件 HEAD——
         // 部分服务器对不存在的文件 HEAD 返回非 404（403/409/500），旧实现会误报
         // 「无法确认远程文件状态」并中断整轮同步
@@ -240,13 +247,19 @@ object WebDavSyncService {
                 // 两个名字任一命中且尺寸一致都判「已同步」，杜绝网盘已有却显示未同步
                 remote != null && remote.size == size -> skipped++
                 remote == null -> {
-                    if (uploadLocalFile(engine, credential, remoteUrl, file, remoteName, total, processed, onProgress)) uploaded++ else pausedCount++
+                    if (uploadLocalFile(engine, credential, remoteUrl, file, remoteName, total, processed, onProgress)) {
+                        uploaded++
+                        bytes += size
+                    } else pausedCount++
                 }
                 else -> {
                     // 冲突：本地版为用户设备真源；云端旧版本尽力改名保留，保不住则放弃上传
                     val preserved = preserveRemoteCopy(engine, credential, remoteUrl, remoteName)
                     if (preserved) {
-                        if (uploadLocalFile(engine, credential, remoteUrl, file, remoteName, total, processed, onProgress)) uploaded++ else pausedCount++
+                        if (uploadLocalFile(engine, credential, remoteUrl, file, remoteName, total, processed, onProgress)) {
+                            uploaded++
+                            bytes += size
+                        } else pausedCount++
                     } else {
                         Log.w(TAG, "冲突且云端版本无法改名保留，跳过上传（本地保持不变）：$remoteName")
                     }
@@ -254,8 +267,17 @@ object WebDavSyncService {
                 }
             }
         }
-        return listOf(uploaded, skipped, conflicts, pausedCount)
+        return UploadOutcome(uploaded, skipped, conflicts, pausedCount, bytes)
     }
+
+    /** 上传阶段账面 + 传输字节（2026-10 备份中心历史记录用）。 */
+    private data class UploadOutcome(
+        val uploaded: Int,
+        val skipped: Int,
+        val conflicts: Int,
+        val pausedCount: Int,
+        val bytes: Long,
+    )
 
     /**
      * 双名查找：先按现行平坦化名，miss 再按早期版本的纯文件名。
@@ -324,13 +346,13 @@ object WebDavSyncService {
             .isSuccess
     }
 
-    /** 下载阶段：云端 → 本地（仅本地不存在的文件）。返回下载成功数。 */
+    /** 下载阶段：云端 → 本地（仅本地不存在的文件）。返回 [DownloadOutcome]（下载数 + 传输字节）。 */
     private suspend fun downloadPhase(
         engine: WebDavEngine,
         credential: WebDavCredential,
         sourceDir: File,
         onProgress: (WebDavSyncProgress) -> Unit,
-    ): Int {
+    ): DownloadOutcome {
         val remoteFiles = engine.listDirectory(rootUrlOf(engine, credential), credential)
             .getOrElse { throw it }
             .filter { !it.isDir }
@@ -342,6 +364,7 @@ object WebDavSyncService {
         val pending = remoteFiles.filter { it.name !in localFlatNames }
         val total = pending.size
         var downloaded = 0
+        var bytes = 0L
         pending.forEachIndexed { index, remote ->
             onProgress(WebDavSyncProgress(WebDavSyncPhase.DOWNLOAD, total, index + 1, remote.name, 0f))
             val local = File(sourceDir, remote.name)
@@ -364,12 +387,19 @@ object WebDavSyncService {
             // 成品落位：rename 失败（目标被并发创建等）→ 保留 .part 不覆盖
             if (partLocal.renameTo(local)) {
                 downloaded++
+                bytes += remote.size.coerceAtLeast(0L)
                 SyncTaskControl.markCompleted(remote.name) // 实时账面：详情页立即翻绿
                 Log.i(TAG, "下载完成：${remote.name}（${partLocal.length()}B）")
             } else {
                 Log.w(TAG, "本地落位失败（目标已存在？），保留 .part：${remote.name}")
             }
         }
-        return downloaded
+        return DownloadOutcome(downloaded, bytes)
     }
+
+    /** 下载阶段账面 + 传输字节（2026-10 备份中心历史记录用）。 */
+    private data class DownloadOutcome(
+        val downloaded: Int,
+        val bytes: Long,
+    )
 }

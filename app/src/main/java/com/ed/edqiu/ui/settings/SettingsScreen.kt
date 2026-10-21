@@ -7,7 +7,6 @@ import android.os.Environment
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,7 +33,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Backup
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.ContentPaste
@@ -49,7 +47,6 @@ import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.AspectRatio
 import androidx.compose.material.icons.outlined.BlurOn
-import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Science
@@ -60,20 +57,15 @@ import androidx.compose.material.icons.outlined.Visibility
 import com.ed.edqiu.ui.components.SmoothAlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -87,7 +79,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -134,6 +125,12 @@ object XSection {
     const val CAPTURE = "capture"
     /** 播放与媒体库（2026-10-03 批次F 定案：真双播放器开关在此分区） */
     const val PLAYBACK = "playback"
+    // 2026-10-21 设置页合并：原先独立的「下载器设置」页（ui/screens/SettingsScreen）
+    // 拆成以下四个分区并并入本页——值与其 DlSection 常量逐字一致，便于直接透传。
+    const val NETWORK = "network"
+    const val WEBDAV = "webdav"
+    const val UPDATE = "update"
+    const val ABOUT = "about"
 }
 
 @Composable
@@ -142,7 +139,9 @@ fun SettingsScreen(
     backupVm: BackupViewModel,
     onBack: () -> Unit,
     showBack: Boolean = false,
-    section: String? = null
+    section: String? = null,
+    /** 备份中心浮层入口（网盘同步分区里的「同步情况详情」用）。 */
+    onOpenMediaBackup: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -276,6 +275,20 @@ fun SettingsScreen(
         )
     }
 
+    // 2026-10-21 设置页合并：网络/网盘同步/更新与工具/关于 四个分区由下载器设置渲染器
+    // 承载（内容与状态机较重，本轮不做 UI 重写），但**入口、导航、头部与标题层级已统一到
+    // 本页**——用户从「我的」任意入口进来都是同一套设置，不再有第二个「下载器设置」App。
+    if (section == XSection.NETWORK || section == XSection.WEBDAV ||
+        section == XSection.UPDATE || section == XSection.ABOUT
+    ) {
+        com.ed.edqiu.ui.screens.DownloaderSettingsPage(
+            onBack = onBack,
+            section = section,
+            onOpenMediaBackup = onOpenMediaBackup
+        )
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -290,15 +303,18 @@ fun SettingsScreen(
         if (showBack) {
             // 二级页返回箭头 + 标题
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clickable(onClick = onBack),
+                // 二级页返回箭头（L3 玻璃圆钮，与下载中心/订阅/网盘备份返回钮同层级）
+                GlassSurface(
+                    tier = GlassTier.L3,
                     shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                    modifier = Modifier.size(44.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pressableNoRipple { onBack() },
+                        contentAlignment = Alignment.Center
+                    ) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "返回",
@@ -316,6 +332,10 @@ fun SettingsScreen(
                             XSection.STORAGE -> "存储路径"
                             XSection.BACKUP -> "备份与恢复"
                             XSection.CAPTURE -> "下载行为"
+                            XSection.NETWORK -> "网络与认证"
+                            XSection.WEBDAV -> "网盘同步"
+                            XSection.UPDATE -> "更新与工具"
+                            XSection.ABOUT -> "关于本机"
                             else -> "收件箱设置"
                         },
                         style = MaterialTheme.typography.headlineSmall,
@@ -325,9 +345,13 @@ fun SettingsScreen(
                     Text(
                         text = when (section) {
                             XSection.APPEARANCE -> "颜色 / 玻璃与底栏 / 玻璃外观 / 显示 / 手势与触感"
-                            XSection.STORAGE -> "下载存储、监控目录与数据备份"
+                            XSection.STORAGE -> "下载存储与监控目录"
                             XSection.BACKUP -> "自动备份开关与导出导入"
                             XSection.CAPTURE -> "下载重试与后台同步"
+                            XSection.NETWORK -> "代理、Cookie 与第三方解析兜底"
+                            XSection.WEBDAV -> "WebDAV 连接、双向同步与自动备份"
+                            XSection.UPDATE -> "yt-dlp 解析器与 App 版本更新"
+                            XSection.ABOUT -> "版本信息与使用说明"
                             else -> "外观、存储路径、备份与下载行为"
                         },
                         style = MaterialTheme.typography.bodySmall,
@@ -942,13 +966,12 @@ private fun android.content.Context.persistTreePermission(uri: Uri): Boolean {
 private const val DEFAULT_DOWNLOAD_PATH =
     "/storage/emulated/0/Android/data/com.ed.Edqiu/files/Download"
 
-private val ScienceIcon = Icons.Outlined.Science
-private val StyleIcon = Icons.Outlined.Style
 
 /**
  * 主题设置页（2026-08-15 按设计稿重构）
  *
- * 布局：顶部预览卡 + 主题模式 segmented + 三卡组（颜色 / 效果 / 手势）。
+ * 布局：顶部预览卡 + 主题模式 segmented + 效果 / 玻璃外观 / 显示 / 手势卡组
+ * （2026-10-21：「颜色」卡组移除，主题固定 iOS 绿）。
  * 所有开关 / 下拉接 SettingsRepository 持久化。
  */
 @Composable
@@ -958,21 +981,25 @@ private fun ThemeSettingsSection(
     snackbar: SnackbarController
 ) {
     val themeMode by settings.themeModeFlow.collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
-    val accentColor by settings.accentColorFlow.collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_ACCENT_COLOR)
     val blurIntensity by settings.blurIntensityFlow.collectAsStateWithLifecycle(initialValue = 0.6f)
     val glassTransparency by settings.glassTransparencyFlow.collectAsStateWithLifecycle(initialValue = 0.6f)
     val refractionIntensity by settings.refractionIntensityFlow.collectAsStateWithLifecycle(initialValue = 0.6f)
     val floatingTabBar by settings.floatingTabBarFlow.collectAsStateWithLifecycle(initialValue = true)
     val liquidGlass by settings.liquidGlassEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
-    // 玻璃外观四项（v1.8.0）
+    // 玻璃外观（v1.8.0；2026-10-21 描边颜色已移除，新增光学三项）
     val glassEdgeWidth by settings.glassEdgeWidthFlow
         .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_EDGE_WIDTH)
     val glassLightStrength by settings.glassEdgeLightStrengthFlow
         .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_LIGHT_STRENGTH)
-    val glassEdgeColor by settings.glassEdgeColorFlow
-        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_EDGE_COLOR)
     val glassDimAmount by settings.glassDimAmountFlow
         .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_DIM_AMOUNT)
+    // 光学三项（对齐 iOS 液态玻璃）：光源角度 / 亮度 / 色散
+    val glassLightAngle by settings.glassLightAngleFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_LIGHT_ANGLE)
+    val glassLightIntensity by settings.glassLightIntensityFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_LIGHT_INTENSITY)
+    val glassDispersion by settings.glassDispersionFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_DISPERSION)
     val glassAppearanceIsDefault by settings.glassAppearanceIsDefaultFlow
         .collectAsStateWithLifecycle(initialValue = true)
     val highRefreshRate by settings.highRefreshRateFlow.collectAsStateWithLifecycle(initialValue = true)
@@ -980,15 +1007,10 @@ private fun ThemeSettingsSection(
     // 2026-10：「返回手势」假开关已移除（predictiveBackFlow 全工程无消费者，
     // manifest enableOnBackInvokedCallback=false 固定关闭），不再读取该配置。
     val displayScale by settings.displayScaleFlow.collectAsStateWithLifecycle(initialValue = 0.8f)
-    val accent = Color(accentColor)
-
-    var accentPickerOpen by remember { mutableStateOf(false) }
-    // 玻璃描边颜色选择器（v1.8.0）
-    var edgeColorPickerOpen by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        // 顶部预览卡
-        ThemePreviewCard(accentColor = accent, liquidGlassEnabled = liquidGlass)
+        // 顶部预览卡（2026-10-21 强调色设置项已移除，主题全局固定 iOS 绿，预览色块直接取主题 primary）
+        ThemePreviewCard(accentColor = MaterialTheme.colorScheme.primary, liquidGlassEnabled = liquidGlass)
 
         // 主题模式 segmented
         ThemeSegmented(
@@ -996,22 +1018,8 @@ private fun ThemeSettingsSection(
             onSelect = { mode -> scope.launch { settings.setThemeMode(mode) } }
         )
 
-        // ===== 颜色卡组（2026-10-10 固定配色重构：壁纸取色已移除，强调色只管 tint） =====
-        GroupCard(
-            title = "颜色",
-            description = "固定中性配色（浅色清透白 / 深色石墨黑），强调色作用于按钮、开关、选中态与玻璃染色"
-        ) {
-            SettingItemRow(
-                icon = Icons.Outlined.Brush,
-                title = "强调色",
-                subtitle = "全局主色（默认 iOS 蓝），不改变背景与界面层次",
-                onClick = { accentPickerOpen = true },
-                trailing = {
-                    AccentSwatch(accent)
-                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted, modifier = Modifier.size(18.dp))
-                }
-            )
-        }
+        // 2026-10-21：「颜色」卡组已整组移除——主题全局固定 iOS 绿（FixedScheme.FIXED_ACCENT），
+        // 强调色不可配置，取色器相关 UI 与死代码一并清理
 
         // ===== 玻璃与底栏卡组（2026-09-28 二次重组：模糊/玻璃/底栏同属材质形态） =====
         GroupCard(
@@ -1063,6 +1071,58 @@ private fun ThemeSettingsSection(
                 enabled = liquidGlass,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
             )
+            // 玻璃实时预览（2026-10-20）：三滑块驱动的 L2 玻璃卡，彩色渐变底上直接验证
+            // 透明度 / 磨砂观感——对齐 edqiu-screens-tools.html 设置页规格。
+            // 底色取主题色板（primary→tertiary→primaryContainer），守单一色源；
+            // 读数为渲染链真实公式：alphaScale = 1.30 − 0.75×透明度（GlassSurface），
+            // 真玻璃 blur = 4 + 16×磨砂（GlassOverlaySurface.effectiveBlur）。
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primary,
+                                MaterialTheme.colorScheme.tertiary,
+                                MaterialTheme.colorScheme.primaryContainer
+                            )
+                        )
+                    )
+                    .padding(18.dp)
+            ) {
+                GlassSurface(
+                    modifier = Modifier.fillMaxWidth(),
+                    tier = GlassTier.L2,
+                    shape = RoundedCornerShape(18.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 13.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Text(
+                            text = "玻璃预览",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = String.format(
+                                java.util.Locale.US,
+                                "alphaScale %.2f · 磨砂 blur %.1fdp",
+                                1.30f - 0.75f * glassTransparency,
+                                4f + 16f * blurIntensity
+                            ),
+                            fontSize = 10.5.sp,
+                            color = Muted
+                        )
+                    }
+                }
+            }
             ThinDivider()
             SettingItemRow(
                 icon = Icons.Outlined.Layers,
@@ -1089,10 +1149,10 @@ private fun ThemeSettingsSection(
             )
         }
 
-        // ===== 玻璃外观卡组（v1.8.0：在透明度/磨砂/折射之上补齐外观四项） =====
+        // ===== 玻璃外观卡组（v1.8.0：外观三项；2026-10-21 描边颜色移除、新增光学三项） =====
         GroupCard(
             title = "玻璃外观",
-            description = "描边与光效的细调参数，按「对象 × 属性」组织（对象=玻璃，属性=粗细/强度/程度/颜色）；改动实时生效"
+            description = "描边与光效的细调参数（粗细/强度/压暗）与光学三项（光源角度/亮度/色散，对齐 iOS 液态玻璃）；改动实时生效"
         ) {
             // 数据驱动渲染：规格表 → 滑块。新增一个标量参数只需往表里加一行，
             // 不必改动布局代码——避免设置页随参数增长线性膨胀。
@@ -1121,6 +1181,30 @@ private fun ThemeSettingsSection(
                     range = 0f..1f,
                     format = { v -> "${(v * 100f).roundToInt()}%" },
                     onChange = { scope.launch { settings.setGlassDimAmount(it) } }
+                ),
+                // 光学三项（2026-10-21，对齐 iOS 液态玻璃）：仅液态玻璃模式下有视觉效果，
+                // 与压暗一致不做 enabled 联动，保持随时可调
+                GlassSliderSpec(
+                    label = "光源角度",
+                    value = glassLightAngle,
+                    range = -180f..180f,
+                    // -45° 表示左上方光源（默认值），度数即光源在玻璃边缘的方位角
+                    format = { v -> String.format(java.util.Locale.US, "%.0f°", v) },
+                    onChange = { scope.launch { settings.setGlassLightAngle(it) } }
+                ),
+                GlassSliderSpec(
+                    label = "光源亮度",
+                    value = glassLightIntensity,
+                    range = 0f..1f,
+                    format = { v -> "${(v * 100f).roundToInt()}%" },
+                    onChange = { scope.launch { settings.setGlassLightIntensity(it) } }
+                ),
+                GlassSliderSpec(
+                    label = "色散强度",
+                    value = glassDispersion,
+                    range = 0f..1f,
+                    format = { v -> "${(v * 100f).roundToInt()}%" },
+                    onChange = { scope.launch { settings.setGlassDispersion(it) } }
                 )
             )
             specs.forEach { spec ->
@@ -1138,43 +1222,18 @@ private fun ThemeSettingsSection(
                 )
             }
 
-            ThinDivider()
-            val edgeColorIsDefault = glassEdgeColor == SettingsRepository.DEFAULT_GLASS_EDGE_COLOR
-            SettingItemRow(
-                icon = Icons.Outlined.Brush,
-                title = "玻璃描边颜色",
-                subtitle = if (edgeColorIsDefault) {
-                    "跟随主题色（默认，保持单一色源不变）"
-                } else {
-                    "自定义描边色，不参与配色派生"
-                },
-                onClick = { edgeColorPickerOpen = true },
-                trailing = {
-                    if (edgeColorIsDefault) {
-                        Text("跟随主题", fontSize = 12.sp, color = Muted)
-                    } else {
-                        AccentSwatch(Color(glassEdgeColor))
-                    }
-                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted, modifier = Modifier.size(18.dp))
-                }
-            )
-            if (!edgeColorIsDefault) {
-                TextButton(
-                    onClick = { scope.launch { settings.setGlassEdgeColor(SettingsRepository.DEFAULT_GLASS_EDGE_COLOR) } },
-                    modifier = Modifier.padding(start = 8.dp)
-                ) { Text("改回跟随主题色", fontSize = 13.sp) }
-            }
+            // 2026-10-21：「玻璃描边颜色」设置项已移除——ThemeEffects.GlassEdgeColor 删除后
+            // 描边统一走主题派生色，保持单一色源
 
             ThinDivider()
             Text(
-                text = "深色模式下压暗程度自动 ×1.5 补偿——深色背景上同等压暗更难被感知。" +
-                    "描边颜色属局部材质属性，不参与 ColorScheme 配色，不会影响固定中性面与强调色 tint 结构。",
+                text = "深色模式下压暗程度自动 ×1.5 补偿——深色背景上同等压暗更难被感知。",
                 fontSize = 11.sp,
                 color = Muted,
                 lineHeight = 15.sp,
                 modifier = Modifier.padding(start = 16.dp, top = 10.dp, end = 16.dp)
             )
-            // 分组级恢复默认：只回退本组四项，不动透明度 / 磨砂 / 折射 / 液态玻璃开关
+            // 分组级恢复默认：只回退本组六项，不动透明度 / 磨砂 / 折射 / 液态玻璃开关
             OutlinedButton(
                 onClick = { scope.launch { settings.resetGlassAppearance() } },
                 enabled = !glassAppearanceIsDefault,
@@ -1248,34 +1307,6 @@ private fun ThemeSettingsSection(
             }
         }
     }
-
-    if (accentPickerOpen) {
-        AccentColorPickerDialog(
-            initial = accent,
-            onDismiss = { accentPickerOpen = false },
-            onConfirm = { argb ->
-                scope.launch { settings.setAccentColor(argb) }
-                accentPickerOpen = false
-            }
-        )
-    }
-
-    // 玻璃描边颜色（v1.8.0）：复用同一套取色器，仅落点不同
-    if (edgeColorPickerOpen) {
-        AccentColorPickerDialog(
-            initial = if (glassEdgeColor == SettingsRepository.DEFAULT_GLASS_EDGE_COLOR) {
-                accent
-            } else {
-                Color(glassEdgeColor)
-            },
-            onDismiss = { edgeColorPickerOpen = false },
-            onConfirm = { argb ->
-                scope.launch { settings.setGlassEdgeColor(argb) }
-                edgeColorPickerOpen = false
-            },
-            title = "选择描边色"
-        )
-    }
 }
 
 /**
@@ -1292,248 +1323,8 @@ private data class GlassSliderSpec(
     val onChange: (Float) -> Unit
 )
 
-/** 强调色小圆点（右侧值预览） */
-@Composable
-private fun AccentSwatch(color: Color) {
-    Box(
-        modifier = Modifier
-            .size(22.dp)
-            .clip(CircleShape)
-            .background(color)
-            .border(1.5.dp, Color.White, CircleShape)
-    )
-}
-
-/** 强调色扩展预设（2026-10-10 固定配色重构：iOS 系统调色板，自定义 HSV 仍全量可选） */
-private val AccentPresets: List<Pair<String, Int>> = listOf(
-    "蓝" to 0xFF007AFF.toInt(),
-    "青绿" to 0xFF30B0C7.toInt(),
-    "薄荷" to 0xFF00A896.toInt(),
-    "靛紫" to 0xFF5E5CE6.toInt(),
-    "紫" to 0xFFAF52DE.toInt(),
-    "粉" to 0xFFFF2D55.toInt(),
-    "橙" to 0xFFFF9500.toInt(),
-    "琥珀" to 0xFFB45309.toInt(),
-    "黄" to 0xFFFFCC00.toInt(),
-    "绿" to 0xFF34C759.toInt(),
-    "莓红" to 0xFFFF375F.toInt(),
-    "石墨" to 0xFF48484A.toInt()
-)
-
-/**
- * 强调色完整选择器：预设色板 + HSV 三滑块（色相/饱和度/明度）+ 实时预览。
- * 满足「完整的颜色选择」——可选取任意色，选中即写入强调色并全局生效。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AccentColorPickerDialog(
-    initial: Color,
-    onDismiss: () -> Unit,
-    onConfirm: (Int) -> Unit,
-    title: String = "选择强调色"
-) {
-    val initHsv = remember(initial) { colorToHsv(initial) }
-    var hue by remember { mutableStateOf(initHsv[0]) }
-    var sat by remember { mutableStateOf(initHsv[1]) }
-    var value by remember { mutableStateOf(initHsv[2]) }
-    val current = Color.hsv(hue, sat, value)
-
-    // 2026-09-15：居中 AlertDialog → 底部 ModalBottomSheet（iOS 底部面板语言）。
-    // 色板 + 3 个滑杆内容较高，居中弹窗遮挡感强；底部弹出更贴合全局导航手势习惯
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = MaterialTheme.colorScheme.surfaceContainer
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 22.dp)
-                .padding(bottom = 18.dp)
-        ) {
-            Text(
-                title,
-                fontWeight = FontWeight.Black,
-                fontSize = 18.sp,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(Modifier.height(16.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                // 预设色板
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AccentPresets.chunked(6).forEach { row ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            row.forEach { (name, argb) ->
-                                val c = Color(argb)
-                                val selected = argb == current.toArgb()
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clickable {
-                                            val hsv = colorToHsv(c)
-                                            hue = hsv[0]; sat = hsv[1]; value = hsv[2]
-                                        }
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(30.dp)
-                                            .clip(CircleShape)
-                                            .background(c)
-                                            .border(
-                                                width = if (selected) 2.5.dp else 1.dp,
-                                                color = if (selected) MaterialTheme.colorScheme.onSurface else Color.White,
-                                                shape = CircleShape
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        if (selected) {
-                                            Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
-                                        }
-                                    }
-                                    Text(name, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 实时预览 + 色相滑杆
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .size(46.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(current)
-                            .border(1.dp, Color.White, RoundedCornerShape(14.dp))
-                    )
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("色相", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(22.dp)
-                                .clip(RoundedCornerShape(11.dp))
-                                .background(Brush.horizontalGradient((0..360 step 36).map { Color.hsv(it.toFloat(), 1f, 1f) }))
-                        ) {
-                            Slider(
-                                value = hue,
-                                onValueChange = { hue = it },
-                                valueRange = 0f..360f,
-                                modifier = Modifier.matchParentSize(),
-                                colors = SliderDefaults.colors(
-                                    activeTrackColor = Color.Transparent,
-                                    inactiveTrackColor = Color.Transparent,
-                                    thumbColor = Color.White,
-                                    activeTickColor = Color.Transparent,
-                                    inactiveTickColor = Color.Transparent
-                                )
-                            )
-                        }
-                    }
-                }
-
-                // 饱和度滑杆
-                HueSatValSlider(
-                    label = "饱和度",
-                    value = sat,
-                    onValueChange = { sat = it },
-                    gradient = Brush.horizontalGradient(
-                        listOf(
-                            Color.hsv(hue, 0f, value),
-                            Color.hsv(hue, 1f, value)
-                        )
-                    )
-                )
-                // 明度滑杆
-                HueSatValSlider(
-                    label = "明度",
-                    value = value,
-                    onValueChange = { value = it },
-                    gradient = Brush.horizontalGradient(
-                        listOf(
-                            Color.hsv(hue, sat, 0f),
-                            Color.hsv(hue, sat, 1f)
-                        )
-                    )
-                )
-            }
-            Spacer(Modifier.height(18.dp))
-            // 底部操作行：取消靠左、确定靠右（iOS sheet 按钮语言）
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                OutlinedButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp)
-                ) { Text("取消") }
-                Button(
-                    onClick = { onConfirm(current.toArgb()) },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp)
-                ) { Text("确定") }
-            }
-        }
-    }
-}
-
-/** 通用 HSV 滑杆（带渐变轨道） */
-@Composable
-private fun HueSatValSlider(
-    label: String,
-    value: Float,
-    onValueChange: (Float) -> Unit,
-    gradient: Brush
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(22.dp)
-                .clip(RoundedCornerShape(11.dp))
-                .background(gradient)
-        ) {
-            Slider(
-                value = value,
-                onValueChange = onValueChange,
-                valueRange = 0f..1f,
-                modifier = Modifier.matchParentSize(),
-                colors = SliderDefaults.colors(
-                    activeTrackColor = Color.Transparent,
-                    inactiveTrackColor = Color.Transparent,
-                    thumbColor = Color.White,
-                    activeTickColor = Color.Transparent,
-                    inactiveTickColor = Color.Transparent
-                )
-            )
-        }
-    }
-}
-
-/** RGB → HSV（h ∈ [0,360), s/v ∈ [0,1]） */
-private fun colorToHsv(c: Color): FloatArray {
-    val r = c.red; val g = c.green; val b = c.blue
-    val max = maxOf(r, g, b)
-    val min = minOf(r, g, b)
-    val v = max
-    val d = max - min
-    val s = if (max == 0f) 0f else d / max
-    var h = 0f
-    if (d > 0f) {
-        h = when (max) {
-            r -> ((g - b) / d + if (g < b) 6f else 0f)
-            g -> (b - r) / d + 2f
-            else -> (r - g) / d + 4f
-        } * 60f
-    }
-    return floatArrayOf(h, s, v)
-}
+// 2026-10-21：强调色/描边颜色取色器（AccentSwatch / AccentPresets / AccentColorPickerDialog /
+// HueSatValSlider / colorToHsv）随「颜色」卡组移除一并删除，主题固定 iOS 绿后无引用
 
 /** 顶部预览卡：mini header + tab 栏 + 4 色块（按设计稿） */
 @Composable

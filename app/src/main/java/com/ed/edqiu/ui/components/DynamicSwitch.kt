@@ -88,17 +88,3 @@ fun DynamicSwitch(
         )
     }
 }
-
-/** 迷你开关（图标行内使用，视觉更紧凑）。 */
-@Composable
-fun DynamicSwitchMini(
-    checked: Boolean,
-    onCheckedChange: ((Boolean) -> Unit)?,
-    modifier: Modifier = Modifier
-) {
-    DynamicSwitch(
-        checked = checked,
-        onCheckedChange = onCheckedChange,
-        modifier = modifier.scale(0.85f)
-    )
-}

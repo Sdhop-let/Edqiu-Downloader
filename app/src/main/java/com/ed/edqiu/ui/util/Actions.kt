@@ -11,15 +11,6 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 
-private const val DOWNLOADER_MEDIA_AUTHORITY = "com.ed.Edqiu.media"
-private const val LEGACY_DOWNLOADER_MEDIA_AUTHORITY = "com.ed.edqiu.media"
-private const val OLDEST_DOWNLOADER_MEDIA_AUTHORITY = "com.ed.twitterdownload.media"
-private val DOWNLOADER_MEDIA_AUTHORITIES = setOf(
-    DOWNLOADER_MEDIA_AUTHORITY,
-    LEGACY_DOWNLOADER_MEDIA_AUTHORITY,
-    OLDEST_DOWNLOADER_MEDIA_AUTHORITY,
-)
-
 /** 时间格式化：复制时间/下载时间展示。 */
 fun formatTime(ts: Long): String {
     val sdf = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
@@ -42,12 +33,6 @@ fun formatRelativeTime(ts: Long, now: Long = System.currentTimeMillis()): String
 }
 
 /** 作者头像占位字母（取名称首字）。 */
-fun initials(name: String?): String {
-    if (name.isNullOrBlank()) return "?"
-    val clean = name.trimStart('@')
-    return clean.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
-}
-
 /** 复制文本到剪贴板（不显示 Toast，由调用方通过 Snackbar 反馈）。 */
 fun copyToClipboard(context: Context, label: String, text: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
@@ -102,36 +87,3 @@ fun openTwitterStatus(context: Context, tweetId: String): Boolean {
 }
 
 /** 通过 SAF 打开已下载的文件（支持监控目录下的子目录）。 */
-fun openDownloadedFile(context: Context, monitorUri: String?, filePath: String?): Boolean {
-    if (monitorUri.isNullOrBlank() || filePath.isNullOrBlank()) {
-        return false
-    }
-    return runCatching {
-        val monitor = Uri.parse(monitorUri)
-        val fileUri = if (monitor.authority in DOWNLOADER_MEDIA_AUTHORITIES) {
-            Uri.Builder()
-                .scheme("content")
-                .authority(monitor.authority)
-                .appendPath("file")
-                .appendPath(filePath)
-                .build()
-        } else {
-            val tree = DocumentFile.fromTreeUri(context, monitor)
-            val file = filePath.split('/').filter { it.isNotBlank() }.fold(tree) { current, segment ->
-                current?.findFile(segment)
-            }
-            file?.takeIf { it.exists() && it.isFile }?.uri
-        }
-
-        if (fileUri != null) {
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(fileUri, context.contentResolver.getType(fileUri) ?: "*/*")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            context.startActivity(intent)
-            true
-        } else {
-            false
-        }
-    }.getOrDefault(false)
-}

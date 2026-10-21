@@ -115,6 +115,10 @@ interface DownloadHistoryDao {
     @Query("SELECT COUNT(*) FROM download_history")
     fun getCount(): Flow<Int>
 
+    /** 已下载文件总占用字节（2026-10 我的页统计卡；COALESCE 兜底空表返回 0）。 */
+    @Query("SELECT COALESCE(SUM(fileSize), 0) FROM download_history")
+    fun observeTotalSize(): Flow<Long>
+
     /** pHash 补算候选（2026-09-15 批次3 重复检测）：phash 未计算的记录，最新优先。 */
     @Query("SELECT * FROM download_history WHERE phash IS NULL ORDER BY completedAt DESC LIMIT :limit")
     suspend fun getMissingPhash(limit: Int): List<DownloadHistoryEntity>

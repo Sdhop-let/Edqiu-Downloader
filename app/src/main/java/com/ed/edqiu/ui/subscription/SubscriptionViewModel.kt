@@ -122,6 +122,10 @@ class SubscriptionViewModel(application: Application) : AndroidViewModel(applica
                         is SavedLinkRepository.DownloadRequestResult.Downloaded,
                         SavedLinkRepository.DownloadRequestResult.AlreadyDownloaded ->
                             FeedbackMessage("下载完成", FeedbackKind.SUCCESS)
+                        // 2026-10-21 去重：点下载前已比对媒体库（download_history 同推文文件），
+                        // 命中则回写 DOWNLOADED 并跳过引擎链——不重复下载收件箱/媒体库已有作品
+                        is SavedLinkRepository.DownloadRequestResult.AlreadyInLibrary ->
+                            FeedbackMessage("该作品已在媒体库，已跳过重复下载", FeedbackKind.SUCCESS)
                         SavedLinkRepository.DownloadRequestResult.Launched ->
                             FeedbackMessage("已开始下载", FeedbackKind.SUCCESS)
                         is SavedLinkRepository.DownloadRequestResult.Failed ->
@@ -200,7 +204,7 @@ class SubscriptionViewModel(application: Application) : AndroidViewModel(applica
                     detecting = false,
                     message = when {
                         outcome.newCount > 0 -> FeedbackMessage(
-                            "检测完成：发现 ${outcome.newCount} 个新作品，已加入收件箱并自动下载",
+                            "检测完成：发现 ${outcome.newCount} 个新作品，已加入订阅作品，点按即可下载",
                             FeedbackKind.SUCCESS
                         )
                         // 2026-10-17：失败必须说清具体原因（未走代理/代理超时/账号被限/接口轮换失败）
@@ -227,7 +231,7 @@ class SubscriptionViewModel(application: Application) : AndroidViewModel(applica
                 it.copy(
                     message = when {
                         outcome.newCount > 0 -> FeedbackMessage(
-                            "@${sub.screenName}：发现 ${outcome.newCount} 个新作品，已加入收件箱",
+                            "@${sub.screenName}：发现 ${outcome.newCount} 个新作品，已加入订阅作品",
                             FeedbackKind.SUCCESS
                         )
                         !outcome.failure.isNullOrBlank() -> FeedbackMessage(

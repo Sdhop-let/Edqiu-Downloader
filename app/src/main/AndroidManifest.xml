@@ -111,6 +111,14 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
+            <!-- 2026-10-21 接线：跨 App 显式下载契约（DownloadIntentContract.ACTION_DOWNLOAD_TWEET）。
+                 此前常量与 extractUrl/normalizeUrl 全无接收方（死代码），现由本 Activity 承接——
+                 外部 App / 自动化带 URL（data 或 EXTRA_TWEET_URL）发此 action 即可入库。
+                 过滤器不限定 data：URL 归一化与合法性校验在 extractUrl 内完成 -->
+            <intent-filter>
+                <action android:name="com.ed.Edqiu.action.DOWNLOAD_TWEET" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <provider

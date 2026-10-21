@@ -24,11 +24,7 @@ class DownloadTaskRepo(context: Context) {
     private val dao: DownloadTaskDao =
         AppDatabase.getInstance(context.applicationContext).downloadTaskDao()
 
-    suspend fun addTask(task: DownloadTask, downloaderType: String = "DIRECT") = withContext(Dispatchers.IO) {
-        dao.upsert(task.toEntity().copy(downloaderType = downloaderType))
-    }
-
-    suspend fun updateTask(taskId: String, transform: (DownloadTask) -> DownloadTask) =
+        suspend fun updateTask(taskId: String, transform: (DownloadTask) -> DownloadTask) =
         withContext(Dispatchers.IO) {
             val entity = dao.getById(taskId) ?: return@withContext
             val updated = transform(entity.toDomain())

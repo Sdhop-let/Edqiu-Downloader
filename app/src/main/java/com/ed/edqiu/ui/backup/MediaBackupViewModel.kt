@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.ed.edqiu.backup.provider.WebDavCredential
 import com.ed.edqiu.backup.provider.WebDavEngine
 import com.ed.edqiu.data.preferences.CloudSyncPreferences
+import com.ed.edqiu.data.preferences.SyncHistoryRecord
 import com.ed.edqiu.service.SyncTaskControl
 import com.ed.edqiu.service.WebDavManualSync
 import com.ed.edqiu.service.WebDavSyncProgress
@@ -76,10 +77,33 @@ data class SyncDetailUiState(
     /** 上传队列「小文件优先」排序开关（持久化）。 */
     val smallFirst: Boolean = false,
     val lastRefreshAt: Long = 0,
+    /** 备份中心「最近备份」历史（CloudSyncPreferences，新→旧）。 */
+    val history: List<SyncHistoryRecord> = emptyList(),
+    /** 上次成功同步时间（备份中心入口副标题用；0 = 从未同步）。 */
+    val lastSyncTime: Long = 0,
 ) {
     val syncedCount: Int get() = items.count { it.state == SyncItemState.SYNCED }
     val pendingCount: Int get() = items.count { it.state == SyncItemState.PENDING }
     val conflictCount: Int get() = items.count { it.state == SyncItemState.CONFLICT }
+
+    /** 已上传字节（对账为「已同步」条目尺寸和——备份中心「已上传 X」）。 */
+    val uploadedBytes: Long get() = items.filter { it.state == SyncItemState.SYNCED }.sumOf { it.size }
+
+    /** 本轮运行进度 0..1（null = 未在同步或进度未知）。 */
+    val runProgress: Float?
+        get() {
+            val p = syncProgress?.takeIf { syncRunning } ?: return null
+            if (p.totalFiles <= 0) return null
+            return (((p.currentIndex - 1).coerceAtLeast(0)) + p.fileProgress) / p.totalFiles
+        }
+
+    /** 剩余待处理文件数（运行中=本阶段剩余；空闲=待上传+冲突）。 */
+    val remainingFiles: Int
+        get() = if (syncRunning && syncProgress != null) {
+            (syncProgress.totalFiles - syncProgress.currentIndex).coerceAtLeast(0)
+        } else {
+            pendingCount + conflictCount
+        }
 
     /** 正在同步的条目（远端名与进度流匹配；上传/下载均算）。 */
     val syncingItem: SyncDetailItem?
@@ -123,6 +147,7 @@ class MediaBackupViewModel(
 
     init {
         viewModelScope.launch { refresh() }
+        reloadHistory()
         // 同步运行状态透传 + 完成后自动重新对账（上传/下载结束立即刷新两端状态）
         viewModelScope.launch {
             WebDavManualSync.state.collect { st ->
@@ -143,6 +168,7 @@ class MediaBackupViewModel(
                             )
                         }
                         WebDavManualSync.consumeResult()
+                        reloadHistory()
                         refresh()
                     }
                     is WebDavManualSync.State.Failed -> {
@@ -153,6 +179,7 @@ class MediaBackupViewModel(
                             )
                         }
                         WebDavManualSync.consumeResult()
+                        reloadHistory()
                     }
                     WebDavManualSync.State.Idle -> Unit
                 }
@@ -203,6 +230,16 @@ class MediaBackupViewModel(
     /** 手动刷新：重新扫描本地 + PROPFIND 远端对账。 */
     fun refresh() {
         viewModelScope.launch { doRefresh() }
+    }
+
+    /** 重新读取同步历史与上次同步时间（同步结束/页面初始化时调用）。 */
+    private fun reloadHistory() {
+        _state.update {
+            it.copy(
+                history = cloudSyncPreferences.syncHistory(),
+                lastSyncTime = cloudSyncPreferences.lastSyncTime,
+            )
+        }
     }
 
     /** 触发一轮双向同步（应用级运行器，退出页面继续）。 */
@@ -305,6 +342,8 @@ class MediaBackupViewModel(
                     error = null,
                     smallFirst = cloudSyncPreferences.syncSmallFirst,
                     lastRefreshAt = System.currentTimeMillis(),
+                    history = cloudSyncPreferences.syncHistory(),
+                    lastSyncTime = cloudSyncPreferences.lastSyncTime,
                 )
             }
             Log.i(TAG, "对账完成：本地 ${items.size} 个，已同步 ${items.count { it.state == SyncItemState.SYNCED }}，" +

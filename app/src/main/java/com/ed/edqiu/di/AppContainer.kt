@@ -3,6 +3,7 @@ package com.ed.edqiu.di
 import android.content.Context
 import com.ed.edqiu.capture.LinkCaptureCoordinator
 import com.ed.edqiu.data.backup.HistoryBackupRepository
+import com.ed.edqiu.data.database.AppDatabase
 import com.ed.edqiu.data.db.EdqiuDatabase
 import com.ed.edqiu.data.metadata.MetadataFetcher
 import com.ed.edqiu.data.preferences.CloudSyncPreferences
@@ -54,7 +55,9 @@ class AppContainer(context: Context) {
             metadataScope = globalIoScope,
             // 2026-09-30 v1.6.8：启用封面本地落盘——分享保存当场存预览图，
             // 收件箱/媒体库免二次联网同步（离线可见封面）
-            appContext = context.applicationContext
+            appContext = context.applicationContext,
+            // 2026-10-21 下载去重：媒体库已有同推文文件时跳过重复下载
+            libraryDao = AppDatabase.getInstance(context).downloadHistoryDao()
         )
 
     val historyBackupRepository: HistoryBackupRepository =

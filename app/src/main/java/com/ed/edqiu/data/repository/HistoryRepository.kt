@@ -14,40 +14,7 @@ class HistoryRepository(context: Context) {
     val allHistory: Flow<List<DownloadHistoryEntity>> = dao.getAllHistory()
     val historyCount: Flow<Int> = dao.getCount()
 
-    suspend fun addToHistory(
-        task: DownloadTask,
-        filePath: String,
-        duration: Long = 0,
-        // 2026-10-02 批次B：下载入库即带宽高（解析期 FXTwitter 已给出的显示尺寸；
-        // null=来源未提供，交由 MediaDimensionsBackfillWorker 本地回填）。
-        mediaWidth: Int? = null,
-        mediaHeight: Int? = null
-    ) {
-        val file = File(filePath)
-        dao.insert(
-            DownloadHistoryEntity(
-                id = task.id,
-                url = task.url,
-                title = task.title,
-                thumbnail = task.thumbnail,
-                uploader = task.uploader,
-                quality = task.quality,
-                mediaIndex = task.mediaIndex,
-                mediaType = task.mediaType,
-                filePath = filePath,
-                fileSize = file.takeIf { it.exists() }?.length() ?: 0L,
-                duration = duration,
-                createdAt = task.createdAt,
-                completedAt = System.currentTimeMillis(),
-                avatarUrl = task.avatarUrl.takeIf { it.isNotBlank() },
-                authorName = task.authorName.takeIf { it.isNotBlank() },
-                mediaWidth = mediaWidth,
-                mediaHeight = mediaHeight
-            )
-        )
-    }
-
-    suspend fun delete(entity: DownloadHistoryEntity) = dao.delete(entity)
+        suspend fun delete(entity: DownloadHistoryEntity) = dao.delete(entity)
 
     suspend fun deleteById(id: String) = dao.deleteById(id)
 

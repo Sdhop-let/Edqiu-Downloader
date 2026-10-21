@@ -7,24 +7,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
 /**
- * Edqiu 主题入口（2026-10-10 固定配色重构）。
+ * Edqiu 主题入口（2026-10-10 固定配色重构；2026-10-21 强调色功能移除）。
  *
  * 演进史：
  * - 旧方案（~v1.6.5）：强调色种子 × 6 种 TonalStyle × 2 种 MonetSpec 自由组合派生；
  * - 单一色源方案（v1.6.6~v1.8.0）：壁纸取色开 = 系统 Monet / 壁纸主色种子派生，
  *   关 = 强调色种子 materialkolor 派生全套；
- * - **本方案**：Monet 壁纸动态取色彻底移除（含 materialkolor 引擎与全部取色分支），
- *   配色 = 固定 iOS 式中性面（浅/深两套，见 [FixedScheme.kt]）+ 单一强调色 tint 注入。
- *   壁纸变化不影响任何界面颜色；强调色只作用于按钮/开关/选中态/玻璃染色。
+ * - 固定配色方案（v1.9.x）：Monet 壁纸动态取色彻底移除（含 materialkolor 引擎与全部取色分支），
+ *   配色 = 固定 iOS 式中性面（浅/深两套，见 [FixedScheme.kt]）+ 单一强调色 tint 注入；
+ * - **本方案**：强调色功能整体移除——tint 全局固定 iOS 绿（[FIXED_ACCENT]），
+ *   EdqiuTheme 不再接受颜色参数，壁纸/设置变化均不影响任何界面颜色。
  *
- * 背景与卡片同源结构不变：GlassBackground 直接取 ColorScheme 中性面，
- * 现在取到的是固定值，结构上不可能互相割裂。
+ * 背景与卡片同源结构不变：GlassBackground 直接取 ColorScheme 中性面，全部为固定值。
  */
 @Composable
 fun EdqiuTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
     darkTheme: Boolean = isSystemInDarkTheme(),
-    accent: Color = Color(DEFAULT_ACCENT),
     content: @Composable () -> Unit
 ) {
     val systemDark = isSystemInDarkTheme()
@@ -35,7 +34,7 @@ fun EdqiuTheme(
     }
 
     val colorScheme: ColorScheme =
-        if (dark) fixedDarkColorScheme(accent) else fixedLightColorScheme(accent)
+        if (dark) fixedDarkColorScheme() else fixedLightColorScheme()
 
     MaterialTheme(
         colorScheme = colorScheme,

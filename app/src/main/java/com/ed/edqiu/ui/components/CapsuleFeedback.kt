@@ -51,6 +51,7 @@ import com.kyant.backdrop.effects.vibrancy
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ed.edqiu.ui.theme.ThemeEffects
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -101,9 +102,10 @@ class CapsuleFeedbackController {
     }
 }
 
-/** 胶囊自动消失时长：成功/中性 2.4s，失败 3.2s（失败信息需要更长阅读时间）。 */
+/** 胶囊自动消失时长：成功 2.4s，中性（订阅更新等轻提示）3.2s，失败 3.6s。 */
 private fun autoDismissMillis(kind: FeedbackKind): Long = when (kind) {
-    FeedbackKind.ERROR -> 3200L
+    FeedbackKind.ERROR -> 3600L
+    FeedbackKind.NEUTRAL -> 3200L
     else -> 2400L
 }
 
@@ -143,9 +145,10 @@ fun CapsuleFeedbackHost(
         modifier = modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            // 2026-10-17：抬到底部液态 Tab 栏之上——Tab 栏 = navigationBar + 8dp 起、高 50dp
-            // （占 8~58dp），胶囊底部再留 12dp 间距 → 8 + 50 + 12 = 70dp，不遮挡 Tab 栏
-            .padding(bottom = 70.dp),
+            // 2026-10-21：抬到底部液态 Tab 栏之上——Tab 栏 = navigationBar + 24dp 起、
+            // 高 50dp（占 24~74dp），胶囊底部再留 12dp 间距 → 24 + 50 + 12 = 86dp，
+            // 不遮挡 Tab 栏（Tab 栏由 8dp 上移到 24dp 后同步 +16）
+            .padding(bottom = 86.dp),
         contentAlignment = Alignment.BottomCenter
     ) {
         AnimatedVisibility(
@@ -198,7 +201,9 @@ private fun CapsulePill(
                     effects = {
                         vibrancy()
                         blur(10.dp.toPx())
-                        lens(10.dp.toPx(), 12.dp.toPx())
+                        // 2026-10-21 对齐液态玻璃教程：玻璃深度 10/12 → 14/16dp，
+                        // 与 GlassOverlaySurface 深度增强同步（Depth=20 对应物）
+                        lens(14.dp.toPx(), 16.dp.toPx())
                     },
                     onDrawSurface = { drawRect(Color(0xB314181C)) }
                 )
@@ -230,14 +235,16 @@ private fun BoxScope.PillInner(
     accent: Color,
     text: String
 ) {
+    // 2026-10-21 对齐液态玻璃教程：顶部镜面高光亮度跟随全局光源强度（0-1）
+    val lightIntensity = ThemeEffects.GlassLightIntensity.current.coerceIn(0f, 1f)
     Box(
         Modifier
             .matchParentSize()
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.16f),
-                        Color.White.copy(alpha = 0.03f),
+                        Color.White.copy(alpha = (0.16f * lightIntensity).coerceIn(0f, 1f)),
+                        Color.White.copy(alpha = (0.03f * lightIntensity).coerceIn(0f, 1f)),
                         Color.Transparent
                     ),
                     startY = 0f,

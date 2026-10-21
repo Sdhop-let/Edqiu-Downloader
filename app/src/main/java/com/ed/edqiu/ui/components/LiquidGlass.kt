@@ -11,12 +11,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
@@ -74,8 +83,10 @@ fun GlassOverlaySurface(
     shape: CornerBasedShape = RoundedCornerShape(24.dp),
     style: OverlayGlassStyle = OverlayGlassStyle.Light,
     blurRadius: Dp? = null,
-    lensHeight: Dp = 14.dp,
-    lensAmount: Dp = 14.dp,
+    // 2026-10-21 对齐液态玻璃教程：玻璃深度 14→18dp（Depth=20 的对应物），
+    // 深度=边缘折射带宽度，边缘折射感更强
+    lensHeight: Dp = 18.dp,
+    lensAmount: Dp = 18.dp,
     content: @Composable BoxScope.() -> Unit
 ) {
     val backdrop = LocalAppBackdrop.current
@@ -129,6 +140,16 @@ private fun RealGlassOverlay(
     // 玻璃外观（v1.8.0）：压暗程度 + 亮边强度；默认中性元，不改变既有观感
     val dim = ThemeEffects.effectiveDim(ThemeEffects.GlassDimAmount.current, darkTheme)
     val lightStrength = ThemeEffects.GlassEdgeLightStrength.current.coerceIn(0f, 1.6f)
+    // 2026-10-21 对齐液态玻璃教程：新增光源角度/亮度/色散三参数（全局设置驱动）
+    val lightIntensity = ThemeEffects.GlassLightIntensity.current.coerceIn(0f, 1f)
+    val dispersion = ThemeEffects.GlassDispersion.current.coerceIn(0f, 1f)
+    val lightAngle = ThemeEffects.GlassLightAngle.current
+    // 指向光源的单位向量（屏幕 y 向下）：dx = -cos(θ)，dy = sin(θ)。
+    // 推导验证 θ=-45°（光源在左上）：rad=-0.785，cos=0.707，sin=-0.707
+    // → dx=-0.707, dy=-0.707，即指向左上 ✓
+    val rad = (lightAngle * PI / 180.0).toFloat()
+    val lightDx = -cos(rad)
+    val lightDy = sin(rad)
     // 表面色（透明度：0=实 0.58，1=透 0.16；Dark 风格（媒体条）保持可读下限）
     val surface = when (style) {
         OverlayGlassStyle.Light ->
@@ -167,21 +188,68 @@ private fun RealGlassOverlay(
             onDrawSurface = { drawRect(drawnSurface) }
         )
     ) {
-        // 顶部窄镜面高光：叠加在真折射之上（玻璃上沿反射，Liquid 灵魂的最后一笔）
+        // 2026-10-21 对齐液态玻璃教程：顶部窄镜面高光由固定竖直渐变改为沿光源方向的
+        // linearGradient（亮端贴光源侧），alpha 乘 GlassLightIntensity（0-1 亮度）。
+        // background 拿不到 size，改用 drawBehind 在 DrawScope 内现场构造 Brush，
+        // lightAngle 重组时 drawBehind lambda 捕获新值自动重绘，实时跟随
         Box(
             Modifier
                 .matchParentSize()
-                .background(
-                    Brush.verticalGradient(
+                .drawBehind {
+                    val cx = size.width / 2f
+                    val cy = size.height / 2f
+                    val l = 60f
+                    val topAlpha = ((if (style == OverlayGlassStyle.Dark) 0.14f else 0.10f) *
+                        lightStrength * lightIntensity).coerceIn(0f, 1f)
+                    val midAlpha = (0.02f * lightStrength * lightIntensity).coerceIn(0f, 1f)
+                    // 渐变第 0 色标位于 start：start 取光源方向点，让高光亮端贴光源侧
+                    val brush = Brush.linearGradient(
                         colors = listOf(
-                            Color.White.copy(alpha = ((if (style == OverlayGlassStyle.Dark) 0.14f else 0.10f) * lightStrength).coerceIn(0f, 1f)),
-                            Color.White.copy(alpha = (0.02f * lightStrength).coerceIn(0f, 1f)),
+                            Color.White.copy(alpha = topAlpha),
+                            Color.White.copy(alpha = midAlpha),
                             Color.Transparent
                         ),
-                        startY = 0f,
-                        endY = 60f
+                        start = Offset(cx + lightDx * l, cy + lightDy * l),
+                        end = Offset(cx - lightDx * l, cy - lightDy * l)
                     )
-                )
+                    drawRect(brush)
+                }
+        )
+        // 2026-10-21 对齐液态玻璃教程：色散内描边——棱镜色散（Dispersion）模拟。
+        // 暖/冷双层描边沿轮廓：暖层向光源方向偏移 1.5px、冷层反向偏移，
+        // 模拟不同波长光在玻璃边缘的分离折射；alpha = 0.09 × 色散强度
+        Box(
+            Modifier
+                .matchParentSize()
+                .drawBehind {
+                    if (dispersion > 0f) {
+                        val outline = shape.createOutline(size, layoutDirection, this)
+                        // Outline → Path 轻量转换（本文件内自实现，不依赖 GlassSurface）
+                        val outlinePath = when (outline) {
+                            is Outline.Rectangle -> Path().apply { addRect(outline.rect) }
+                            is Outline.Rounded -> Path().apply { addRoundRect(outline.roundRect) }
+                            is Outline.Generic -> outline.path
+                        }
+                        val stroke = Stroke(width = 1.5.dp.toPx())
+                        val warmAlpha = (0.09f * dispersion).coerceIn(0f, 1f)
+                        // 暖色边缘（长波长）：向光源方向偏移
+                        translate(left = lightDx * 1.5f, top = lightDy * 1.5f) {
+                            drawPath(
+                                outlinePath,
+                                Color(0xFFFF6B4A).copy(alpha = warmAlpha),
+                                style = stroke
+                            )
+                        }
+                        // 冷色边缘（短波长）：反向偏移
+                        translate(left = -lightDx * 1.5f, top = -lightDy * 1.5f) {
+                            drawPath(
+                                outlinePath,
+                                Color(0xFF4AC8FF).copy(alpha = warmAlpha),
+                                style = stroke
+                            )
+                        }
+                    }
+                }
         )
         content()
     }
@@ -253,8 +321,3 @@ private fun FallbackDarkGlassSurface(
         content()
     }
 }
-
-/** 记录捕获层的兜底底色（backdrop 空白区域的折射采样色）。 */
-@Composable
-fun rememberBackdropBaseColor(): Color =
-    MaterialTheme.colorScheme.background

@@ -40,7 +40,6 @@ object SyncTaskControl {
     }
 
     /** 是否有同步轮在执行（自动备份 Worker 轮询据此跳过）。 */
-    fun isRunning(): Boolean = runningFlag.get()
 
     /** 尝试领取运行令牌：true = 领取成功（本轮由该调用方执行）；false = 已有同步轮在跑。 */
     fun tryBeginRun(): Boolean = runningFlag.compareAndSet(false, true)

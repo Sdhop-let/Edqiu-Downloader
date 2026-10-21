@@ -33,8 +33,4 @@ object DownloadIntentContract {
     }
 }
 
-data class ExternalDownloadRequest(
-    val requestId: Long,
-    val url: String
-)
 

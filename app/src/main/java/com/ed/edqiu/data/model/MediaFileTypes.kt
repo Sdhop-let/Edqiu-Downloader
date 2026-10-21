@@ -11,7 +11,6 @@ enum class MediaType {
 object MediaFileTypes {
     val videoExtensions = setOf("mp4", "mkv", "webm", "avi", "mov")
     val imageExtensions = setOf("jpg", "jpeg", "png", "webp", "gif")
-    val supportedExtensions = videoExtensions + imageExtensions
 
     fun fromExtension(extension: String): MediaType? {
         val ext = extension.trim().removePrefix(".").lowercase(Locale.ROOT)
@@ -23,8 +22,6 @@ object MediaFileTypes {
     }
 
     fun fromPath(path: String): MediaType? = fromExtension(File(path).extension)
-
-    fun isVideoFile(path: String): Boolean = fromPath(path) == MediaType.VIDEO
 
     fun isImageFile(path: String): Boolean = fromPath(path) == MediaType.IMAGE
 
@@ -45,9 +42,5 @@ object MediaFileTypes {
         }
     }
 
-    fun displayLabel(type: MediaType): String = when (type) {
-        MediaType.VIDEO -> "视频"
-        MediaType.IMAGE -> "图片"
     }
-}
 

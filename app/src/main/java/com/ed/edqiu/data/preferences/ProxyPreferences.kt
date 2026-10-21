@@ -32,32 +32,8 @@ class ProxyPreferences(context: Context) {
             .apply()
     }
 
-    /** Detect system proxy first, then fall back to reachable Clash/V2Ray-style local ports. */
-    fun detectProxySettings(): ProxySettings {
-        val current = getProxySettings()
-        val detectedHost = listOf(
-            System.getProperty("http.proxyHost"),
-            System.getProperty("https.proxyHost")
-        ).firstOrNull { !it.isNullOrBlank() }?.trim()
-        val detectedPort = parsePort(System.getProperty("http.proxyPort"))
-            ?: parsePort(System.getProperty("https.proxyPort"))
-        val localPort = COMMON_PROXY_PORTS.firstOrNull { isLocalPortOpen(it) }
-
-        return current.copy(
-            host = detectedHost ?: current.host.ifBlank { LOCAL_PROXY_HOST },
-            port = detectedPort ?: localPort ?: current.port.takeIf { it in 1..65535 } ?: DEFAULT_PROXY_PORT
-        )
-    }
-
     private fun parsePort(value: String?): Int? =
         value?.toIntOrNull()?.takeIf { it in 1..65535 }
-
-    private fun isLocalPortOpen(port: Int): Boolean = runCatching {
-        Socket().use { socket ->
-            socket.connect(InetSocketAddress(LOCAL_PROXY_HOST, port), 120)
-            true
-        }
-    }.getOrDefault(false)
 
     companion object {
         private const val LOCAL_PROXY_HOST = "127.0.0.1"

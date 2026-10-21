@@ -3,6 +3,7 @@ package com.ed.edqiu.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -11,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -19,9 +21,15 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.ed.edqiu.ui.theme.ThemeEffects
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.sin
 
 /**
  * 玻璃层级（设计文档 §3.2；2026-09-14 通透度回调二轮）
@@ -72,6 +80,10 @@ enum class GlassTier(
  * @param width 描边宽度
  * @param lightStrength 亮边强度倍数（v1.8.0）：等比缩放四路高光 alpha，
  *   1 = 中性（v1.7.0 观感），0 = 熄灭全部高光，1.6 = 强反光
+ * @param lightAngle 光源角度（2026-10-21 对齐液态玻璃教程，度，数学惯例）：
+ *   -45 = 左上（Apple/教程默认），决定边缘光渐变的亮端方向
+ * @param lightIntensity 光源亮度 0-2：等比缩放全部描边 alpha（与 lightStrength 相乘生效）
+ * @param dispersion 色散强度 0-1：光源同侧偏暖红、背光侧偏冷的次级光谱副描边
  */
 fun Modifier.glassEdgeLight(
     shape: Shape,
@@ -81,24 +93,46 @@ fun Modifier.glassEdgeLight(
     seedTop: Float,
     seedBottom: Float,
     width: Dp = 1.25.dp,
-    lightStrength: Float = 1f
+    lightStrength: Float = 1f,
+    lightAngle: Float = -45f,
+    lightIntensity: Float = 1f,
+    dispersion: Float = 0f
 ): Modifier = this.drawWithContent {
     drawContent()
     val stroke = width.toPx()
     if (stroke <= 0f) return@drawWithContent
     val ls = lightStrength.coerceAtLeast(0f)
+    // 2026-10-21 对齐液态玻璃教程：光源物理亮度（GlassLightIntensity）统一参与
+    // 全部描边 alpha 缩放，与 lightStrength（用户偏好倍率）相乘生效
+    val li = lightIntensity.coerceIn(0f, 2f)
     val halfInset = stroke / 2f
-    // 垂直渐变决定"上亮下暖"的边缘特征
-    val whiteBrush = Brush.verticalGradient(
+    // 2026-10-21 对齐液态玻璃教程：渐变方向由 lightAngle 驱动（替代固定垂直渐变）。
+    // 屏幕坐标 y 向下，θ=-45 须指向左上 → 指向光源的单位向量取 (sin θ, -cos θ)：
+    // θ=0 → (0,-1) 正上（退化为原"上亮下暗"），θ=-45 → (-0.707,-0.707) 左上 ✓
+    val rad = lightAngle * PI.toFloat() / 180f
+    val dx = sin(rad)
+    val dy = -cos(rad)
+    val cx = size.width / 2f
+    val cy = size.height / 2f
+    val radius = hypot(size.width, size.height) / 2f
+    // 亮端锚在光源侧、暗端在背光侧（半径取对角线一半，覆盖整个卡片对角）
+    val lightSide = Offset(cx + dx * radius, cy + dy * radius)
+    val darkSide = Offset(cx - dx * radius, cy - dy * radius)
+    // 按光源方向的 linearGradient 决定"光源侧亮、背光侧暖"的边缘特征
+    val whiteBrush = Brush.linearGradient(
+        start = lightSide,
+        end = darkSide,
         colors = listOf(
-            Color.White.copy(alpha = (whiteTop * ls).coerceIn(0f, 1f)),
-            Color.White.copy(alpha = (whiteBottom * ls).coerceIn(0f, 1f))
+            Color.White.copy(alpha = (whiteTop * ls * li).coerceIn(0f, 1f)),
+            Color.White.copy(alpha = (whiteBottom * ls * li).coerceIn(0f, 1f))
         )
     )
-    val seedBrush = Brush.verticalGradient(
+    val seedBrush = Brush.linearGradient(
+        start = lightSide,
+        end = darkSide,
         colors = listOf(
-            seed.copy(alpha = (seedTop * ls).coerceIn(0f, 1f)),
-            seed.copy(alpha = (seedBottom * ls).coerceIn(0f, 1f))
+            seed.copy(alpha = (seedTop * ls * li).coerceIn(0f, 1f)),
+            seed.copy(alpha = (seedBottom * ls * li).coerceIn(0f, 1f))
         )
     )
     // 内描边：把形状尺寸向内缩一个线宽，再整体外移半个线宽 → 描边恰好贴内侧轮廓，
@@ -122,7 +156,32 @@ fun Modifier.glassEdgeLight(
     val strokeStyle = Stroke(width = stroke)
     // 用 translate 把描边整体外移半个线宽，使描边贴住内侧轮廓
     translate(left = halfInset, top = halfInset) {
-        // seed 层先画（打底，让玻璃边缘透出莫奈色）；白色高光层叠加（顶部更亮）
+        // 色散副描边（2026-10-21 对齐液态玻璃教程）：白光经玻璃边缘折射分解出的
+        // 红/青次级光谱——暖色偏在光源同侧（R 通道偏折大）、冷色偏在背光侧
+        // （B 通道偏折大）。alpha ≤ 0.15 极其微妙，只作折射点缀不喧宾夺主；
+        // 偏移量 1.2×stroke < 2×stroke，保证副描边不溢出卡片轮廓。
+        if (dispersion > 0.01f) {
+            val dispAlpha = (0.10f * dispersion * lightIntensity).coerceIn(0f, 1f)
+            if (dispAlpha > 0f) {
+                // 暖色副边：朝光源方向偏移
+                translate(left = dx * stroke * 1.2f, top = dy * stroke * 1.2f) {
+                    drawPath(
+                        path = path,
+                        color = Color(0xFFFF6B4A).copy(alpha = dispAlpha),
+                        style = strokeStyle
+                    )
+                }
+                // 冷色副边：朝背光方向偏移
+                translate(left = -dx * stroke * 1.2f, top = -dy * stroke * 1.2f) {
+                    drawPath(
+                        path = path,
+                        color = Color(0xFF4AC8FF).copy(alpha = dispAlpha),
+                        style = strokeStyle
+                    )
+                }
+            }
+        }
+        // seed 层先画（打底，让玻璃边缘透出莫奈色）；白色高光层叠加（光源侧更亮）
         drawPath(path = path, brush = seedBrush, style = strokeStyle)
         drawPath(path = path, brush = whiteBrush, style = strokeStyle)
     }
@@ -142,6 +201,12 @@ fun Modifier.glassEdgeLight(
  * 暴露在透明玻璃之下）。层级浮起感改由材质本身承担——顶光 + 内高光描边 +
  * 玻璃底色 alpha 分级（L1/L2/L3）+ 内描边边缘光，不再依赖投影落差。
  *
+ * ⚠️ 内容对齐坑（2026-10-20 实机 bug）：内容 Box 为普通 Box——默认 TopStart 且
+ * **不传最小约束**（不同于 Material3 Surface 的 propagateMinConstraints=true）。
+ * 固定尺寸表层（圆钮/徽标）若直接塞 `Box(contentAlignment = Center)`，内层只包
+ * 内容尺寸并钉在左上角，圆钮上会探出圆弧外。正确姿势：内层
+ * `Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center)`。
+ *
  * @param tier 玻璃层级
  * @param shape 玻璃形状
  */
@@ -158,11 +223,14 @@ fun GlassSurface(
     val liquidGlass = ThemeEffects.LiquidGlassEnabled.current
     val transparency = ThemeEffects.GlassTransparency.current.coerceIn(0f, 1f)
     val frost = ThemeEffects.GlassFrostStrength.current.coerceIn(0f, 1f)
-    // 玻璃外观四项（v1.8.0）：默认中性元，老用户升级后观感不变
+    // 玻璃外观（v1.8.0）：默认中性元，老用户升级后观感不变
     val edgeWidth = ThemeEffects.GlassEdgeWidth.current.coerceIn(0f, 2.5f)
     val lightStrength = ThemeEffects.GlassEdgeLightStrength.current.coerceIn(0f, 1.6f)
-    val edgeColorOverride = ThemeEffects.GlassEdgeColor.current
     val dim = ThemeEffects.effectiveDim(ThemeEffects.GlassDimAmount.current, dark)
+    // 光源三参数（2026-10-21 对齐液态玻璃教程）：角度/亮度/色散，实时跟随全局注入
+    val lightAngle = ThemeEffects.GlassLightAngle.current
+    val lightIntensity = ThemeEffects.GlassLightIntensity.current.coerceIn(0f, 1f)
+    val dispersion = ThemeEffects.GlassDispersion.current.coerceIn(0f, 1f)
 
     // 玻璃底色 = 半透明白（主体）+ 主题容器色 tint（带主题色的磨砂面板）
     // 透明度 t：底色 alpha 在 1.3x（实）与 0.55x（透）之间缩放——深色背景上卡片明度远高于背景，
@@ -182,16 +250,10 @@ fun GlassSurface(
 
     // 2026-09-21 投影已移除：shadow 的外扩模糊会从透明玻璃背后透出（长方形色块）。
     // 层级浮起感改由材质承担（顶光 + 内高光描边 + tier.bgAlpha 分级 + 内描边边缘光）。
-    val tierSeed = MaterialTheme.colorScheme.primary
+    // 2026-10-21：edgeSeed 覆盖逻辑已随「玻璃描边颜色」设置项移除——恒取主题 primary（固定绿）。
+    val edgeSeed = MaterialTheme.colorScheme.primary
         .takeIf { it != Color.Unspecified && it.alpha > 0f }
         ?: tint
-    // 描边颜色覆盖（v1.8.0）：仅在用户显式选色时替换 seed 层，默认仍跟随主题色（单一色源）。
-    // 全透明色同样视作未覆盖——防止哨兵值误传导致描边消失。
-    val edgeSeed = if (edgeColorOverride != Color.Unspecified && edgeColorOverride.alpha > 0f) {
-        edgeColorOverride
-    } else {
-        tierSeed
-    }
     val m = modifier
         .clip(shape)
         .background(glassColor)
@@ -206,7 +268,11 @@ fun GlassSurface(
             seedTop = (if (dark) 0.22f else 0.20f) * tier.edgeLight,
             seedBottom = (if (dark) 0.34f else 0.30f) * tier.edgeLight,
             width = edgeWidth.dp,
-            lightStrength = lightStrength
+            lightStrength = lightStrength,
+            // 2026-10-21 对齐液态玻璃教程：光源角度/亮度/色散接入边缘光
+            lightAngle = lightAngle,
+            lightIntensity = lightIntensity,
+            dispersion = dispersion
         )
 
     Box(modifier = m) {
@@ -214,65 +280,88 @@ fun GlassSurface(
             // 背景渐变折射：上部亮 + 底部微暗（模拟玻璃曲率）
             // 2026-09-14 三轮：白框根因组合拳——白色装饰层全线再压（镜面 0.12/描边 0.08），
             // 玻璃底色微升（L1 0.34）让高光相对弱化、玻璃呈"整块材质"而非"叠白框"
+            // 2026-10-21 对齐液态玻璃教程：alpha 乘光源亮度
             Box(
                 Modifier
                     .matchParentSize()
                     .background(
                         Brush.verticalGradient(
-                            0f to Color.White.copy(alpha = if (dark) 0.03f else 0.10f),
+                            0f to Color.White.copy(alpha = ((if (dark) 0.03f else 0.10f) * lightIntensity).coerceIn(0f, 1f)),
                             0.55f to Color.Transparent,
-                            1f to Color.Black.copy(alpha = if (dark) 0.06f else 0.015f)
+                            1f to Color.Black.copy(alpha = ((if (dark) 0.06f else 0.015f) * lightIntensity).coerceIn(0f, 1f))
                         )
                     )
             )
             // 顶部折射高光线（Liquid 灵魂）
             // 2026-09-21：强度乘 tier.topLight —— 投影移除后靠顶部带强度区分层级
+            // 2026-10-21 对齐液态玻璃教程：改为按 lightAngle 方向的 linearGradient——
+            // 亮端锚定在光源侧边缘、沿背光方向 90px 渐隐（θ=0 退化为原顶部横带）；
+            // 正顶部横带是"贴膜感"来源，方向性高光才是"真玻璃在光下"的物理观感
             Box(
                 Modifier
                     .matchParentSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = (tier.edgeAlpha * 0.7f * tier.topLight * lightStrength).coerceIn(0f, 1f)),
-                                Color.White.copy(alpha = tier.edgeAlpha * 0.08f),
-                                Color.Transparent
-                            ),
-                            startY = 0f,
-                            endY = 90f
+                    .drawBehind {
+                        val rad = lightAngle * PI.toFloat() / 180f
+                        val dx = sin(rad)
+                        val dy = -cos(rad)
+                        // 矩形沿光源方向的半跨距：亮端正好落在光源侧边缘上
+                        val halfSpan = abs(dx) * size.width / 2f + abs(dy) * size.height / 2f
+                        val start = Offset(size.width / 2f + dx * halfSpan, size.height / 2f + dy * halfSpan)
+                        val end = Offset(start.x - dx * 90f, start.y - dy * 90f)
+                        drawRect(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = (tier.edgeAlpha * 0.7f * tier.topLight * lightStrength * lightIntensity).coerceIn(0f, 1f)),
+                                    Color.White.copy(alpha = (tier.edgeAlpha * 0.08f * lightIntensity).coerceIn(0f, 1f)),
+                                    Color.Transparent
+                                ),
+                                start = start,
+                                end = end
+                            )
                         )
-                    )
+                    }
             )
-            // 内高光描边：顶部亮、底部暗（玻璃边缘光）
+            // 内高光描边：顶部亮、底部暗（玻璃边缘光）；2026-10-21 alpha 乘光源亮度
             Box(
                 Modifier
                     .matchParentSize()
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = if (dark) 0.06f else 0.08f),
-                                Color.White.copy(alpha = 0.03f),
-                                Color.White.copy(alpha = if (dark) 0.015f else 0.04f)
+                                Color.White.copy(alpha = ((if (dark) 0.06f else 0.08f) * lightIntensity).coerceIn(0f, 1f)),
+                                Color.White.copy(alpha = (0.03f * lightIntensity).coerceIn(0f, 1f)),
+                                Color.White.copy(alpha = ((if (dark) 0.015f else 0.04f) * lightIntensity).coerceIn(0f, 1f))
                             ),
                             startY = 0f,
                             endY = 400f
                         )
                     )
             )
-            // iOS 26 液态玻璃增强：顶部细镜面高光（更亮、更窄，模拟玻璃上沿反射）
+            // iOS 26 液态玻璃增强：细镜面高光（更亮、更窄，模拟玻璃上沿反射）
+            // 2026-10-21 对齐液态玻璃教程：同样改为按 lightAngle 方向的 linearGradient，
+            // 渐变长度 60px，alpha 乘光源亮度
             Box(
                 Modifier
                     .matchParentSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = ((if (dark) 0.08f else 0.12f) * tier.topLight * lightStrength).coerceIn(0f, 1f)),
-                                Color.White.copy(alpha = 0.015f),
-                                Color.Transparent
-                            ),
-                            startY = 0f,
-                            endY = 40f
+                    .drawBehind {
+                        val rad = lightAngle * PI.toFloat() / 180f
+                        val dx = sin(rad)
+                        val dy = -cos(rad)
+                        val halfSpan = abs(dx) * size.width / 2f + abs(dy) * size.height / 2f
+                        val start = Offset(size.width / 2f + dx * halfSpan, size.height / 2f + dy * halfSpan)
+                        val end = Offset(start.x - dx * 60f, start.y - dy * 60f)
+                        drawRect(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = ((if (dark) 0.08f else 0.12f) * tier.topLight * lightStrength * lightIntensity).coerceIn(0f, 1f)),
+                                    Color.White.copy(alpha = (0.015f * lightIntensity).coerceIn(0f, 1f)),
+                                    Color.Transparent
+                                ),
+                                start = start,
+                                end = end
+                            )
                         )
-                    )
+                    }
             )
             // 底部微弱反光（折射光感：玻璃下缘向内容区回弹一点光）
             Box(
@@ -289,6 +378,8 @@ fun GlassSurface(
             )
             // 磨砂雾感（磨砂强度缩放）：纯渐变实现
             // （2026-09-14 v1.4.8 移除 blur 修饰符——ColorOS 离屏白框 bug，永不恢复）
+            // 2026-10-21 对齐液态玻璃教程：雾感减半（对齐教程 Frost=4 的轻磨砂），
+            // alpha 乘光源亮度
             if (frost > 0f) {
                 Box(
                     Modifier
@@ -296,9 +387,9 @@ fun GlassSurface(
                         .background(
                             Brush.verticalGradient(
                                 colors = listOf(
-                                    Color.White.copy(alpha = 0.08f + 0.26f * frost),
+                                    Color.White.copy(alpha = ((0.05f + 0.13f * frost) * lightIntensity).coerceIn(0f, 1f)),
                                     Color.Transparent,
-                                    Color.White.copy(alpha = 0.03f + 0.10f * frost)
+                                    Color.White.copy(alpha = ((0.02f + 0.05f * frost) * lightIntensity).coerceIn(0f, 1f))
                                 ),
                                 startY = 0f,
                                 endY = 220f
@@ -414,6 +505,13 @@ fun MediaGlassSurface(
  * 任何配色方案下结构上都不会割裂。
  *
  * [blurRadius] 仍作用于该背景层（柔化光晕边缘）。
+ *
+ * 2026-10-21 对齐液态玻璃教程（色场韵律化）：
+ * - 外层改为 [BoxWithConstraints]，所有光斑按窗口实际尺寸**比例定位**——
+ *   修复旧版硬编码像素位置 Offset(200f, 2400f) 在不同分辨率/折叠屏上错位的问题；
+ * - 主色场 alpha 调淡（给基底与光斑让位），新增左上冷色亮团 + 右中饱和深团，
+ *   让背景出现明暗起伏的"物"——纯均匀背景上玻璃没有可折射的空间层次（教程核心）；
+ * - blurRadius 与已有 blur 修饰符逻辑保持原样。
  */
 @Composable
 fun GlassBackground(
@@ -423,10 +521,13 @@ fun GlassBackground(
 ) {
     val scheme = MaterialTheme.colorScheme
     val dark = scheme.background.luminance() <= 0.5f
+    val density = LocalDensity.current
 
-    Box(
-        modifier = modifier.fillMaxSize()
-    ) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        // 窗口实际尺寸 → 像素（radialGradient 的 center/radius 以 px 计）
+        val wPx = with(density) { maxWidth.toPx() }
+        val hPx = with(density) { maxHeight.toPx() }
+        val minPx = minOf(wPx, hPx)
         // 背景层包在内部 Box 中应用 blur → 仅柔化背景，不影响前景 content
         Box(
             modifier = Modifier
@@ -446,21 +547,54 @@ fun GlassBackground(
                         )
                     )
             )
-            // 主色场（2026-09-28 图底关系修复）：primary/tertiary 是调色板中的"饱和深色"
-            // （浅色主题 tone≈40，深色主题 tone≈80），以中高 alpha 铺成浓郁色场——
-            // 卡片是浅色磨砂面板，明度差直接拉开图底关系；取色开启时即壁纸色系，依旧同源
+            // 主色场（2026-09-28 图底关系修复）：primary/tertiary 是调色板中的"饱和深色"。
+            // 2026-10-21 对齐液态玻璃教程：alpha 调淡（浅 0.40/0.20/0.36、深 0.48/0.26/0.42），
+            // 给基底与下方光斑让位，避免整屏一片糊
             Box(
                 Modifier
                     .fillMaxSize()
                     .background(
                         Brush.linearGradient(
-                            0f to scheme.primary.copy(alpha = if (dark) 0.62f else 0.58f),
-                            0.5f to scheme.primary.copy(alpha = if (dark) 0.38f else 0.30f),
-                            1f to scheme.tertiary.copy(alpha = if (dark) 0.55f else 0.52f)
+                            0f to scheme.primary.copy(alpha = if (dark) 0.48f else 0.40f),
+                            0.5f to scheme.primary.copy(alpha = if (dark) 0.26f else 0.20f),
+                            1f to scheme.tertiary.copy(alpha = if (dark) 0.42f else 0.36f)
                         )
                     )
             )
-            // 左下补光：primary 反向光斑，避免色场中段过空
+            // 左上亮团（2026-10-21 新增）：tertiary 冷色高光，与主色场对角呼应，
+            // 制造背景明暗起伏的"物"，玻璃边缘光/折射才有空间层次可表现
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                scheme.tertiary.copy(alpha = if (dark) 0.34f else 0.30f),
+                                Color.Transparent
+                            ),
+                            center = Offset(wPx * 0.16f, hPx * 0.08f),
+                            radius = minPx * 0.55f
+                        )
+                    )
+            )
+            // 右中深团（2026-10-21 新增）：primary 饱和团，压住右侧中段，
+            // 与左上亮团形成对角韵律，避免色场中段过空
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                scheme.primary.copy(alpha = if (dark) 0.36f else 0.30f),
+                                Color.Transparent
+                            ),
+                            center = Offset(wPx * 0.90f, hPx * 0.40f),
+                            radius = minPx * 0.65f
+                        )
+                    )
+            )
+            // 左下补光：primary 反向光斑，避免色场中段过空。
+            // 2026-10-21 对齐液态玻璃教程：位置/半径改按窗口比例定位
             Box(
                 Modifier
                     .fillMaxSize()
@@ -470,8 +604,8 @@ fun GlassBackground(
                                 scheme.primary.copy(alpha = if (dark) 0.25f else 0.22f),
                                 Color.Transparent
                             ),
-                            center = Offset(200f, 2400f),
-                            radius = 900f
+                            center = Offset(wPx * 0.10f, hPx * 0.80f),
+                            radius = minPx * 0.50f
                         )
                     )
             )

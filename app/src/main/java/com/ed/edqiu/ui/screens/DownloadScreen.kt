@@ -1,6 +1,5 @@
 ﻿package com.ed.edqiu.ui.screens
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,10 +34,7 @@ import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -64,6 +60,7 @@ import com.ed.edqiu.viewmodel.DownloadViewModel
 import com.ed.edqiu.viewmodel.HistoryViewModel
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
+import com.ed.edqiu.ui.util.pressableNoRipple
 
 // 2026-10-10 固定配色重构：旧硬编码 Accent/Blue/Ink/Muted 移除——
 // 组件内一律取 MaterialTheme 语义色（primary=用户强调色 tint，tertiary=固定 teal），状态色见 statusTint()
@@ -148,13 +145,17 @@ private fun DownloadHeader(
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (onBack != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
+                GlassSurface(
+                    tier = GlassTier.L3,
                     shape = CircleShape,
-                    shadowElevation = 0.dp,
                     modifier = Modifier.size(44.dp)
                 ) {
-                    IconButton(onClick = onBack, modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pressableNoRipple { onBack() },
+                        contentAlignment = Alignment.Center
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
                     }
                 }
@@ -167,12 +168,17 @@ private fun DownloadHeader(
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f)
             )
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
+            GlassSurface(
+                tier = GlassTier.L3,
                 shape = CircleShape,
-                shadowElevation = 0.dp
+                modifier = Modifier.size(52.dp)
             ) {
-                TextButton(onClick = onScan, modifier = Modifier.size(52.dp)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pressableNoRipple { onScan() },
+                    contentAlignment = Alignment.Center
+                ) {
                     Icon(Icons.Outlined.Refresh, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(23.dp))
                 }
             }
@@ -220,8 +226,8 @@ private fun DownloadActions(onScan: () -> Unit, onClearCompleted: () -> Unit) {
                 Text("扫描本地", color = Color.White, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Black)
             }
         }
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
+        GlassSurface(
+            tier = GlassTier.L2,
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier.weight(1f)
         ) {
@@ -236,17 +242,10 @@ private fun DownloadActions(onScan: () -> Unit, onClearCompleted: () -> Unit) {
 
 @Composable
 private fun EmptyDownloadState(onScan: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
+    GlassSurface(
+        tier = GlassTier.L1,
         shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.78f)
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        border = BorderStroke(
-            width = 1.dp,
-            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.30f)
-        )
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -286,17 +285,10 @@ private fun DownloadTaskCard(
     onRemove: () -> Unit,
     onPlay: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
+    GlassSurface(
+        tier = GlassTier.L1,
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.78f)
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        border = BorderStroke(
-            width = 1.dp,
-            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.30f)
-        )
+        modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {

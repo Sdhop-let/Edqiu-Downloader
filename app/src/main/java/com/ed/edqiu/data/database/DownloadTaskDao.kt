@@ -8,9 +8,6 @@ import androidx.room.Query
 @Dao
 interface DownloadTaskDao {
 
-    @Query("SELECT * FROM download_tasks ORDER BY createdAt DESC")
-    suspend fun loadAll(): List<DownloadTaskEntity>
-
     @Query("SELECT * FROM download_tasks WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): DownloadTaskEntity?
 

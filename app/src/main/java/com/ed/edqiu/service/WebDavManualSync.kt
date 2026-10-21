@@ -3,6 +3,7 @@ package com.ed.edqiu.service
 import android.content.Context
 import com.ed.edqiu.EdqiuApplication
 import com.ed.edqiu.data.preferences.CloudSyncPreferences
+import com.ed.edqiu.data.preferences.SyncHistoryRecord
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -57,6 +58,11 @@ object WebDavManualSync {
         _state.value = State.Syncing()
         val scope = (appContext as? EdqiuApplication)?.container?.globalIoScope
             ?: CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        // 备份中心历史前置快照（2026-10）：lastSyncTime==0 → 首轮全量；
+        // syncInProgress 残留 true → 上一轮未正常收尾（冻结/被杀），本轮成功记「冻结自愈恢复」
+        val prefsForSnapshot = CloudSyncPreferences(appContext)
+        val firstEver = prefsForSnapshot.lastSyncTime == 0L
+        val recovering = prefsForSnapshot.syncInProgress
         scope.launch {
             val prefs = CloudSyncPreferences(appContext)
             val result = WebDavSyncService.syncDownloads(appContext, prefs) { progress ->
@@ -68,9 +74,27 @@ object WebDavManualSync {
                         prefs.syncedFileCount = prefs.syncedFileCount + syncResult.uploaded
                         prefs.lastSyncTime = System.currentTimeMillis()
                     }
+                    prefs.addSyncHistory(
+                        SyncHistoryRecord(
+                            timestamp = System.currentTimeMillis(),
+                            mode = if (firstEver) "full" else "incremental",
+                            files = syncResult.uploaded + syncResult.downloaded,
+                            bytes = syncResult.bytesTransferred,
+                            status = if (recovering) "frozen_healed" else "success",
+                        )
+                    )
                     _state.value = State.Succeeded(syncResult)
                 },
                 onFailure = { error ->
+                    prefs.addSyncHistory(
+                        SyncHistoryRecord(
+                            timestamp = System.currentTimeMillis(),
+                            mode = if (firstEver) "full" else "incremental",
+                            files = 0,
+                            bytes = 0L,
+                            status = "failed",
+                        )
+                    )
                     _state.value = State.Failed(error.message ?: "未知错误")
                 },
             )

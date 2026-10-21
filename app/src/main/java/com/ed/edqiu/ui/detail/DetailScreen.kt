@@ -49,6 +49,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -266,19 +267,21 @@ private fun NavCircleButton(
     enabled: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        colors = IconButtonDefaults.iconButtonColors(
-            // 2026-10-10 统一：圆钮底色对齐全工程 HeaderIconButton 形态（surfaceContainer 72%）
-            containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            disabledContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
-            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-        ),
-        modifier = Modifier.size(40.dp),
-        content = content
-    )
+    // 2026-10-20 设计系统对齐：surfaceContainer 72% 实底圆钮 → L3 玻璃圆钮
+    // （edqiu-design-system.html 组件库 + 详情页规范；与 HeaderIconButton 玻璃家族一致）。
+    // 顶栏浮在彩色封面上，玻璃双色描边保轮廓；禁用态整体降 alpha。
+    GlassSurface(
+        tier = GlassTier.L3,
+        shape = CircleShape,
+        modifier = Modifier
+            .size(40.dp)
+            .alpha(if (enabled) 1f else 0.4f)
+            .then(if (enabled) Modifier.pressableNoRipple { onClick() } else Modifier)
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            content()
+        }
+    }
 }
 
 /** 媒体预判区：大尺寸视频/图片预览图卡片，右下角叠加状态徽章。 */

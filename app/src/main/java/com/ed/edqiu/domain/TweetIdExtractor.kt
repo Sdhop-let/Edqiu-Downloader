@@ -49,5 +49,4 @@ object TweetIdExtractor {
     }
 
     /** 判定文本中是否包含严格匹配的 Twitter/X status URL。 */
-    fun isTwitterUrl(text: String?): Boolean = findStatusId(text) != null
 }

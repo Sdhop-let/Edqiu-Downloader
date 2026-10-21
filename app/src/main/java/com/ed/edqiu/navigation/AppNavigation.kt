@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -46,9 +47,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
@@ -63,12 +68,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.ed.edqiu.ExternalDownloadRequest
 import com.ed.edqiu.ui.screens.DownloadScreen
-import com.ed.edqiu.ui.screens.HomeScreen
 import com.ed.edqiu.ui.screens.MediaLibraryScreen
 import com.ed.edqiu.ui.screens.PlayerScreen
-import com.ed.edqiu.ui.screens.SettingsScreen
 import com.ed.edqiu.viewmodel.DownloadViewModel
 import com.ed.edqiu.viewmodel.HistoryViewModel
 import com.ed.edqiu.viewmodel.PlayerViewModel
@@ -140,15 +142,12 @@ private fun tabSwitchExit(toLeft: Boolean) =
     fadeOut(tween(300, easing = FastOutSlowInEasing))
 
 sealed class Screen(val route: String, val label: String, val icon: ImageVector) {
-    data object Home : Screen("home", "下载器", Icons.Outlined.Home)
     data object Download : Screen("download", "下载", Icons.Outlined.TaskAlt)
     data object Library : Screen("library", "媒体库", EdqiuIcons.Media)
     data object Inbox : Screen("edqiu_inbox", "收件箱", EdqiuIcons.Inbox)
     data object Trash : Screen("edqiu_trash", "回收站", Icons.Outlined.Delete)
     data object Settings : Screen("settings", "我的", EdqiuIcons.Profile)
     data object Player : Screen("player", "播放", Icons.Outlined.Download)
-    /** 二级页：下载器设置（分组过滤） */
-    data object DownloaderSettings : Screen("downloader_settings", "下载器设置", Icons.Outlined.Tune)
     /** 二级页：收件箱设置（分组过滤） */
     data object EdqiuSettings : Screen("edqiu_settings", "收件箱设置", Icons.Outlined.Settings)
     /** 二级页：作者作品 */
@@ -161,20 +160,19 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector)
 class MineNav(
     val openDownloadCenter: () -> Unit,
     val openTrash: () -> Unit,
-    val openDownloaderSection: (String) -> Unit,
     val openEdqiuSection: (String) -> Unit,
     val openAuthors: () -> Unit,
     /** 作品订阅页（2026-10 真正作品订阅，独立二级页浮层）。 */
-    val openSubscription: () -> Unit = {}
+    val openSubscription: () -> Unit = {},
+    /** 备份中心（2026-10 独立中心：连接/进度/历史 + 立即同步，复用媒体备份浮层）。 */
+    val openBackupCenter: () -> Unit = {},
 )
 
 @Composable
 fun AppNavigation(
-    externalDownloadRequest: ExternalDownloadRequest? = null,
-    onExternalDownloadConsumed: (Long) -> Unit = {},
     inboxContent: (@Composable () -> Unit)? = null,
     trashContent: (@Composable (onBack: () -> Unit) -> Unit)? = null,
-    settingsContent: (@Composable (downloaderSettings: @Composable () -> Unit, mineNav: MineNav) -> Unit)? = null,
+    settingsContent: (@Composable (mineNav: MineNav) -> Unit)? = null,
     edqiuSettingsContent: (@Composable (section: String?, onBack: () -> Unit) -> Unit)? = null,
     onOpenMediaBackup: (() -> Unit)? = null,
     onOpenSubscription: (() -> Unit)? = null,
@@ -201,16 +199,12 @@ fun AppNavigation(
         android.util.Log.e("BackDispatch", "NAVHOST BH fired gated=$navBackGated")
         navController.popBackStack()
     }
-    val edqiuMode = inboxContent != null
-    val tabScreens = remember(edqiuMode) {
-        if (edqiuMode) {
-            // 「下载」已从 Tab 移除（功能保留在路由与我的页入口）
-            listOf(Screen.Inbox, Screen.Library, Screen.Settings)
-        } else {
-            listOf(Screen.Home, Screen.Library, Screen.Settings)
-        }
-    }
-    val startDestination = if (edqiuMode) Screen.Inbox.route else Screen.Home.route
+    // 2026-10-21 清理：旧「下载器」Home 模式（edqiuMode=false 分支）已随
+    // HomeScreen / HomeViewModel / UrlInputBar / VideoInfoCard 一并删除——
+    // EdqiuApp 恒定注入 inboxContent，该分支从未生效（死代码）。
+    // 「下载」路由保留（功能在路由与我的页入口，不在 Tab）
+    val tabScreens = remember { listOf(Screen.Inbox, Screen.Library, Screen.Settings) }
+    val startDestination = Screen.Inbox.route
 
     // Tab 切换统一入口：悬浮底栏与标准底栏共用（popUpTo 起点 + saveState/restoreState）
     val selectTab: (Int) -> Unit = { index ->
@@ -259,25 +253,9 @@ fun AppNavigation(
     // 退出到媒体库后底部多出一条显示标题的胶囊，且仅短暂闪现 620ms 即消失）。
     // 播放器退场即完全收起，媒体库恢复原样。
 
-    LaunchedEffect(externalDownloadRequest?.requestId) {
-        if (externalDownloadRequest != null) {
-            playerVisible = false
-            playerFilePath = null
-            navController.navigate(if (edqiuMode) Screen.Inbox.route else Screen.Home.route) {
-                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                launchSingleTop = true
-                restoreState = true
-            }
-        }
-    }
-
     val showBottomBar = currentDestination?.route in tabScreens.map { it.route } && playerFilePath == null
     val selectedTabIndex = tabScreens.indexOfFirst { currentDestination?.hierarchy?.any { h -> h.route == it.route } == true }
         .coerceAtLeast(0)
-
-    // 悬浮 Tab 栏避让高度：内容延伸到屏底，仅列表尾部留出避让区
-    // Tab 48dp (扁平化) + 底部间隙 28dp + 安全余量 8dp = 84dp
-    val tabBarClearance = 84.dp
 
     // ---- 液态玻璃（Backdrop 库）：内层 shell 捕获层 ----
     // shellBackdrop 只记录页面内容（NavHost）；底栏位于捕获链外，
@@ -336,7 +314,30 @@ fun AppNavigation(
                     // 仅保留系统 inset（状态栏/导航栏），不再为 Tab 额外占位
                     .padding(paddingValues)
                     // 液态玻璃捕获：底栏折射的采样源 = 此 NavHost 的页面内容
-                    .layerBackdrop(shellBackdrop),
+                    .layerBackdrop(shellBackdrop)
+                    // 底部滚动渐隐（2026-10-21 第三版）：内容滚到接近底缘时，
+                    // 最后 148dp 内 alpha 从 1 平滑降到 0，配合 Tab 栏自身的玻璃折射
+                    // 形成「内容化开」的层次。
+                    // 为什么不用 drawBackdrop 雾化带：库的绘制图层顶边自带 2px 高亮
+                    // 伪影（抗锯齿边缘，AGSL 覆盖不到），无论怎么调都会在栏上方留下
+                    // 一条横贯全屏的白线；改成纯 Compose 绘制即可完全规避，也不引入
+                    // 离屏 RenderEffect（ColorOS 白框历史坑）与额外的 backdrop 图层。
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .drawWithContent {
+                        drawContent()
+                        if (showBottomBar) {
+                            val fade = 148.dp.toPx().coerceAtMost(size.height)
+                            val start = ((size.height - fade) / size.height).coerceIn(0f, 1f)
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    0f to Color.Transparent,
+                                    start to Color.Transparent,
+                                    1f to Color.Black
+                                ),
+                                blendMode = BlendMode.DstOut
+                            )
+                        }
+                    },
                 // 转场（2026-09-30 统一动画规格；系统「减少动画」全部降级为纯淡变）：
                 // - Tab↔Tab：水平位移 + 轻微缩放（0.95↔1）+ 淡变，300ms FastOutSlowIn，
                 //   新页延迟 50ms 起步形成 ~50ms 轻微重叠；
@@ -385,14 +386,6 @@ fun AppNavigation(
                     }
                 }
             ) {
-                composable(Screen.Home.route) {
-                    HomeScreen(
-                        onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
-                        downloadViewModel = downloadViewModel,
-                        externalDownloadRequest = externalDownloadRequest,
-                        onExternalDownloadConsumed = onExternalDownloadConsumed
-                    )
-                }
                 composable(Screen.Download.route) {
                     DownloadScreen(
                         downloadViewModel = downloadViewModel,
@@ -456,12 +449,8 @@ fun AppNavigation(
                     }
                 }
                 composable(Screen.Settings.route) {
-                    val downloaderSettings: @Composable () -> Unit = {
-                        SettingsScreen(
-                            onBack = { navController.navigate(Screen.Home.route) },
-                            onOpenMediaBackup = onOpenMediaBackup ?: {}
-                        )
-                    }
+                    // 2026-10-21：settingsContent 是唯一入口（EdqiuApp 恒注入「我的」页），
+                    // 原先 else { downloaderSettings() } 的兜底分支永不可达，已随设置页合并删除
                     if (settingsContent != null) {
                         val mineNav = MineNav(
                             openDownloadCenter = {
@@ -472,41 +461,21 @@ fun AppNavigation(
                                     navController.navigate(Screen.Trash.route) { launchSingleTop = true }
                                 }
                             },
-                            openDownloaderSection = { section ->
-                                navController.navigate(Screen.DownloaderSettings.route + "?section=$section") {
-                                    launchSingleTop = true
-                                }
-                            },
                             openEdqiuSection = { section ->
                                 navController.navigate(Screen.EdqiuSettings.route + "?section=$section") {
                                     launchSingleTop = true
                                 }
                             },
                             openSubscription = { onOpenSubscription?.invoke() },
+                            openBackupCenter = { onOpenMediaBackup?.invoke() },
                             openAuthors = {
                                 if (authorsContent != null) {
                                     navController.navigate(Screen.Authors.route) { launchSingleTop = true }
                                 }
                             }
                         )
-                        settingsContent(downloaderSettings, mineNav)
-                    } else {
-                        downloaderSettings()
+                        settingsContent(mineNav)
                     }
-                }
-
-                // 二级页：下载器设置（分组过滤，返回箭头）
-                composable(
-                    route = Screen.DownloaderSettings.route + "?section={section}",
-                    arguments = listOf(navArgument("section") { defaultValue = "" })
-                ) { entry ->
-                    val section = entry.arguments?.getString("section")?.takeIf { it.isNotBlank() }
-                    SettingsScreen(
-                        onBack = { navController.popBackStack() },
-                        showBack = true,
-                        section = section,
-                        onOpenMediaBackup = onOpenMediaBackup ?: {}
-                    )
                 }
 
                 // 二级页：收件箱设置（分组过滤，返回箭头）
@@ -532,8 +501,11 @@ fun AppNavigation(
             )
         }
 
-        // 悬浮液态胶囊 Tab 栏：navigationBarsPadding + 8dp 适配不同设备导航栏高度
-        // （blurRadius 不再写死 8dp——GlassOverlaySurface 默认值会按全局「模糊强度」滑块取值）
+        // 悬浮液态胶囊 Tab 栏：navigationBarsPadding + 24dp 适配不同设备导航栏高度
+        // （2026-10-21：手势导航下 navigationBars inset=0——ColorOS mode=3 无底部手势
+        //  inset，原 8dp 让 Tab 栏贴死屏幕底缘、与系统手势暗条紧挨，「不完全呈现」。
+        //  基础间距提到 24dp：手势设备距屏底 24dp，三键设备由 navigationBarsPadding
+        //  先吃掉导航栏高度——两种设备视觉间距一致（都是距系统底部构件 24dp）。）
         if (showBottomBar && floatingTabBarEnabled) {
             LiquidTabBar(
                 tabs = tabScreens.map { LiquidTab(label = it.label, icon = it.icon) },
@@ -542,7 +514,7 @@ fun AppNavigation(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
-                    .padding(bottom = 8.dp),
+                    .padding(bottom = 24.dp),
                 liquidGlassEnabled = liquidGlassEnabled
             )
         }

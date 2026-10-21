@@ -46,8 +46,10 @@ class ListViewModel(
     private val selectionModeMutable = MutableStateFlow(false)
     val selectionMode: StateFlow<Boolean> = selectionModeMutable
 
+    // 2026-10-21 双线隔离：收件箱只展示用户线（分享/手动捕获）——订阅线作品归
+    // 「作品订阅」页（SubscriptionViewModel.subscriptionPosts），不再混入收件箱
     val links: StateFlow<List<SavedLink>> = combine(
-        repo.observeAll(),
+        repo.observeUserLinks(),
         searchQueryMutable,
         sortOrderMutable
     ) { links, query, sortOrder ->
@@ -91,11 +93,36 @@ class ListViewModel(
 
     fun captureText(input: String) {
         val text = input.trim()
-        if (!TweetIdExtractor.isTwitterUrl(text)) {
+        // 2026-10-21 批量粘贴接线（BatchTweetUrlExtractor 此前仅被测试引用）：
+        // 一段文本可含多条 status 链接（含文案/引用推文），逐条严格提取 + 按 tweetId 去重后
+        // 批量捕获；单条走原路径（反馈语义不变），多条出汇总弹窗
+        val pairs = com.ed.edqiu.domain.BatchTweetUrlExtractor.extractWithOriginals(text)
+        if (pairs.isEmpty()) {
             captureFeedback.value = CaptureFeedback.NotTwitter
             return
         }
-        launchCapture(text)
+        if (pairs.size == 1) {
+            launchCapture(pairs.first().normalizedUrl)
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            var added = 0
+            var dup = 0
+            pairs.forEach { pair ->
+                when (captureCoordinator.capture(pair.normalizedUrl)) {
+                    is SavedLinkRepository.CaptureResult.Added -> added++
+                    SavedLinkRepository.CaptureResult.Duplicate -> dup++
+                    SavedLinkRepository.CaptureResult.Invalid -> Unit
+                }
+            }
+            actionFeedback.value = ActionFeedback(
+                message = "批量保存：新增 $added 条" +
+                    if (dup > 0) "，跳过重复 $dup 条" else "",
+                asDialog = true,
+                // 三态：有新增=成功；有重复无新增=中性（不是失败，不该报「操作失败」）
+                success = if (added > 0) true else null
+            )
+        }
     }
 
     private fun launchCapture(text: String, showDuplicateFeedback: Boolean = true) {
@@ -163,7 +190,7 @@ class ListViewModel(
         batchIds: Set<String>,
         stateFlow: MutableStateFlow<BatchDownloadUiState?>
     ): Job = downloadScope.launch {
-        combine(repo.observeAll(), DownloadTaskBus.tasks) { links, tasks ->
+        combine(repo.observeUserLinks(), DownloadTaskBus.tasks) { links, tasks ->
             val remaining = links.count { it.tweetId in batchIds && it.status != LinkStatus.DOWNLOADED }
             val pct = InboxDownloadProgress.progressByTweet(tasks).values.maxOrNull()
             remaining to pct
@@ -293,6 +320,9 @@ class ListViewModel(
             SavedLinkRepository.DownloadRequestResult.Launched -> "已交给 Edqiu 下载器"
             SavedLinkRepository.DownloadRequestResult.Downloaded -> "已下载到 Edqiu 下载中心"
             SavedLinkRepository.DownloadRequestResult.AlreadyDownloaded -> "该文件已经下载"
+            // 2026-10-21 去重：媒体库已有同推文文件，跳过重复下载
+            is SavedLinkRepository.DownloadRequestResult.AlreadyInLibrary ->
+                "该作品已在媒体库，跳过下载"
             SavedLinkRepository.DownloadRequestResult.Missing -> "记录不存在"
             SavedLinkRepository.DownloadRequestResult.Gone -> "推文不存在"
             is SavedLinkRepository.DownloadRequestResult.Failed ->
@@ -308,6 +338,7 @@ class ListViewModel(
         when (result) {
             SavedLinkRepository.DownloadRequestResult.Downloaded,
             SavedLinkRepository.DownloadRequestResult.AlreadyDownloaded -> true
+            is SavedLinkRepository.DownloadRequestResult.AlreadyInLibrary -> true
             SavedLinkRepository.DownloadRequestResult.Gone,
             is SavedLinkRepository.DownloadRequestResult.Failed -> false
             SavedLinkRepository.DownloadRequestResult.Launched,

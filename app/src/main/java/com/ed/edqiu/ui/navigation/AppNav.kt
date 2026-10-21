@@ -28,7 +28,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -36,6 +35,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kyant.backdrop.backdrops.layerBackdrop
@@ -45,6 +46,7 @@ import com.ed.edqiu.di.AppContainer
 import com.ed.edqiu.di.EdqiuViewModelFactory
 import com.ed.edqiu.ui.components.CapsuleFeedbackController
 import com.ed.edqiu.ui.components.CapsuleFeedbackHost
+import com.ed.edqiu.ui.components.FeedbackKind
 import com.ed.edqiu.ui.components.EdqiuSnackbarHost
 import com.ed.edqiu.ui.components.GlassBackground
 import com.ed.edqiu.ui.components.LocalAppBackdrop
@@ -87,8 +89,7 @@ private const val OVERLAY_SUBSCRIPTION = "subscription"
 fun EdqiuApp(container: AppContainer) {
     val themeMode by container.settingsRepository.themeModeFlow
         .collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
-    val accentColor by container.settingsRepository.accentColorFlow
-        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_ACCENT_COLOR)
+    // 2026-10-21 强调色功能已移除：主题全局固定 iOS 绿，不再收集 accentColorFlow
     val blurIntensity by container.settingsRepository.blurIntensityFlow
         .collectAsStateWithLifecycle(initialValue = 0.6f)
     val glassTransparency by container.settingsRepository.glassTransparencyFlow
@@ -103,16 +104,20 @@ fun EdqiuApp(container: AppContainer) {
         .collectAsStateWithLifecycle(initialValue = true)
     val hapticStrength by container.settingsRepository.hapticStrengthFlow
         .collectAsStateWithLifecycle(initialValue = 2)
-    // 玻璃外观四项（v1.8.0）：描边粗细 / 亮边强度 / 描边颜色 / 压暗程度
+    // 玻璃外观三项（v1.8.0）：描边粗细 / 亮边强度 / 压暗程度（2026-10-21 描边颜色已移除）
     val glassEdgeWidth by container.settingsRepository.glassEdgeWidthFlow
         .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_EDGE_WIDTH)
     val glassLightStrength by container.settingsRepository.glassEdgeLightStrengthFlow
         .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_LIGHT_STRENGTH)
-    val glassEdgeColor by container.settingsRepository.glassEdgeColorFlow
-        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_EDGE_COLOR)
     val glassDimAmount by container.settingsRepository.glassDimAmountFlow
         .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_DIM_AMOUNT)
-    val accent = Color(accentColor)
+    // 光学三项（2026-10-21 对齐液态玻璃教程）：光源角度/亮度/色散
+    val glassLightAngle by container.settingsRepository.glassLightAngleFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_LIGHT_ANGLE)
+    val glassLightIntensity by container.settingsRepository.glassLightIntensityFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_LIGHT_INTENSITY)
+    val glassDispersion by container.settingsRepository.glassDispersionFlow
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_GLASS_DISPERSION)
     // 玻璃三参数（2026-09-28 拆分独立滑块）：透明度 / 磨砂 / 折射各自独立调节
     val frostStrength = blurIntensity
 
@@ -133,16 +138,15 @@ fun EdqiuApp(container: AppContainer) {
         ThemeEffects.LiquidGlassEnabled provides liquidGlass,
         ThemeEffects.GlassEdgeWidth provides glassEdgeWidth,
         ThemeEffects.GlassEdgeLightStrength provides glassLightStrength,
-        ThemeEffects.GlassEdgeColor provides
-            // 0 = 跟随主题色哨兵：映射为 Unspecified，避免 Color(0)（透明黑）被当成有效覆盖色
-            if (glassEdgeColor == SettingsRepository.DEFAULT_GLASS_EDGE_COLOR) Color.Unspecified
-            else Color(glassEdgeColor),
+        // 光学三项（2026-10-21 对齐液态玻璃教程）：玻璃描边颜色注入已移除
+        ThemeEffects.GlassLightAngle provides glassLightAngle,
+        ThemeEffects.GlassLightIntensity provides glassLightIntensity,
+        ThemeEffects.GlassDispersion provides glassDispersion,
         ThemeEffects.GlassDimAmount provides glassDimAmount,
         com.ed.edqiu.ui.util.LocalHapticStrength provides hapticStrength
     ) {
         EdqiuTheme(
-            themeMode = themeMode,
-            accent = accent
+            themeMode = themeMode
         ) {
             CompositionLocalProvider(LocalAppContainer provides container) {
                 val application = LocalContext.current.applicationContext as Application
@@ -166,6 +170,32 @@ fun EdqiuApp(container: AppContainer) {
 
                 LaunchedEffect(Unit) {
                     snackbarController.observe(scope, snackbarHostState, capsuleController)
+                }
+
+                // 2026-10-21：进软件提示——上次离开后订阅线捕获的新作品（胶囊轻提示，非强提醒）。
+                // 语义：last_foreground_at 之前的作品视为已看过；离开期间新增数 > 0 才提示。
+                // 首次启动（last=0）不提示，只落时间戳；提示后立刻推进时间戳（同批作品不重复提醒）。
+                LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                    scope.launch {
+                        runCatching {
+                            val prefs = application.getSharedPreferences(
+                                "subscription_entry", android.content.Context.MODE_PRIVATE
+                            )
+                            val last = prefs.getLong("last_foreground_at", 0L)
+                            val now = System.currentTimeMillis()
+                            if (last > 0L) {
+                                val newCount = container.savedLinkRepository
+                                    .countNewSubscriptionSince(last)
+                                if (newCount > 0) {
+                                    capsuleController.show(
+                                        FeedbackKind.NEUTRAL,
+                                        "离开期间订阅更新了 $newCount 个新作品"
+                                    )
+                                }
+                            }
+                            prefs.edit().putLong("last_foreground_at", now).apply()
+                        }
+                    }
                 }
 
                 // ===== 浮层导航状态（2026-09-29 自绘跟手返回 / 2026-09-30 弹性滑入）=====
@@ -228,31 +258,6 @@ fun EdqiuApp(container: AppContainer) {
                         lastDraw = d
                     }
                 }
-                LaunchedEffect(Unit) {
-                    var ticks = 0
-                    var lastLogMs = 0L
-                    var lastCp = closeProgress
-                    var lastRoute = overlayRoute
-                    var lastStateChangeMs = 0L
-                    while (true) {
-                        androidx.compose.runtime.withFrameNanos { }
-                        ticks++
-                        val now = android.os.SystemClock.uptimeMillis()
-                        if (ticks % 120 == 0 || now - lastLogMs > 3000) {
-                            lastLogMs = now
-                            android.util.Log.d(
-                                "FreezeProbe",
-                                "ticks=$ticks draws=${probeDraws.get()} shown=${probeView.isShown} " +
-                                    "focus=${probeView.hasWindowFocus()} winVis=${probeView.windowVisibility} " +
-                                    "attached=${probeView.isAttachedToWindow} cp=$closeProgress route=$overlayRoute " +
-                                    "dragging=$overlayDragging"
-                            )
-                        }
-                        lastCp = closeProgress
-                        lastRoute = overlayRoute
-                    }
-                }
-
                 fun openOverlay(route: String, tweetId: String = "") {
                     if (overlayRoute != null) return
                     overlayTweetId = tweetId
@@ -339,7 +344,7 @@ fun EdqiuApp(container: AppContainer) {
                                                 val vm = viewModel<HistoryViewModel>(factory = factory)
                                                 HistoryScreen(vm = vm, onBack = onBack)
                                             },
-                                            settingsContent = { _, mineNav ->
+                                            settingsContent = { mineNav ->
                                                 MineScreen(mineNav = mineNav)
                                             },
                                             edqiuSettingsContent = { section, onBack ->
@@ -349,7 +354,9 @@ fun EdqiuApp(container: AppContainer) {
                                                     backupVm = backupVm,
                                                     onBack = onBack,
                                                     showBack = true,
-                                                    section = section
+                                                    section = section,
+                                                    // 2026-10-21 合并：网盘同步分区的「备份中心」入口
+                                                    onOpenMediaBackup = { openOverlay(OVERLAY_MEDIA_BACKUP) }
                                                 )
                                             },
                                             onOpenMediaBackup = { openOverlay(OVERLAY_MEDIA_BACKUP) },
@@ -486,9 +493,20 @@ fun EdqiuApp(container: AppContainer) {
                             ) {
                                 EdqiuSnackbarHost(hostState = snackbarHostState)
                             }
+                            // 底部玻璃胶囊反馈（真折射，采 appBackdrop）。
+                            // 2026-10-21 二次修复：宿主此前是 CompositionLocalProvider 的
+                            // 直接子节点——那一层不产生布局节点，胶囊最终被挂到更外层的
+                            // 容器语义下（非 Box），定位随容器漂移，实机上会跑到屏幕顶部
+                            // 与系统流体云重叠。现收进最外层 Box 内 + 显式 align(BottomCenter)：
+                            // 胶囊恒定悬在 Tab 栏上方 12dp（宿主内底 padding 86dp =
+                            // 24 栏偏移 + 50 栏高 + 12 间距），永不侵占顶部通知区。
+                            // 位置也在 layerBackdrop(appBackdrop) 捕获链之外——链内自采样
+                            // 会让玻璃逐帧变实色（见 LiquidGlass 架构约定）。
+                            CapsuleFeedbackHost(
+                                controller = capsuleController,
+                                modifier = Modifier.align(Alignment.BottomCenter)
+                            )
                         }
-                        // 捕获链外：底部玻璃胶囊反馈（真折射，采 appBackdrop）
-                        CapsuleFeedbackHost(controller = capsuleController)
                     }
                 }
             }

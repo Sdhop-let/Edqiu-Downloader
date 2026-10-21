@@ -34,6 +34,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.CloudSync
+import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Cookie
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
@@ -42,6 +45,9 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.Tune
@@ -53,8 +59,6 @@ import com.ed.edqiu.ui.components.SmoothAlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -90,7 +94,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ed.edqiu.data.model.ProxySettings
 import com.ed.edqiu.data.preferences.CloudSyncPreferences
 import com.ed.edqiu.data.preferences.CookiePreferences
-import com.ed.edqiu.data.preferences.DownloadPathPreferences
 import com.ed.edqiu.data.preferences.ProxyPreferences
 import com.ed.edqiu.data.preferences.ThirdPartyApiPreferences
 import com.ed.edqiu.data.proxy.ProxyDetector
@@ -111,6 +114,9 @@ import com.ed.edqiu.ui.components.EdqiuTextField
 import com.ed.edqiu.ui.components.FeedbackKind
 import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.components.FeedbackDialog
+import com.ed.edqiu.ui.components.GlassSurface
+import com.ed.edqiu.ui.components.GlassTier
+import com.ed.edqiu.ui.util.pressableNoRipple
 import com.ed.edqiu.ui.components.PillChip
 import com.ed.edqiu.ui.components.DynamicSwitch
 import com.ed.edqiu.ui.navigation.LocalSnackbarController
@@ -134,9 +140,8 @@ object DlSection {
 }
 
 @Composable
-fun SettingsScreen(
+fun DownloaderSettingsPage(
     onBack: () -> Unit,
-    showBack: Boolean = false,
     section: String? = null,
     onOpenMediaBackup: () -> Unit = {},
 ) {
@@ -147,7 +152,6 @@ fun SettingsScreen(
 
     val proxyPreferences = remember { ProxyPreferences(context) }
     val cookiePreferences = remember { CookiePreferences(context) }
-    val pathPreferences = remember { DownloadPathPreferences(context) }
     val cloudSyncPreferences = remember { CloudSyncPreferences(context) }
 
     var updateStatus by remember { mutableStateOf<String?>(null) }
@@ -172,10 +176,6 @@ fun SettingsScreen(
     var authToken by remember { mutableStateOf("") }
     var ct0 by remember { mutableStateOf("") }
     var cookiesConfigured by remember { mutableStateOf(false) }
-
-    var useCustomPath by remember { mutableStateOf(false) }
-    var customPath by remember { mutableStateOf("") }
-    var displayPath by remember { mutableStateOf("") }
 
     var useWebDavSync by remember { mutableStateOf(false) }
     var webDavServerUrl by remember { mutableStateOf("") }
@@ -202,28 +202,6 @@ fun SettingsScreen(
     // WebDAV 配置是否已从磁盘加载完成（去抖落盘防覆写开关，见下方 snapshotFlow）
     var webDavLoaded by remember { mutableStateOf(false) }
 
-    val dirPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri: Uri? ->
-        uri?.let {
-            val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            val persisted = runCatching {
-                context.contentResolver.takePersistableUriPermission(it, flags)
-            }.isSuccess
-            if (!persisted) {
-                scope.launch { inlineFeedback = FeedbackMessage("无法持久化目录授权，保存失败，请重试", FeedbackKind.ERROR) }
-                return@let
-            }
-            val path = uriToDisplayPath(context, it) ?: it.toString()
-            displayPath = path
-            customPath = it.toString()
-            pathPreferences.saveCustomTreeUri(customPath, displayPath)
-            useCustomPath = true
-            scope.launch { inlineFeedback = FeedbackMessage("下载保存路径已更新", FeedbackKind.SUCCESS) }
-        }
-    }
-
     LaunchedEffect(Unit) {
         val proxy = proxyPreferences.getProxySettings()
         proxyEnabled = proxy.enabled
@@ -238,10 +216,6 @@ fun SettingsScreen(
         authToken = cookiePreferences.getAuthToken()
         ct0 = cookiePreferences.getCt0()
         cookiesConfigured = cookiePreferences.hasCookies()
-
-        useCustomPath = pathPreferences.useCustomPath
-        customPath = pathPreferences.customPath
-        displayPath = pathPreferences.displayDownloadDir(context)
 
         useWebDavSync = cloudSyncPreferences.enabled
         webDavProviderId = cloudSyncPreferences.providerId
@@ -537,13 +511,15 @@ fun SettingsScreen(
     // 二级页右缘跟手侧滑返回（2026-10）：此前该能力只挂在浮层路由上，
     // 设置二级页（含 WebDAV 同步页）只有返回箭头，侧滑返回不生效
     EdgeSwipeBackBox(
-        enabled = showBack || section != null,
+        enabled = true,
         onBack = onBack,
     ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            // 2026-10-21 液态玻璃：去掉实底 background——旧实现用纯色铺满，
+            // 把上层的 GlassBackground 色场整块盖死，页面成了白板；
+            // 现在透出玻璃背景，卡片（GlassSurface L1）才有"浮在色场上"的层次
             .statusBarsPadding()
     ) {
         // 卡片内嵌通知 → 统一弹窗反馈（2026-09-28）：更新/代理/Cookie 等操作结果改弹窗展示
@@ -559,17 +535,20 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
-                if (showBack || section != null) {
-                    // 二级页返回箭头
-                    Surface(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clickable(onClick = onBack),
+                // 2026-10-21 设置页合并：头部与新设置页（ui/settings/SettingsScreen）统一
+                // —— L3 返回圆钮 + 分区标题/副标题，不再走旧的 SettingsHeader 概览卡
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    GlassSurface(
+                        tier = GlassTier.L3,
                         shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
-                        shadowElevation = 0.dp
+                        modifier = Modifier.size(44.dp)
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pressableNoRipple { onBack() },
+                            contentAlignment = Alignment.Center
+                        ) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "返回",
@@ -578,13 +557,20 @@ fun SettingsScreen(
                             )
                         }
                     }
-                } else {
-                    SettingsHeader(
-                        pathLabel = if (useCustomPath) "自定义目录" else "默认目录",
-                        proxyEnabled = proxyEnabled,
-                        cookiesConfigured = cookiesConfigured,
-                        webDavEnabled = useWebDavSync
-                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = legacySectionTitle(section),
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Black,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = legacySectionSubtitle(section),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
@@ -592,7 +578,7 @@ fun SettingsScreen(
 
             if (section == null || section == DlSection.UPDATE) {
             item {
-                SectionCard(title = "更新与工具", subtitle = "保持解析器和 App 版本可用", icon = Icons.Outlined.SystemUpdate) {
+                SectionCard(title = "", subtitle = "", icon = Icons.Outlined.SystemUpdate) {
                     ActionRow(
                         title = "更新 yt-dlp",
                         subtitle = updateStatus ?: "用于提升 X/Twitter 视频解析成功率",
@@ -639,7 +625,7 @@ fun SettingsScreen(
 
             if (section == null || section == DlSection.NETWORK) {
             item {
-                SectionCard(title = "网络与认证", subtitle = "代理、Cookie 和受限内容解析", icon = Icons.Outlined.Security) {
+                SectionCard(title = "", subtitle = "", icon = Icons.Outlined.Security) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Icon(Icons.Outlined.VpnLock, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
                         Column(modifier = Modifier.weight(1f)) {
@@ -878,7 +864,7 @@ fun SettingsScreen(
 
             if (section == null || section == DlSection.WEBDAV) {
             item {
-                SectionCard(title = "WebDAV 同步", subtitle = "把下载媒体同步到私有云盘", icon = Icons.Outlined.Cloud) {
+                SectionCard(title = "", subtitle = "", icon = Icons.Outlined.Cloud) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("启用 WebDAV", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
@@ -1160,61 +1146,132 @@ fun SettingsScreen(
             }
             }
 
-            // ── 作品订阅管理（2026-09-15 v2 批次4：P2-1 作者订阅自动下载）──
+            // ── 关于软件（2026-10-21 重写）：从「关于本机」升级为完整使用指南 ──
+            // 排版沿用设置页同一套语言：GlassSurface 分区卡 + 卡内 GroupLabel 分组 +
+            // 编号步骤行 / FAQ 行，不引入第二种卡片样式
             if (section == null || section == DlSection.ABOUT) {
             item {
-                SectionCard(title = "关于", subtitle = "版本与使用说明", icon = Icons.Outlined.Info) {
-                    Text("Edqiu v${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(4.dp))
-                    Text("仅供个人学习与内容整理使用。下载内容版权归原作者所有，请遵守 Twitter / X 服务条款。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            }
-        }
-    }
-    }
-}
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
 
-@Composable
-private fun SettingsHeader(
-    pathLabel: String,
-    proxyEnabled: Boolean,
-    cookiesConfigured: Boolean,
-    webDavEnabled: Boolean
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.78f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), shape = CircleShape) {
-                    Icon(Icons.Outlined.Tune, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(11.dp))
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("下载器设置", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface)
-                    Text("路径、解析、代理、Cookie 与云同步", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SectionCard(title = "", subtitle = "", icon = Icons.Outlined.RocketLaunch) {
+                        GroupLabel("快速开始")
+                        AboutStepRow(1, "复制或分享链接", "在 X 里复制推文链接，或直接点分享选择 Edqiu——作者、文案、封面会自动归档。")
+                        AboutStepRow(2, "确认已入收件箱", "链接进收件箱后状态为「待处理」。重复链接会被自动识别并跳过，不会产生多余记录。")
+                        AboutStepRow(3, "点下载", "卡片右下角「下载」单条处理；右上角「下载」一次性处理全部待处理条目。")
+                        AboutStepRow(4, "在媒体库查看", "下载完成的文件会出现在媒体库，按发布时间倒序排列，可直接播放或分享。")
+                    }
+
+                    SectionCard(title = "", subtitle = "", icon = Icons.Outlined.ContentPaste) {
+                        GroupLabel("四种捕获方式")
+                        AboutItemRow(
+                            "分享面板",
+                            "推特里点分享 → 选 Edqiu。适合正在浏览某条推文时直接保存。"
+                        )
+                        AboutItemRow(
+                            "划词捕获",
+                            "任意 App 里选中链接 → 更多 → Edqiu。适合在聊天记录、网页正文里遇到链接。"
+                        )
+                        AboutItemRow(
+                            "应用内粘贴",
+                            "收件箱右上角粘贴钮会直接读剪贴板：单条立即捕获，多条自动批量入库并汇总去重结果。"
+                        )
+                        AboutItemRow(
+                            "跨 App 契约",
+                            "自动化工具可发 com.ed.Edqiu.action.DOWNLOAD_TWEET，携带 URL 即可入库，无需人工操作。"
+                        )
+                    }
+
+                    SectionCard(title = "", subtitle = "", icon = Icons.Outlined.Download) {
+                        GroupLabel("下载与状态")
+                        AboutItemRow("待处理", "已归档但尚未下载。可单条下载，或用右上角「下载」批量处理。")
+                        AboutItemRow("下载中", "卡片显示实时百分比与进度条，切到别的页面也不会中断。")
+                        AboutItemRow("已下载", "文件已落盘，可在媒体库播放、分享或升级画质。")
+                        AboutItemRow("失败", "网络或解析异常。自动重试最多 3 次，间隔递增；重试耗尽后不再自动尝试。")
+                        AboutItemRow("已删除", "原推文已 404 / 被删除，属于终态，不计入可下载条目。")
+                        GroupLabel("媒体库")
+                        AboutItemRow("筛选与搜索", "顶部三张统计卡（全部 / 视频 / 图片）兼作筛选器，搜索支持标题、作者与文案。")
+                        AboutItemRow("分组浏览", "可按作者 + 发布日分组，组头随滚动吸顶。")
+                        AboutItemRow("画质升级", "头部「升级」会补下更清晰的版本；HLS 源（m3u8）自动优选高码率。")
+                    }
+
+                    SectionCard(title = "", subtitle = "", icon = Icons.Outlined.NotificationsActive) {
+                        GroupLabel("作者中心与订阅")
+                        AboutItemRow("作者中心", "按作者归档浏览往期作品，在作者页可直接订阅。")
+                        AboutItemRow("作品订阅", "订阅后后台定期检测作者主页，新作品只入库不自动下载，省流量也避免囤积。")
+                        AboutItemRow("订阅消息", "订阅页的「订阅消息」列出每轮检测结果，点按即可下载其中想看的作品。")
+                        AboutItemRow("下载去重", "订阅作品下载前会与媒体库比对，已在库的直接跳过并提示，不会重复占空间。")
+                    }
+
+                    SectionCard(title = "", subtitle = "", icon = Icons.Outlined.PlayCircle) {
+                        GroupLabel("播放器")
+                        AboutItemRow("竖滑流", "上滑看下一条，下滑回上一条，和推特的信息流手感一致。")
+                        AboutItemRow("缩放手势", "竖屏与方形视频默认完整适配，横屏视频默认铺满，双击可在适配 / 铺满间切换。")
+                        AboutItemRow("全屏", "横屏全屏播放，返回手势从右缘拖动即可跟手退出。")
+                    }
+
+                    SectionCard(title = "", subtitle = "", icon = Icons.Outlined.CloudSync) {
+                        GroupLabel("数据与备份")
+                        AboutItemRow("网盘同步", "在「网络与同步 → 网盘同步」配置 WebDAV，把下载的媒体同步到私有云盘。")
+                        AboutItemRow("备份导出", "「存储与备份 → 备份与恢复」可导出收件箱与回收站记录为备份文件，用于换机迁移。")
+                        AboutItemRow("回收站", "删除的条目保留 30 天，期间可随时恢复；到期后自动清理。")
+                    }
+
+                    SectionCard(title = "", subtitle = "", icon = Icons.Outlined.HelpOutline) {
+                        GroupLabel("常见问题")
+                        AboutFaqRow(
+                            "下载一直失败？",
+                            "先在「网络与认证」检查代理是否连通、Cookie 是否过期；失败条目会自动重试 3 次，仍失败通常是原推文受限。"
+                        )
+                        AboutFaqRow(
+                            "分享面板里找不到 Edqiu？",
+                            "系统分享面板需要先展开「更多」或「其他应用」，把 Edqiu 拖到常用位置。"
+                        )
+                        AboutFaqRow(
+                            "为什么订阅的新作品不在收件箱？",
+                            "订阅作品与手动保存是两条独立通道：订阅作品只进「作品订阅」页，避免污染收件箱。"
+                        )
+                        AboutFaqRow(
+                            "视频看起来有点糊？",
+                            "媒体库点「升级」补下清晰版本；若原推文只有低码率源，则无法再提升。"
+                        )
+                        AboutFaqRow(
+                            "换手机怎么迁移？",
+                            "先导出备份文件，再用 WebDAV 同步媒体文件；新机安装后导入备份即可接续。"
+                        )
+                    }
+
+                    SectionCard(title = "", subtitle = "", icon = Icons.Outlined.Info) {
+                        GroupLabel("版本与声明")
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "Edqiu",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                "v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "仅供个人学习与内容整理使用。下载内容版权归原作者所有，请遵守 Twitter / X 服务条款，不要用于二次分发或商业用途。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 19.sp
+                        )
+                    }
                 }
             }
-            StatusChip(
-                label = listOf(
-                    pathLabel,
-                    if (proxyEnabled) "代理开" else "代理关",
-                    if (cookiesConfigured) "Cookie 已配" else "Cookie 未配",
-                    if (webDavEnabled) "WebDAV 开" else "WebDAV 关"
-                ).joinToString(" · "),
-                active = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+            }
         }
+    }
     }
 }
 
@@ -1268,23 +1325,28 @@ private fun SectionCard(
     icon: ImageVector,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Card(
+    // 2026-10-20 设计系统对齐：M3 Card（surfaceContainer 78% 实底）→ L1 玻璃，
+    // 与 Edqiu 设置页 SectionCard 同材质（edqiu-design-system.html 组件规范）。
+    GlassSurface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.78f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        tier = GlassTier.L1,
+        shape = RoundedCornerShape(22.dp)
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), shape = CircleShape) {
-                    Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(9.dp).size(20.dp))
+            // 2026-10-21 设置页合并：分区标题已由页面头部承担——传空标题时卡片不再
+            // 重复渲染一遍标题行（避免「网络与认证」在页头和卡片里各出现一次）
+            if (title.isNotBlank()) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), shape = CircleShape) {
+                        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(9.dp).size(20.dp))
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                Spacer(Modifier.height(4.dp))
             }
-            Spacer(Modifier.height(4.dp))
             content()
         }
     }
@@ -1356,9 +1418,9 @@ private fun WebDavConnectionStatusPanel(
     syncProgress: WebDavSyncProgress?,
     syncError: String?,
 ) {
-    Surface(
+    GlassSurface(
+        tier = GlassTier.L1,
         shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
@@ -1463,4 +1525,138 @@ private fun WebDavStatusField(label: String, value: String) {
             modifier = Modifier.weight(1f)
         )
     }
+}
+
+/* ── 分区标题映射（2026-10-21 设置页合并）：与新设置页 ui/settings/SettingsScreen 的
+   二级页头部保持同一套文案与层级，用户从「我的」任意入口进来看到的标题行一致。 ── */
+private fun legacySectionTitle(section: String?): String = when (section) {
+    DlSection.UPDATE -> "更新与工具"
+    DlSection.NETWORK -> "网络与认证"
+    DlSection.WEBDAV -> "网盘同步"
+    DlSection.ABOUT -> "关于软件"
+    else -> "设置"
+}
+
+private fun legacySectionSubtitle(section: String?): String = when (section) {
+    DlSection.UPDATE -> "yt-dlp 解析器与 App 版本更新"
+    DlSection.NETWORK -> "代理、Cookie 与第三方解析兜底"
+    DlSection.WEBDAV -> "WebDAV 连接、双向同步与自动备份"
+    DlSection.ABOUT -> "使用指南、下载流程与常见问题"
+    else -> "下载器、网络与更新"
+}
+
+
+/* ── 关于软件 · 使用指南排版组件（2026-10-21）──────────────────────────────
+   三种行共用同一套视觉语法：主色圆点/序号 + 主标题 + 说明文字，
+   与设置页 SettingRow 同源（同字号、同行距、同主色），不引入新样式。 ── */
+
+/** 编号步骤行：圆形序号 + 标题 + 说明。 */
+@Composable
+private fun AboutStepRow(index: Int, title: String, body: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "$index",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 18.sp
+            )
+        }
+    }
+}
+
+/** 要点行：主色小圆点 + 标题 + 说明（用于「状态说明」「能力列表」这类无序号条目）。 */
+@Composable
+private fun AboutItemRow(title: String, body: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.55f))
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 18.sp
+            )
+        }
+    }
+}
+
+/** FAQ 行：主色 Q 标记 + 问题，下方缩进回答。 */
+@Composable
+private fun AboutFaqRow(question: String, answer: String) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Q",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Black,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+            Text(
+                question,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        Text(
+            answer,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            lineHeight = 18.sp,
+            modifier = Modifier.padding(start = 20.dp, top = 3.dp)
+        )
+    }
+}
+
+/** 卡内分组小标题（与 ui/settings 的 GroupLabel 同规格：11sp ExtraBold 主色 + 0.06 字距）。 */
+@Composable
+private fun GroupLabel(text: String) {
+    Text(
+        text = text,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.ExtraBold,
+        color = MaterialTheme.colorScheme.primary,
+        letterSpacing = 0.06.sp,
+        modifier = Modifier.padding(top = 2.dp, bottom = 2.dp)
+    )
 }

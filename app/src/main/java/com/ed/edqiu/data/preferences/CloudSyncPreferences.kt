@@ -2,6 +2,26 @@
 
 import android.content.Context
 import android.content.SharedPreferences
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * 单条同步历史（备份中心「最近备份」卡，2026-10）。
+ *
+ * @property timestamp 完成时间（epoch ms）
+ * @property mode "full" 全量 / "incremental" 增量
+ * @property files 本轮实际变动文件数（上传 + 下载）
+ * @property bytes 本轮传输字节数
+ * @property status "success" 成功 / "failed" 失败 / "frozen_healed" 冻结自愈恢复
+ *           （上一轮进程内未正常收尾——冻结被杀/异常终止，本轮续跑成功后留痕）
+ */
+data class SyncHistoryRecord(
+    val timestamp: Long,
+    val mode: String,
+    val files: Int,
+    val bytes: Long,
+    val status: String,
+)
 
 /** 单个网盘预设的独立账号配置（每网盘一份，互不覆盖）。 */
 data class WebDavAccountConfig(
@@ -55,6 +75,15 @@ class CloudSyncPreferences(context: Context) {
         private const val KEY_SYNC_SMALL_FIRST = "sync_small_first"
         private const val KEY_LAST_SYNC = "last_sync_time"
         private const val KEY_SYNC_COUNT = "sync_file_count"
+
+        /** 同步历史 JSON 数组（备份中心「最近备份」，保留最近 [MAX_SYNC_HISTORY] 条，新→旧）。 */
+        private const val KEY_SYNC_HISTORY = "sync_history_json"
+
+        /** 同步轮运行中标记：进程被杀/冻结时残留 true → 下一轮即「冻结自愈恢复」。 */
+        private const val KEY_SYNC_IN_PROGRESS = "sync_in_progress"
+
+        /** 同步历史上限（备份中心只展示最近几条，存 20 条足够回溯）。 */
+        const val MAX_SYNC_HISTORY = 20
 
         // 旧全局配置键（2026-10 迁移源，只读不写）
         private const val LEGACY_SERVER_URL = "webdav_server_url"
@@ -116,6 +145,54 @@ class CloudSyncPreferences(context: Context) {
         get() = prefs.getInt(KEY_SYNC_COUNT, 0)
         set(value) = prefs.edit().putInt(KEY_SYNC_COUNT, value).apply()
 
+    // ================= 同步历史与运行标记（2026-10 备份中心） =================
+
+    /**
+     * 同步轮运行中标记（由 [WebDavSyncService] 统一维护）。
+     * true 表示上一轮未正常收尾（进程被杀/冻结/异常终止）——下一轮同步成功后
+     * 在备份中心记一条「冻结自愈恢复」。
+     */
+    var syncInProgress: Boolean
+        get() = prefs.getBoolean(KEY_SYNC_IN_PROGRESS, false)
+        set(value) = prefs.edit().putBoolean(KEY_SYNC_IN_PROGRESS, value).apply()
+
+    /** 同步历史（新→旧；解析失败按空处理，不拖垮备份中心）。 */
+    fun syncHistory(): List<SyncHistoryRecord> {
+        val raw = prefs.getString(KEY_SYNC_HISTORY, null) ?: return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                SyncHistoryRecord(
+                    timestamp = o.optLong("ts"),
+                    mode = o.optString("mode", "incremental"),
+                    files = o.optInt("files"),
+                    bytes = o.optLong("bytes"),
+                    status = o.optString("status", "success"),
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    /** 追加一条同步历史（置顶，保留最近 [MAX_SYNC_HISTORY] 条）。 */
+    fun addSyncHistory(record: SyncHistoryRecord) {
+        val list = syncHistory()
+        val next = (listOf(record) + list).take(MAX_SYNC_HISTORY)
+        val arr = JSONArray()
+        next.forEach { r ->
+            arr.put(
+                JSONObject().apply {
+                    put("ts", r.timestamp)
+                    put("mode", r.mode)
+                    put("files", r.files)
+                    put("bytes", r.bytes)
+                    put("status", r.status)
+                }
+            )
+        }
+        prefs.edit().putString(KEY_SYNC_HISTORY, arr.toString()).apply()
+    }
+
     // ================= 每网盘独立配置 =================
 
     /**
@@ -151,27 +228,8 @@ class CloudSyncPreferences(context: Context) {
     /** 当前选中预设的配置（同步链路统一从这里取凭证）。 */
     fun currentAccount(): WebDavAccountConfig = accountFor(providerId)
 
-    /** 当前选中预设的三元组是否齐全（可发起同步）。 */
-    fun hasWebDavConfig(): Boolean = currentAccount().isComplete
 
-    /** 清空当前选中预设的独立配置（清除登录状态）。 */
-    fun clearCurrentAccount() {
-        clearAccount(providerId)
-    }
-
-    fun clearAccount(providerId: String) {
-        val pid = providerId.ifBlank { "custom" }
-        prefs.edit()
-            .remove(CFG_PREFIX + pid + CFG_SERVER_URL)
-            .remove(CFG_PREFIX + pid + CFG_USERNAME)
-            .remove(CFG_PREFIX + pid + CFG_REMOTE_PATH)
-            .remove(CFG_PREFIX + pid + CFG_VERIFIED)
-            .remove(CFG_PREFIX + pid + CFG_VERIFIED_AT)
-            .apply()
-        secrets.writeSecret(CFG_PREFIX + pid + CFG_PASSWORD, "")
-    }
-
-    /**
+        /**
      * 旧全局配置一次性迁移（v1.9.1 及之前只有一套配置）：
      * 搬到迁移时的 [providerId] 命名空间；之后旧键只读不再使用。
      */

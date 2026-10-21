@@ -681,8 +681,4 @@ object MediaQualityUpgrader {
         com.ed.edqiu.domain.TweetIdExtractor.fromUrl(entity.url)
             ?: com.ed.edqiu.domain.TweetIdExtractor.fromFileName(File(entity.filePath).name)
 
-    @Suppress("unused")
-    private fun isPortOpenForProxy(host: String, port: Int): Boolean = runCatching {
-        java.net.Socket().use { it.connect(InetSocketAddress(host, port), 250); true }
-    }.getOrDefault(false)
 }

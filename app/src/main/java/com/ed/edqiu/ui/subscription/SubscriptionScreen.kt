@@ -1,6 +1,5 @@
 package com.ed.edqiu.ui.subscription
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -68,6 +67,7 @@ import com.ed.edqiu.ui.components.PillChip
 import com.ed.edqiu.ui.components.rememberTitleCollapseProgress
 import com.ed.edqiu.ui.components.titleCollapseAlpha
 import com.ed.edqiu.ui.components.titleCollapseSize
+import com.ed.edqiu.ui.util.pressableNoRipple
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -78,7 +78,7 @@ import java.util.Locale
  * - 订阅列表：平台徽标（X / Bluesky / Instagram）+ handle + 启停开关 + 删除 +
  *   上次检测/上次发现新作品时间 + 逐条「检测」按钮；
  * - 手动添加：handle 输入 + 平台选择（主要入口在作者中心/播放器的订阅按钮）；
- * - 「立即检测」：触发一轮全量检测，新作品自动入收件箱并走下载链；
+ * - 「立即检测」：触发一轮全量检测，新作品收录进本页订阅作品，点按后再下载；
  * - 不透明全屏页（与同步详情页同规格，不透出底部 Tab）。
  */
 @Composable
@@ -103,7 +103,7 @@ fun SubscriptionScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            // 2026-10-21 液态玻璃：去掉实底，透出 GlassBackground 色场
             .statusBarsPadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -137,7 +137,7 @@ fun SubscriptionScreen(
                         )
                         Text(
                             "后台每 25 分钟轮询订阅作者的主页（支持 X / Bluesky / Instagram），" +
-                                "发现的新作品收录到下方「订阅消息」与收件箱，由你点按后再下载。" +
+                                "发现的新作品收录到下方「订阅作品」列表，由你点按后再下载。" +
                                 "可在作者中心或播放器内一键订阅。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -312,9 +312,9 @@ private fun SubscriptionRow(
     onDetect: () -> Unit,
     onSetStartFrom: (Long?) -> Unit,
 ) {
-    Surface(
+    GlassSurface(
+        tier = GlassTier.L1,
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.55f),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
@@ -425,14 +425,17 @@ private fun HeaderRow(onBack: () -> Unit, collapse: Float) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Surface(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape),
-            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)),
+        GlassSurface(
+            tier = GlassTier.L3,
+            shape = CircleShape,
+            modifier = Modifier.size(44.dp)
         ) {
-            Box(contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pressableNoRipple { onBack() },
+                contentAlignment = Alignment.Center
+            ) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "返回",

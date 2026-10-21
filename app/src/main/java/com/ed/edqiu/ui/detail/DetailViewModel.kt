@@ -97,6 +97,9 @@ class DetailViewModel(
                 "已下载到 Edqiu 下载中心"
             SavedLinkRepository.DownloadRequestResult.AlreadyDownloaded ->
                 "该文件已经下载"
+            // 2026-10-21 去重：媒体库已有同推文文件，跳过重复下载
+            is SavedLinkRepository.DownloadRequestResult.AlreadyInLibrary ->
+                "该作品已在媒体库，跳过下载"
             SavedLinkRepository.DownloadRequestResult.Missing ->
                 "记录不存在"
             SavedLinkRepository.DownloadRequestResult.Gone ->
@@ -109,6 +112,7 @@ class DetailViewModel(
         when (result) {
             SavedLinkRepository.DownloadRequestResult.Downloaded,
             SavedLinkRepository.DownloadRequestResult.AlreadyDownloaded -> true
+            is SavedLinkRepository.DownloadRequestResult.AlreadyInLibrary -> true
             SavedLinkRepository.DownloadRequestResult.Gone,
             is SavedLinkRepository.DownloadRequestResult.Failed -> false
             SavedLinkRepository.DownloadRequestResult.Launched,

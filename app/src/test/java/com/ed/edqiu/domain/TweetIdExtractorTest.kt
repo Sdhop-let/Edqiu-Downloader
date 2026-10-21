@@ -29,6 +29,5 @@ class TweetIdExtractorTest {
             "1234567890123456789",
             TweetIdExtractor.fromFileName("author_1234567890123456789_1_video.mp4")
         )
-        assertTrue(TweetIdExtractor.isTwitterUrl("https://x.com/i/status/1234567890123456789"))
     }
 }

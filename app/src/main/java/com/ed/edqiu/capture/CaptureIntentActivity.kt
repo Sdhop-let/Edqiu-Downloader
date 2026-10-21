@@ -157,6 +157,11 @@ class CaptureIntentActivity : ComponentActivity() {
     private fun extractText(sourceIntent: Intent?): String? = when (sourceIntent?.action) {
         Intent.ACTION_SEND -> sourceIntent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
         Intent.ACTION_PROCESS_TEXT -> sourceIntent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
+        // 2026-10-21 接线恢复：跨 App 显式下载契约（DownloadIntentContract 此前全对象无调用方）。
+        // 外部 App / 自动化可用 ACTION_DOWNLOAD_TWEET + data 或 EXTRA_TWEET_URL 直接投递链接，
+        // 统一走 extractUrl 做 host/status-id 归一化（兼容旧包 extra key），再按普通捕获入库。
+        com.ed.edqiu.DownloadIntentContract.ACTION_DOWNLOAD_TWEET ->
+            com.ed.edqiu.DownloadIntentContract.extractUrl(sourceIntent)
         else -> null
     }
 }

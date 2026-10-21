@@ -32,12 +32,7 @@ open class TwitterDownloaderApp : Application() {
         initializeEngine(scanAfterInit = true)
     }
 
-    fun retryInit() {
-        initErrorMutable.value = null
-        initializeEngine(scanAfterInit = false)
-    }
-
-    private fun initializeEngine(scanAfterInit: Boolean) {
+        private fun initializeEngine(scanAfterInit: Boolean) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 YoutubeDL.getInstance().init(this@TwitterDownloaderApp)

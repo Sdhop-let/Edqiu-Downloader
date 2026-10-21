@@ -26,15 +26,26 @@ class SavedLinkRepository(
     private val linkHistoryRepository: LinkHistoryRepository,
     private val metadataScope: CoroutineScope? = null,
     /** 传入时启用封面本地落盘（分享保存当场存预览图，v1.6.8）；null = 关闭（测试兜底）。 */
-    private val appContext: Context? = null
+    private val appContext: Context? = null,
+    /**
+     * 媒体库（download_history）DAO：下载前去重比对用（2026-10-21）。
+     * 与 saved_links 分属两个库（AppDatabase vs EdqiuDatabase），故单独注入。
+     */
+    private val libraryDao: com.ed.edqiu.data.database.DownloadHistoryDao? = null
 ) {
 
     fun observeAll(): Flow<List<SavedLink>> = dao.observeAll()
 
-    fun countPending(): Flow<Int> = dao.countByStatus(LinkStatus.PENDING)
+    /**
+     * 收件箱列表（2026-10-21 双线隔离修复）：只含用户线（分享/手动捕获）。
+     * 订阅线作品（origin=subscription）归「作品订阅」页，不再混入收件箱。
+     */
+    fun observeUserLinks(): Flow<List<SavedLink>> = dao.observeUserLinks()
 
-    /** 当前 PENDING 数量（一次性查询，自动预下载攒批判断用）。 */
-    suspend fun pendingCountNow(): Int = dao.countByStatus(LinkStatus.PENDING).first()
+    /** 上次离开（since 之后）订阅线捕获的新作品数（进软件胶囊提示用）。 */
+    suspend fun countNewSubscriptionSince(since: Long): Int = dao.countNewSubscriptionSince(since)
+
+    fun countPending(): Flow<Int> = dao.countByStatus(LinkStatus.PENDING)
 
     /** 当前 PENDING 条目的 tweetId 列表（自动预下载批量处理用）。 */
     suspend fun pendingTweetIds(): List<String> = dao.getTweetIdsByStatus(LinkStatus.PENDING)
@@ -59,6 +70,14 @@ class SavedLinkRepository(
         data object Missing : DownloadRequestResult
         /** 推文已不存在（被删/私密/未公开）——已标记 DELETED，永久失败。 */
         data object Gone : DownloadRequestResult
+
+        /**
+         * 媒体库已有同推文文件（2026-10-21 下载去重）：订阅/收件箱点下载前比对
+         * download_history——命中即回写 saved_links 为 DOWNLOADED 并跳过引擎链，
+         * 不重复下载同一条作品。
+         */
+        data class AlreadyInLibrary(val filePath: String) : DownloadRequestResult
+
         data class Failed(
             val reason: String,
             val nextRetryAt: Long?
@@ -132,6 +151,24 @@ class SavedLinkRepository(
         // 会再跑一遍三层引擎链（纯浪费），失败后还会把 DELETED 复活成 FAILED 重新进入自动重试轮询
         if (link.status == LinkStatus.DELETED) {
             return DownloadRequestResult.Gone
+        }
+
+        // 2026-10-21 下载去重（作品订阅 / 收件箱 × 媒体库）：PENDING 条目若媒体库已有同推文
+        // 文件（历史直接下载、备份恢复后 saved_links 丢状态、重复捕获），直接回写 DOWNLOADED
+        // 并跳过三层引擎链——不重复下载同一条作品。FAILED 不拦：上次可能只下到部分媒体
+        // 索引（多图推文 _1/_2/...），重试需要补齐剩余文件。
+        if (link.status == LinkStatus.PENDING) {
+            val existing = libraryDao?.getByTweetId(tweetId, tweetId)
+            if (existing != null) {
+                dao.applyScanResult(
+                    tweetId = tweetId,
+                    status = LinkStatus.DOWNLOADED,
+                    filePath = existing.filePath,
+                    downloadedAt = existing.completedAt,
+                    publishedAt = existing.publishedAt
+                )
+                return DownloadRequestResult.AlreadyInLibrary(existing.filePath)
+            }
         }
 
         if (manual && link.attemptCount >= DownloadRetryPolicy.MAX_ATTEMPTS) {
@@ -210,6 +247,8 @@ class SavedLinkRepository(
                 DownloadRequestResult.Downloaded -> launched++
                 is DownloadRequestResult.Failed -> failed++
                 DownloadRequestResult.AlreadyDownloaded,
+                // 2026-10-21 去重命中算跳过（媒体库已有文件）
+                is DownloadRequestResult.AlreadyInLibrary,
                 DownloadRequestResult.Missing,
                 DownloadRequestResult.Gone -> skipped++
             }

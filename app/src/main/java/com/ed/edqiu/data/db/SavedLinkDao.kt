@@ -15,6 +15,21 @@ interface SavedLinkDao {
     @Query("SELECT * FROM saved_links ORDER BY saved_at DESC")
     fun observeAll(): Flow<List<SavedLink>>
 
+    /**
+     * 收件箱列表（2026-10-21 双线隔离修复）：只含用户线（分享/手动捕获）——
+     * 订阅线作品（origin=subscription）归「作品订阅」页展示，不再混入收件箱。
+     * 字面量 'subscription' 与 [SavedLink.ORIGIN_SUBSCRIPTION] 对齐（Room 查询无法引用常量）。
+     */
+    @Query("SELECT * FROM saved_links WHERE origin != 'subscription' ORDER BY saved_at DESC")
+    fun observeUserLinks(): Flow<List<SavedLink>>
+
+    /**
+     * 收件箱新增订阅作品计数（2026-10-21 进软件胶囊提示）：
+     * 上次离开后订阅线捕获的新作品数（按 saved_at > since）。
+     */
+    @Query("SELECT COUNT(*) FROM saved_links WHERE origin = 'subscription' AND saved_at > :since")
+    suspend fun countNewSubscriptionSince(since: Long): Int
+
     @Query("SELECT * FROM saved_links WHERE tweetId = :tweetId LIMIT 1")
     suspend fun getByTweetId(tweetId: String): SavedLink?
 
@@ -205,6 +220,10 @@ interface SavedLinkDao {
 
     @Query("SELECT COUNT(*) FROM saved_links WHERE status = :status")
     fun countByStatus(status: LinkStatus): Flow<Int>
+
+    /** 收件箱计数（2026-10 我的页统计卡）：非 DELETED 终态的用户线链接（不含订阅线）。 */
+    @Query("SELECT COUNT(*) FROM saved_links WHERE status != 'DELETED' AND origin != 'subscription'")
+    fun observeInboxCount(): Flow<Int>
 
     /** 按状态取 tweetId 列表（自动预下载攒批用）。 */
     @Query("SELECT tweetId FROM saved_links WHERE status = :status ORDER BY saved_at DESC")

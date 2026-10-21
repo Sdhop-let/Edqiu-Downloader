@@ -5,6 +5,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +17,6 @@ import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -138,18 +138,36 @@ fun SmoothAlertDialog(
     properties: DialogProperties = DialogProperties()
 ) {
     AnimatedDialog(onDismissRequest = onDismissRequest, properties = properties) {
-        Surface(
+        // 2026-10-21 液态玻璃化：弹窗此前是 M3 Surface 实底（surfaceContainerHigh），
+        // 与全局玻璃语言断裂——用户在暗背景上看到的是一块平涂色板。改为 GlassSurface
+        // L3（最高实底档，保证正文可读）：四层白渐变 + 主色 tint + 内描边边缘光 + 顶光，
+        // 与卡片/底栏同一套材质语言。
+        // 真折射（drawBackdrop 采样 backdrop）在 Dialog 独立窗口里做不到——窗口之间
+        // 无法共享 layerBackdrop，故此处走 GlassSurface 的程序化玻璃路径。
+        GlassSurface(
             modifier = modifier
                 // 2026-10-17：大屏适配——旧实现只有 widthIn(max) 无填充比例，
                 // 内容多窄弹窗多宽，1272px 大屏上就是个迷你块。默认 86% 屏宽、
                 // 上限 560dp，短文案也有合格的存在感
                 .fillMaxWidth(DIALOG_WIDTH_FRACTION)
                 .widthIn(max = 560.dp),
-            shape = shape,
-            color = containerColor,
-            tonalElevation = tonalElevation
+            tier = GlassTier.L3,
+            shape = shape
         ) {
-            Column(Modifier.padding(horizontal = 24.dp, vertical = 22.dp)) {
+            // 可读性衬底（2026-10-21 实机回调）：纯玻璃 L3 在浅色主题下 alpha 不足，
+            // 正文（onSurfaceVariant）与透过来的卡片文字混在一起读不清。垫一层 78%
+            // 表面色——弹窗中心趋于实底保证可读，边缘的玻璃高光/内描边/主色 tint 仍保留，
+            // 观感上依旧是"一块浮起来的玻璃"而不是平涂色板。
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.78f))
+            )
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 22.dp)
+            ) {
                 icon?.let {
                     Box(
                         Modifier
@@ -236,3 +254,15 @@ fun FeedbackDialog(
         }
     )
 }
+
+
+/**
+ * 操作结果消息（2026-09-28 起由 [FeedbackDialog] 弹窗承载）。
+ *
+ * 2026-10-21：原宿主 InlineFeedbackBar.kt（卡片内嵌通知条，已无调用点、且与
+ * 「反馈一律弹窗」约定冲突）整体删除，数据类迁移到这里——弹窗是它唯一消费者。
+ */
+data class FeedbackMessage(
+    val text: String,
+    val kind: FeedbackKind = FeedbackKind.SUCCESS
+)

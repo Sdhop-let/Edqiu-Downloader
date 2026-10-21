@@ -18,10 +18,6 @@ interface SubscriptionDao {
     )
     suspend fun get(platform: String, screenName: String): SubscriptionEntity?
 
-    /** 兼容旧调用（仅推特语义）。 */
-    @Query("SELECT * FROM subscriptions WHERE screenName = :screenName LIMIT 1")
-    suspend fun getByScreenName(screenName: String): SubscriptionEntity?
-
     /** 轮询候选：enabled 且最久未检查的 ≤limit 个（lastCheckedAt 为 null 的最优先）。 */
     @Query(
         """
@@ -32,9 +28,6 @@ interface SubscriptionDao {
         """
     )
     suspend fun getEnabled(limit: Int): List<SubscriptionEntity>
-
-    @Query("SELECT COUNT(*) FROM subscriptions WHERE enabled = 1")
-    suspend fun countEnabled(): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: SubscriptionEntity)
@@ -47,6 +40,4 @@ interface SubscriptionDao {
     )
     suspend fun delete(platform: String, screenName: String)
 
-    @Query("DELETE FROM subscriptions WHERE screenName = :screenName")
-    suspend fun deleteByScreenName(screenName: String)
 }

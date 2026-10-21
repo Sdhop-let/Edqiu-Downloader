@@ -125,11 +125,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun clearAllHistory() {
-        viewModelScope.launch { repository.clearAll() }
-    }
-
-    private fun deleteLocalMediaFiles(filePath: String): Boolean {
+        private fun deleteLocalMediaFiles(filePath: String): Boolean {
         if (filePath.isBlank()) return true
         return runCatching {
             val mediaFile = File(filePath)

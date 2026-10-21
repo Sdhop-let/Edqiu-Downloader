@@ -25,8 +25,6 @@ import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.VpnLock
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -58,6 +56,8 @@ import com.ed.edqiu.data.preferences.ProxyPreferences
 import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.data.proxy.ProxyDetector
 import com.ed.edqiu.data.proxy.ProxyTester
+import com.ed.edqiu.ui.components.GlassSurface
+import com.ed.edqiu.ui.components.GlassTier
 import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -259,12 +259,12 @@ private fun WelcomeStep(isCurrent: Boolean) {
 
 @Composable
 private fun FeatureRow(title: String, description: String) {
-    Card(
+    GlassSurface(
+        tier = GlassTier.L1,
+        shape = RoundedCornerShape(16.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-        shape = RoundedCornerShape(16.dp)
+            .padding(vertical = 6.dp)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(title, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)

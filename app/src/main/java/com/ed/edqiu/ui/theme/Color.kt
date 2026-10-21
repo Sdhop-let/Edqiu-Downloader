@@ -16,5 +16,3 @@ val StatusDownloadedDark = Color(0xFF30D158) // iOS green dark
 val StatusFailedDark = Color(0xFFFF453A) // iOS red dark
 val StatusGoneDark = Color(0xFF98989D) // iOS systemGray dark
 
-val GlassHighlight = Color(0xFFFFFFFF)
-val GlassShadow = Color(0xFF0F172A)

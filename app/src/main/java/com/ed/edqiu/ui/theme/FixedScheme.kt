@@ -8,24 +8,29 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 
 /**
- * 固定 iOS 式配色体系（2026-10-10 全量重构：Monet 壁纸动态取色移除）。
+ * 固定 iOS 式配色体系（2026-10-10 全量重构：Monet 壁纸动态取色移除；
+ * 2026-10-21 强调色功能移除——全局固定单一 tint，不再可选）。
  *
  * 设计原则（iOS HIG）：
  * 1. 中性面完全固定——背景/卡片/分隔线不随任何外部因素变化，
  *    浅色 = systemBackground/systemGroupedBackground 族，深色 = 纯黑 + 石墨层级；
- * 2. 强调色（tint）只注入 primary/primaryContainer 族——按钮、开关、选中态、玻璃染色，
- *    永远不影响背景与文字层次；
+ * 2. 强调色（tint）全局固定为 iOS 绿（[FIXED_ACCENT]）——按钮、开关、选中态、玻璃染色，
+ *    永远不影响背景与文字层次（2026-10-21 起「强调色」设置项与 tint 派生参数一并移除）；
  * 3. 语义色（错误/成功/警告/状态）固定为 iOS 系统色，不随强调色与壁纸变化；
  * 4. tint 派生用固定映射规则（lerp），零色彩引擎依赖，效果可预测：
  *    - 浅色容器 = accent 混白 84%，深色容器 = accent 混黑 62%；
  *    - 深色模式下 tint 统一提亮 10%（对应 iOS dark mode tint 惯例）；
- *    - onPrimary 按亮度自动取黑/白（iOS 黄色按钮黑字的语义）。
+ *    - onPrimary 按亮度自动取黑/白（绿 #34C759 亮度 < 0.55 → 白字，iOS 绿按钮惯例）。
  */
 
-// ===== 固定强调色预设 =====
+// ===== 固定强调色（2026-10-21 定案：全局唯一，不可配置） =====
 
-/** 默认强调色：iOS 系统蓝（浅色 #007AFF；深色模式由派生规则自动提亮）。 */
-const val DEFAULT_ACCENT = 0xFF007AFF
+/**
+ * 全局固定强调色：iOS 系统绿 #34C759。
+ * 选型依据：实机长期使用该强调色（按钮/开关/选中态/玻璃 seed 描边/背景色场）观感已验证——
+ * 浅色绿底白字对比达标、玻璃边缘光透绿、与 tertiary 青（#30B0C7）构成绿青色场。
+ */
+val FIXED_ACCENT = Color(0xFF34C759)
 
 // ===== tint 派生（固定映射表，无引擎） =====
 
@@ -39,11 +44,12 @@ data class TintRoles(
 )
 
 /**
- * 从任意强调色派生 tint 角色（预设与自定义 HSV 色一视同仁）。
+ * 从固定强调色派生 tint 角色（[FIXED_ACCENT] 唯一事实来源，深浅两态各自固定）。
  * 规则见类文档；[androidx.compose.ui.graphics.lerp] 线性混合在 sRGB 空间
  * 对本用例（容器/文字级中低饱和色）足够，无需 HCT 引擎。
  */
-fun tintRoles(accent: Color, dark: Boolean): TintRoles {
+fun tintRoles(dark: Boolean): TintRoles {
+    val accent = FIXED_ACCENT
     val primary = if (dark) lerp(accent, Color.White, 0.10f) else accent
     val onPrimary = if (primary.luminance() > 0.55f) Color.Black else Color.White
     val container = if (dark) lerp(accent, Color.Black, 0.62f) else lerp(accent, Color.White, 0.84f)
@@ -59,9 +65,9 @@ fun tintRoles(accent: Color, dark: Boolean): TintRoles {
 
 // ===== 固定中性面（不随强调色变化） =====
 
-/** 浅色固定 ColorScheme：iOS systemBackground 族 + 强调色 tint 注入。 */
-fun fixedLightColorScheme(accent: Color): ColorScheme {
-    val t = tintRoles(accent, dark = false)
+/** 浅色固定 ColorScheme：iOS systemBackground 族 + 固定绿 tint 注入。 */
+fun fixedLightColorScheme(): ColorScheme {
+    val t = tintRoles(dark = false)
     return lightColorScheme(
         primary = t.primary,
         onPrimary = t.onPrimary,
@@ -106,9 +112,9 @@ fun fixedLightColorScheme(accent: Color): ColorScheme {
     )
 }
 
-/** 深色固定 ColorScheme：iOS 纯黑基底 + 石墨层级 + 强调色 tint 注入。 */
-fun fixedDarkColorScheme(accent: Color): ColorScheme {
-    val t = tintRoles(accent, dark = true)
+/** 深色固定 ColorScheme：iOS 纯黑基底 + 石墨层级 + 固定绿 tint 注入。 */
+fun fixedDarkColorScheme(): ColorScheme {
+    val t = tintRoles(dark = true)
     return darkColorScheme(
         primary = t.primary,
         onPrimary = t.onPrimary,

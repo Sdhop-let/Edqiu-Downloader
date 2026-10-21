@@ -1,9 +1,7 @@
 package com.ed.edqiu.ui.screens
 
-import com.ed.edqiu.ui.util.pressableNoRipple
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
@@ -13,7 +11,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,33 +19,33 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Backup
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.NotificationsActive
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.SmartDisplay
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -62,22 +59,40 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ed.edqiu.BuildConfig
+import com.ed.edqiu.navigation.MineNav
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.settings.XSection
-import com.ed.edqiu.navigation.MineNav
-import com.ed.edqiu.ui.screens.DlSection
+import com.ed.edqiu.ui.util.pressableNoRipple
+import java.util.Locale
 
 private enum class SubMenu { LIBRARY, AUTOMATION, NETWORK, LOOK, STORAGE, GENERAL }
 
+/**
+ * 我的（2026-10-20 定稿：新头部 + 统计卡保留，入口列表恢复 v1.9.2 旧版六领域卡）。
+ *
+ * 版式（自上而下）：
+ * - 220dp 平台色渐变头（#5E5CE6 → #007AFF → #0A2540）：68dp「秋」头像 + 小秋 + 版本行；
+ * - L1 统计卡：三列等宽 + 1px 分隔 + 等宽数字（已下载 / 占用空间 / 收件箱，全部真实计数）；
+ * - 六张领域卡（2026-10-15 IA，点标题展开子项）：作品库 / 订阅与自动化 / 网络与同步 /
+ *   外观与播放 / 存储与备份 / 通用，+ 关于本机静态行；
+ * - 本屏无 L3（二级页收敛范式）。
+ *
+ * 备份中心（2026-10 新媒体备份浮层）不走本页入口，经「网络与同步 → 网盘同步 →
+ * 同步情况详情」可达（WebDAV 测试连接通过后显示）。
+ */
 @Composable
 fun MineScreen(mineNav: MineNav) {
     var expandedSection by remember { mutableStateOf<SubMenu?>(null) }
@@ -86,244 +101,231 @@ fun MineScreen(mineNav: MineNav) {
         expandedSection = null
     }
 
-    MineMainView(
-        expandedSection = expandedSection,
-        onToggleSection = { section ->
-            expandedSection = if (expandedSection == section) null else section
-        },
-        onNavigateToTheme = { mineNav.openEdqiuSection(XSection.APPEARANCE) },
-        onDownloadCenter = mineNav.openDownloadCenter,
-        onTrash = mineNav.openTrash,
-        onAuthors = mineNav.openAuthors,
-        onNetwork = { mineNav.openDownloaderSection(DlSection.NETWORK) },
-        onWebdav = { mineNav.openDownloaderSection(DlSection.WEBDAV) },
-        onSubscription = { mineNav.openSubscription() },
-        onUpdate = { mineNav.openDownloaderSection(DlSection.UPDATE) },
-        onAbout = { mineNav.openDownloaderSection(DlSection.ABOUT) },
-        onAppearance = { mineNav.openEdqiuSection(XSection.APPEARANCE) },
-        onStorage = { mineNav.openEdqiuSection(XSection.STORAGE) },
-        onBackupRestore = { mineNav.openEdqiuSection(XSection.BACKUP) },
-        onCapture = { mineNav.openEdqiuSection(XSection.CAPTURE) },
-        onPlayback = { mineNav.openEdqiuSection(XSection.PLAYBACK) }
-    )
-}
+    val statsVm: MineStatsViewModel = viewModel()
+    val stats by statsVm.stats.collectAsStateWithLifecycle()
 
-@Composable
-private fun MineMainView(
-    expandedSection: SubMenu?,
-    onToggleSection: (SubMenu) -> Unit,
-    onNavigateToTheme: () -> Unit,
-    onDownloadCenter: () -> Unit,
-    onTrash: () -> Unit,
-    onAuthors: () -> Unit,
-    onNetwork: () -> Unit,
-    onWebdav: () -> Unit,
-    onSubscription: () -> Unit,
-    onUpdate: () -> Unit,
-    onAbout: () -> Unit,
-    onAppearance: () -> Unit,
-    onStorage: () -> Unit,
-    onBackupRestore: () -> Unit,
-    onCapture: () -> Unit,
-    onPlayback: () -> Unit
-) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .statusBarsPadding()
-            .padding(horizontal = 12.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .statusBarsPadding(),
     ) {
-        Text(
-            text = "我的",
-            style = MaterialTheme.typography.headlineMedium.copy(
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 28.sp
-            ),
-            modifier = Modifier.padding(top = 12.dp, start = 4.dp),
-            color = MaterialTheme.colorScheme.onBackground
-        )
+        // ===== 身份头部：220dp 平台色渐变（160deg）=====
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(220.dp)
+                .background(
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0.0f to Color(0xFF5E5CE6),
+                            0.6f to Color(0xFF007AFF),
+                            1.0f to Color(0xFF0A2540),
+                        )
+                    )
+                ),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 40.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(68.dp)
+                        .shadow(10.dp, CircleShape)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.linearGradient(
+                                listOf(Color(0xFFFFD36E), Color(0xFFFF375F))
+                            )
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "秋",
+                        color = Color.White,
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                }
+                Spacer(Modifier.height(9.dp))
+                Text(
+                    text = "小秋",
+                    color = Color.White,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = "Edqiu v${BuildConfig.VERSION_NAME} · 本地账户",
+                    color = Color.White.copy(alpha = 0.75f),
+                    fontSize = 10.5.sp,
+                )
+            }
+        }
 
-        ProfileCard()
+        // ===== 主体：统计卡 + 六领域卡菜单（上移 24dp 叠进渐变头底部）=====
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .offset(y = (-24).dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            StatsCard(stats)
 
-        // 2026-10-15 IA 重做：去掉「组标题套同名卡」的套娃层级——卡即分组，
-        // 六张领域卡纵向排列，全部入口重命名（卡名/子项名/描述一次到位）。
-        // 心智模型：作品库（看与管）→ 订阅与自动化（让作品自己来）→ 网络与同步（连云端）
-        // → 外观与播放（观感）→ 存储与备份（数据放哪）→ 通用（版本维护）
-        ExpandableMenuSection(
-            icon = Icons.Default.VideoLibrary,
-            title = "作品库",
-            subtitle = "浏览与管理已下载的内容",
-            isExpanded = expandedSection == SubMenu.LIBRARY,
-            onToggle = { onToggleSection(SubMenu.LIBRARY) }
-        ) {
-            SubMenuItemRow(Icons.Default.Download, "下载中心", "正在下载与已完成的作品", onDownloadCenter)
-            SubMenuDivider()
-            SubMenuItemRow(Icons.Default.Delete, "回收站", "已删除项目保留 30 天，可随时恢复", onTrash)
-            SubMenuDivider()
-            SubMenuItemRow(Icons.Default.Person, "作者中心", "按作者归档浏览与订阅", onAuthors)
-        }
-        ExpandableMenuSection(
-            icon = Icons.Default.Bolt,
-            title = "订阅与自动化",
-            subtitle = "让新作品自己找上门",
-            isExpanded = expandedSection == SubMenu.AUTOMATION,
-            onToggle = { onToggleSection(SubMenu.AUTOMATION) }
-        ) {
-            SubMenuItemRow(Icons.Default.NotificationsActive, "作品订阅", "订阅作者主页，新作品自动入库下载", onSubscription)
-            SubMenuDivider()
-            SubMenuItemRow(Icons.Default.ContentPaste, "下载规则", "失败自动重试与后台状态核对", onCapture)
-        }
-        ExpandableMenuSection(
-            icon = Icons.Default.Public,
-            title = "网络与同步",
-            subtitle = "连接方式与云端备份",
-            isExpanded = expandedSection == SubMenu.NETWORK,
-            onToggle = { onToggleSection(SubMenu.NETWORK) }
-        ) {
-            SubMenuItemRow(Icons.Default.Lock, "网络连接", "代理 / Cookie / 受限内容解析", onNetwork)
-            SubMenuDivider()
-            SubMenuItemRow(Icons.Default.Sync, "网盘同步", "WebDAV 直连私有云盘，双向同步备份", onWebdav)
-        }
-        ExpandableMenuSection(
-            icon = Icons.Default.AutoAwesome,
-            title = "外观与播放",
-            subtitle = "界面观感与播放体验",
-            isExpanded = expandedSection == SubMenu.LOOK,
-            onToggle = { onToggleSection(SubMenu.LOOK) }
-        ) {
-            SubMenuItemRow(Icons.Default.AutoAwesome, "外观质感", "主题颜色 / 玻璃与底栏 / 显示 / 触感", onAppearance)
-            SubMenuDivider()
-            SubMenuItemRow(Icons.Default.SmartDisplay, "播放体验", "双播放器 / 滑动手势 / 退场定位", onPlayback)
-        }
-        ExpandableMenuSection(
-            icon = Icons.Default.Save,
-            title = "存储与备份",
-            subtitle = "数据放在哪、怎么保",
-            isExpanded = expandedSection == SubMenu.STORAGE,
-            onToggle = { onToggleSection(SubMenu.STORAGE) }
-        ) {
-            SubMenuItemRow(Icons.Default.Save, "存储路径", "下载存储 · 监控目录 · 数据备份", onStorage)
-            SubMenuDivider()
-            SubMenuItemRow(Icons.Default.Backup, "备份与恢复", "收件箱与回收站数据导入导出", onBackupRestore)
-        }
-        ExpandableMenuSection(
-            icon = Icons.Default.Settings,
-            title = "通用",
-            subtitle = "版本更新与维护工具",
-            isExpanded = expandedSection == SubMenu.GENERAL,
-            onToggle = { onToggleSection(SubMenu.GENERAL) }
-        ) {
-            SubMenuItemRow(Icons.Default.Settings, "更新与工具", "版本更新、日志与调试工具", onUpdate)
-        }
-        StaticMenuRow(
-            icon = Icons.Default.Info,
-            title = "关于本机",
-            subtitle = "当前版本 v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
-            onClick = onAbout
-        )
+            // 心智模型：作品库（看与管）→ 订阅与自动化（让作品自己来）→ 网络与同步（连云端）
+            // → 外观与播放（观感）→ 存储与备份（数据放哪）→ 通用（版本维护）
+            ExpandableMenuSection(
+                icon = Icons.Default.VideoLibrary,
+                title = "作品库",
+                subtitle = "浏览与管理已下载的内容",
+                isExpanded = expandedSection == SubMenu.LIBRARY,
+                onToggle = { expandedSection = toggle(expandedSection, SubMenu.LIBRARY) }
+            ) {
+                SubMenuItemRow(Icons.Default.Download, "下载中心", "正在下载与已完成的作品", mineNav.openDownloadCenter)
+                SubMenuDivider()
+                SubMenuItemRow(Icons.Default.Delete, "回收站", "已删除项目保留 30 天，可随时恢复", mineNav.openTrash)
+                SubMenuDivider()
+                SubMenuItemRow(Icons.Default.Person, "作者中心", "按作者归档浏览与订阅", mineNav.openAuthors)
+            }
+            ExpandableMenuSection(
+                icon = Icons.Default.Bolt,
+                title = "订阅与自动化",
+                subtitle = "让新作品自己找上门",
+                isExpanded = expandedSection == SubMenu.AUTOMATION,
+                onToggle = { expandedSection = toggle(expandedSection, SubMenu.AUTOMATION) }
+            ) {
+                SubMenuItemRow(Icons.Default.NotificationsActive, "作品订阅", "订阅作者主页，新作品自动入库下载") { mineNav.openSubscription() }
+                SubMenuDivider()
+                SubMenuItemRow(Icons.Default.ContentPaste, "下载行为", "失败重试策略与后台状态核对") { mineNav.openEdqiuSection(XSection.CAPTURE) }
+            }
+            ExpandableMenuSection(
+                icon = Icons.Default.Public,
+                title = "网络与同步",
+                subtitle = "连接方式与云端备份",
+                isExpanded = expandedSection == SubMenu.NETWORK,
+                onToggle = { expandedSection = toggle(expandedSection, SubMenu.NETWORK) }
+            ) {
+                SubMenuItemRow(Icons.Default.Lock, "网络连接", "代理 / Cookie / 受限内容解析") { mineNav.openEdqiuSection(XSection.NETWORK) }
+                SubMenuDivider()
+                SubMenuItemRow(Icons.Default.Sync, "网盘同步", "WebDAV 直连私有云盘，双向同步备份") { mineNav.openEdqiuSection(XSection.WEBDAV) }
+            }
+            ExpandableMenuSection(
+                icon = Icons.Default.AutoAwesome,
+                title = "外观与播放",
+                subtitle = "界面观感与播放体验",
+                isExpanded = expandedSection == SubMenu.LOOK,
+                onToggle = { expandedSection = toggle(expandedSection, SubMenu.LOOK) }
+            ) {
+                SubMenuItemRow(Icons.Default.AutoAwesome, "外观质感", "主题颜色 / 玻璃与底栏 / 显示 / 触感") { mineNav.openEdqiuSection(XSection.APPEARANCE) }
+                SubMenuDivider()
+                SubMenuItemRow(Icons.Default.SmartDisplay, "播放体验", "双播放器 / 滑动手势 / 退场定位") { mineNav.openEdqiuSection(XSection.PLAYBACK) }
+            }
+            ExpandableMenuSection(
+                icon = Icons.Default.Save,
+                title = "存储与备份",
+                subtitle = "数据放在哪、怎么保",
+                isExpanded = expandedSection == SubMenu.STORAGE,
+                onToggle = { expandedSection = toggle(expandedSection, SubMenu.STORAGE) }
+            ) {
+                SubMenuItemRow(Icons.Default.Save, "存储路径", "下载存储 · 监控目录 · 数据备份") { mineNav.openEdqiuSection(XSection.STORAGE) }
+                SubMenuDivider()
+                SubMenuItemRow(Icons.Default.Backup, "备份与恢复", "收件箱与回收站数据导入导出") { mineNav.openEdqiuSection(XSection.BACKUP) }
+            }
+            ExpandableMenuSection(
+                icon = Icons.Default.Settings,
+                title = "通用",
+                subtitle = "版本更新与维护工具",
+                isExpanded = expandedSection == SubMenu.GENERAL,
+                onToggle = { expandedSection = toggle(expandedSection, SubMenu.GENERAL) }
+            ) {
+                SubMenuItemRow(Icons.Default.Settings, "更新与工具", "版本更新、日志与调试工具") { mineNav.openEdqiuSection(XSection.UPDATE) }
+            }
+            StaticMenuRow(
+                icon = Icons.Default.Info,
+                title = "关于软件",
+                subtitle = "使用指南、常见问题 · v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
+                onClick = { mineNav.openEdqiuSection(XSection.ABOUT) }
+            )
 
-        Spacer(modifier = Modifier.height(80.dp))
+            // 悬浮 Tab 栏净空
+            Spacer(modifier = Modifier.height(80.dp))
+        }
     }
 }
 
-/**
- * 顶部身份块（2026-09-30 对齐设计稿）。
- *
- * - 头像：56dp 圆角方块 + 主色渐变 + 半透明白描边；
- * - 身份行：标题 Bold + 一行「本地账户 · 数据仅存于本机」说明；
- * - 右侧：改为进入箭头「›」（版本/构建号已移入「系统与维护 · 关于本机」行副标题，
- *   顶部身份块不再堆版本信息）。
- */
+/** 展开态切换：再点一次同一张卡收起，点别的卡换展开（手风琴）。 */
+private fun toggle(current: SubMenu?, target: SubMenu): SubMenu? =
+    if (current == target) null else target
+
+/** L1 统计卡：三列等宽 + 1px 分隔线 + 等宽数字。 */
 @Composable
-private fun ProfileCard() {
+private fun StatsCard(stats: MineStatsViewModel.Stats) {
     GlassSurface(
         tier = GlassTier.L1,
-        shape = RoundedCornerShape(24.dp)
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 20.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(
-                                MaterialTheme.colorScheme.primary,
-                                MaterialTheme.colorScheme.tertiary
-                            )
-                        )
-                    )
-                    .border(1.dp, Color.White.copy(alpha = 0.30f), RoundedCornerShape(16.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "E",
-                    color = Color.White,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-            Column(
-                modifier = Modifier
-                    .padding(start = 14.dp)
-                    .weight(1f)
-            ) {
-                Text(
-                    "Edqiu 专属用户",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.2.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    "本地账户 · 数据仅存于本机",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 5.dp)
-                )
-            }
-            Icon(
-                imageVector = Icons.Default.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier.size(22.dp)
+            StatCell(
+                value = stats.downloadedCount.toString(),
+                label = "已下载",
+                modifier = Modifier.weight(1f),
+            )
+            StatDivider()
+            StatCell(
+                value = formatStorage(stats.storageBytes),
+                label = "占用空间",
+                modifier = Modifier.weight(1f),
+            )
+            StatDivider()
+            StatCell(
+                value = stats.inboxCount.toString(),
+                label = "收件箱",
+                modifier = Modifier.weight(1f),
             )
         }
     }
 }
 
-/**
- * 分组容器（2026-09-30）：小标题 + 一张玻璃卡，组内条目共享同一卡面，
- * 条目间以 GroupItemDivider 分隔——替代原先所有入口挤在同一张「设置」大卡里。
- */
 @Composable
-private fun SettingsGroup(
-    title: String,
-    content: @Composable () -> Unit
-) {
-    Column {
+private fun StatCell(value: String, label: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Text(
-            text = title,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            letterSpacing = 0.5.sp,
-            modifier = Modifier.padding(start = 14.dp, bottom = 7.dp)
+            text = value,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = MaterialTheme.colorScheme.onSurface,
         )
-        GlassSurface(
-            tier = GlassTier.L1,
-            shape = RoundedCornerShape(20.dp)
-        ) {
-            Column {
-                content()
-            }
-        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = label,
+            fontSize = 9.5.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
+}
+
+@Composable
+private fun StatDivider() {
+    Box(
+        modifier = Modifier
+            .size(width = 1.dp, height = 28.dp)
+            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    )
 }
 
 /**
@@ -558,4 +560,14 @@ private fun SubMenuDivider() {
         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.10f),
         thickness = 0.5.dp
     )
+}
+
+// ================= 语义色与格式化 =================
+
+/** 占用空间：5.2G / 312M / 128K（设计规范等宽口径，整数位无小数点）。 */
+private fun formatStorage(bytes: Long): String = when {
+    bytes >= 1L shl 30 -> String.format(Locale.US, "%.1fG", bytes / 1073741824.0)
+    bytes >= 1L shl 20 -> String.format(Locale.US, "%.0fM", bytes / 1048576.0)
+    bytes >= 1L shl 10 -> String.format(Locale.US, "%.0fK", bytes / 1024.0)
+    else -> "$bytes"
 }

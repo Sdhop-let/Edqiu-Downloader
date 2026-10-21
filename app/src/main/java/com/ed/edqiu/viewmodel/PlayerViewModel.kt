@@ -577,18 +577,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         _playerState.update { it.copy(isFullscreen = false) }
     }
 
-    fun releasePlayer() {
-        if (!playerReleased) {
-            playerReleased = true
-            exoPlayer.release()
-        }
-        // 2026-10-03 批次F：全量释放路径一并回收预览实例（≤2 实例铁律）
-        releasePreviewPlayer()
-        // 2026-10-03 批次E：播放器实例释放，首帧缓存一并归还
-        VideoFirstFrameCache.evictExcept(emptySet())
-    }
-
-    /** 停止播放但不释放 ExoPlayer（返回后再进还能播） */
+        /** 停止播放但不释放 ExoPlayer（返回后再进还能播） */
     fun stopPlayer() {
         if (!playerReleased) exoPlayer.stop()
         // 2026-10-03 批次F：离开播放器（PlayerScreen onDispose）即回收预览实例

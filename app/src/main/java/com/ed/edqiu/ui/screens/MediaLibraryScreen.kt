@@ -81,6 +81,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -107,6 +109,7 @@ import com.ed.edqiu.viewmodel.HistoryViewModel
 import com.ed.edqiu.ui.components.EdqiuTextField
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
+import com.ed.edqiu.ui.components.StickySectionHeader
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -467,7 +470,16 @@ fun MediaLibraryScreen(
             if (grouped) {
                 groups.forEach { group ->
                     val headerKey = "group_${group.author}_${group.dayLabel}"
-                    item(key = "group_header_$headerKey") { LibraryGroupHeader(group = group) }
+                    // 2026-10-20：分组节头改吸顶 + 共享组件 StickySectionHeader
+                    //（对齐 edqiu-screens-content.html 媒体库规格：82% 表面 + 头像 + 作者·日期 + 计数）
+                    stickyHeader(key = "group_header_$headerKey") {
+                        StickySectionHeader(
+                            title = "${group.author} · ${group.dayLabel}",
+                            modifier = Modifier.padding(vertical = 4.dp),
+                            avatarInitial = group.author.firstOrNull()?.toString(),
+                            trailingText = "${group.items.size} 个媒体"
+                        )
+                    }
                     items(group.items, key = { it.id }) { entity -> cardFor(entity) }
                 }
             } else {
@@ -503,10 +515,10 @@ fun MediaLibraryScreen(
                 }
                 duplicateGroupsList.forEach { group ->
                     val keep = group.maxByOrNull { it.fileSize.coerceAtLeast(0L) } ?: group.first()
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
+                    GlassSurface(
+                        tier = GlassTier.L1,
                         shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.55f)
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
@@ -547,19 +559,6 @@ fun MediaLibraryScreen(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun LibraryGroupHeader(group: LibraryGroup) {
-    Row(Modifier.padding(top = 4.dp)) {
-        Text(
-            // 2026-09-15 分组准则：作者 + 发布日（同作者同一天连续帖合成一组）
-            text = "${group.author} · ${group.dayLabel} · ${group.items.size} 个媒体",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary,
-        )
     }
 }
 
@@ -777,18 +776,23 @@ private fun LibraryHeader(
                     }
                 }
             }
-            // ── 统计筛选行：三张数据卡，兼作品类型筛选（数值大字 + 标签小字）──
+            // ── 统计筛选行（2026-10-21 重设计）：类型图标 + 等宽大数字 + 底部占比条 ──
+            // 三张数据卡兼作品类型筛选：每卡底部 2.5dp 占比条实时呈现该类型在全部作品中的
+            // 份额（video/image 各自占比，全部卡为满条基准）——筛选器与数据可视化合一；
+            // 数字 tabular-nums 防跳动，选中态沿用 primaryContainer + primary 描边语言
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                val total = allCount.coerceAtLeast(1)
                 val options = listOf(
-                    Triple(LibraryFilter.ALL, "全部作品", allCount),
-                    Triple(LibraryFilter.VIDEO, "视频", videoCount),
-                    Triple(LibraryFilter.IMAGE, "图片", imageCount)
+                    Quadruple(LibraryFilter.ALL, "全部作品", allCount, Icons.Outlined.VideoLibrary),
+                    Quadruple(LibraryFilter.VIDEO, "视频", videoCount, Icons.Outlined.PlayArrow),
+                    Quadruple(LibraryFilter.IMAGE, "图片", imageCount, Icons.Outlined.Image)
                 )
-                options.forEach { (value, label, count) ->
+                options.forEach { (value, label, count, icon) ->
                     val selected = filter == value
+                    val share = if (value == LibraryFilter.ALL) 1f else count.toFloat() / total
                     Surface(
                         modifier = Modifier
                             .weight(1f)
@@ -805,33 +809,77 @@ private fun LibraryHeader(
                             else MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
                         )
                     ) {
-                        Column(
-                            modifier = Modifier.padding(vertical = 10.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Text(
-                                text = "$count",
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Black,
-                                letterSpacing = (-0.01).sp,
-                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                            )
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                if (selected) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(4.dp)
-                                            .clip(CircleShape)
-                                            .background(MaterialTheme.colorScheme.primary)
+                        Column {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 9.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Icon(
+                                    icon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(13.dp),
+                                    tint = if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                                )
+                                Text(
+                                    text = "$count",
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Black,
+                                    letterSpacing = (-0.01).sp,
+                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    style = LocalTextStyle.current.copy(fontFeatureSettings = "tnum")
+                                )
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    if (selected) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(4.dp)
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.primary)
+                                        )
+                                    }
+                                    Text(
+                                        text = label,
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                Text(
-                                    text = label,
-                                    fontSize = 10.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                            }
+                            // 类型占比条：选中卡亮起（primary→tertiary 渐变），未选中灰阶细条
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(2.5.dp)
+                                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                            ) {
+                                if (share > 0f) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth(fraction = share)
+                                            .fillMaxHeight()
+                                            .background(
+                                                if (selected) {
+                                                    Brush.horizontalGradient(
+                                                        colors = listOf(
+                                                            MaterialTheme.colorScheme.primary,
+                                                            MaterialTheme.colorScheme.tertiary
+                                                        )
+                                                    )
+                                                } else {
+                                                    Brush.horizontalGradient(
+                                                        colors = listOf(
+                                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.28f),
+                                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.16f)
+                                                        )
+                                                    )
+                                                }
+                                            )
+                                    )
+                                }
                             }
                         }
                     }
@@ -868,25 +916,34 @@ private fun LibraryHeader(
     }
 }
 
+/** 筛选卡四元组（2026-10-21 统计卡重设计）：筛选值 + 标签 + 数量 + 类型图标。 */
+private data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+
 @Composable
 private fun LibraryHeaderIconButton(
     onClick: () -> Unit,
     contentDescription: String,
     content: @Composable () -> Unit
 ) {
-    Surface(
+    GlassSurface(
+        tier = GlassTier.L3,
+        shape = CircleShape,
         modifier = Modifier
             .size(44.dp)
             .semantics {
                 this.contentDescription = contentDescription
                 role = Role.Button
             }
-            .pressableNoRipple { onClick() },
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
+            .pressableNoRipple { onClick() }
     ) {
-        Box(contentAlignment = Alignment.Center) {
+        // 固定尺寸圆钮：内层 Box 必须 fillMaxSize 才能撑满 44dp 让图标居中——
+        // GlassSurface 的内容 Box 默认 TopStart 且不传最小约束（不同于 Material3
+        // Surface 的 propagateMinConstraints=true），裸 Box(contentAlignment=Center)
+        // 只包图标尺寸钉在左上角，会探出圆钮圆弧外（2026-10-20 实机 bug 修复）
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
             content()
         }
     }
