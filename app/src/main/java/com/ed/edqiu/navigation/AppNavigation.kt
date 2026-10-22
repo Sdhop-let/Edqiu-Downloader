@@ -260,9 +260,11 @@ fun AppNavigation(
     // ---- 液态玻璃（Backdrop 库）：内层 shell 捕获层 ----
     // shellBackdrop 只记录页面内容（NavHost）；底栏位于捕获链外，
     // 真折射采样「正下方的列表内容」。此处覆盖外层 LocalAppBackdrop 值。
-    val backdropBase = MaterialTheme.colorScheme.background
+    // 2026-10-22 壁纸舞台配套：捕获底**不再铺 backdropBase 纯色**——透明捕获让
+    // 半透明内容（卡片玻璃）以 alpha 进入纹理，底栏 drawBackdrop 输出半透明，
+    // 下层 GlassBackground 的壁纸/色场才能透过底栏玻璃可见（透字+透壁纸）。
+    // 旧纯色底会把底栏区域盖成不透明色块，壁纸永远被挡。
     val shellBackdrop = rememberLayerBackdrop {
-        drawRect(backdropBase)
         drawContent()
     }
     CompositionLocalProvider(LocalAppBackdrop provides shellBackdrop) {
@@ -313,31 +315,17 @@ fun AppNavigation(
                 modifier = Modifier
                     // 仅保留系统 inset（状态栏/导航栏），不再为 Tab 额外占位
                     .padding(paddingValues)
-                    // 液态玻璃捕获：底栏折射的采样源 = 此 NavHost 的页面内容
+                    // 液态玻璃捕获：底栏/卡片折射的采样源 = 此 NavHost 的页面内容
                     .layerBackdrop(shellBackdrop)
-                    // 底部滚动渐隐（2026-10-21 第三版）：内容滚到接近底缘时，
-                    // 最后 148dp 内 alpha 从 1 平滑降到 0，配合 Tab 栏自身的玻璃折射
-                    // 形成「内容化开」的层次。
-                    // 为什么不用 drawBackdrop 雾化带：库的绘制图层顶边自带 2px 高亮
-                    // 伪影（抗锯齿边缘，AGSL 覆盖不到），无论怎么调都会在栏上方留下
-                    // 一条横贯全屏的白线；改成纯 Compose 绘制即可完全规避，也不引入
-                    // 离屏 RenderEffect（ColorOS 白框历史坑）与额外的 backdrop 图层。
-                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                    .drawWithContent {
-                        drawContent()
-                        if (showBottomBar) {
-                            val fade = 148.dp.toPx().coerceAtMost(size.height)
-                            val start = ((size.height - fade) / size.height).coerceIn(0f, 1f)
-                            drawRect(
-                                brush = Brush.verticalGradient(
-                                    0f to Color.Transparent,
-                                    start to Color.Transparent,
-                                    1f to Color.Black
-                                ),
-                                blendMode = BlendMode.DstOut
-                            )
-                        }
-                    },
+                // 底部滚动渐隐（DstOut 擦除带）已于 2026-10-22 移除：
+                // ①它把滚入底栏前的内容 alpha 擦成 0，底栏玻璃采样到的是空区域——
+                //   「底部透字」直接被它吃掉（对标网易云播放条透字的核心反馈）；
+                // ②graphicsLayer(Offscreen) 与 layerBackdrop 同链，离屏 RenderNode 既是
+                //   捕获源又是渲染目标，item 内 drawBackdrop 采样后画回同一纹理 = GPU
+                //   feedback loop → RenderThread SIGSEGV（2026-10-22 A+ 实机事故）。
+                //   移除后结构 = 库 demo 同构（捕获链内无离屏合成层），卡片真折射重开。
+                // 内容过渡交给底栏玻璃自身的 vibrancy+blur+lens（真磨砂天然渐变），不再需要擦除带。
+                ,
                 // 转场（2026-09-30 统一动画规格；系统「减少动画」全部降级为纯淡变）：
                 // - Tab↔Tab：水平位移 + 轻微缩放（0.95↔1）+ 淡变，300ms FastOutSlowIn，
                 //   新页延迟 50ms 起步形成 ~50ms 轻微重叠；

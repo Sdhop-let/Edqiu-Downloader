@@ -214,6 +214,25 @@ fun LinkCard(
                     minLines = 1
                 )
 
+                // 失败原因行（2026-10-22 用户要求「失败告知具体内容」）：FAILED/DELETED
+                // 且有 lastError 时直接在卡片上显示引擎链失败详情（单行截断，长按进详情看全）
+                if (link.lastError != null &&
+                    (link.status == LinkStatus.FAILED || link.status == LinkStatus.DELETED)
+                ) {
+                    Text(
+                        text = "失败原因：${link.lastError}",
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        color = if (link.status == LinkStatus.FAILED) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
                 // 实时下载进度条（仅下载中显示）：4dp 细条 + 主题蓝，随百分比平滑推进
                 if (isDownloading && downloadProgress != null) {
                     val animatedProgress by animateFloatAsState(

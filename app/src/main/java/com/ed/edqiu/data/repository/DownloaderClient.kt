@@ -62,6 +62,40 @@ class DownloaderClient(private val context: Context) {
             ?: return LaunchResult.Failed("链接中没有有效的推文 ID")
         val normalizedUrl = "https://x.com/i/status/$tweetId"
 
+        // 2026-10-22「下载无反馈」修复：引擎链启动期（FXTwitter API 分析 ~2s +
+        // 熔断判定 + yt-dlp 二进制初始化 3-8s）内 Bus 无任何任务，收件箱卡片停在
+        // PENDING 完全无变化——用户体感「点了没反应/背后另起通道」。立即注册
+        // 「准备中」占位任务（0%），引擎自任务接管进度后本任务在 finally 移除；
+        // InboxDownloadProgress 对同推文多任务取 max，占位 0% 不拖低真实进度。
+        val pendingTaskId = "pending_$tweetId"
+        DownloadTaskBus.add(
+            DownloadTask(
+                id = pendingTaskId,
+                url = normalizedUrl,
+                title = "准备下载",
+                thumbnail = "",
+                uploader = "unknown",
+                formatId = "pending",
+                quality = "",
+                ext = "",
+                status = DownloadStatus.DOWNLOADING
+            )
+        )
+        try {
+            return launchEngines(rawUrl, tweetId, normalizedUrl, proxy, manual)
+        } finally {
+            DownloadTaskBus.remove(pendingTaskId)
+        }
+    }
+
+    private suspend fun launchEngines(
+        rawUrl: String,
+        tweetId: String,
+        normalizedUrl: String,
+        proxy: ProxySettings?,
+        manual: Boolean
+    ): LaunchResult {
+
         // 智能代理（2026-09-14 网络路径优化）：调用方未显式传 proxy 时，
         // 读取用户在设置里配置的代理（2026-09-15 P0-3 起支持 http / socks5 双类型）。
         val effectiveProxy = proxy ?: ProxyPreferences(context).getProxySettings().takeIf { it.enabled }

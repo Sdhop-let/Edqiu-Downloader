@@ -298,12 +298,41 @@ class SavedLinkRepository(
                     )
                 }
             } else if (link.status == LinkStatus.DOWNLOADED) {
-                dao.applyScanResult(
-                    tweetId = link.tweetId,
-                    status = LinkStatus.PENDING,
-                    filePath = null,
-                    downloadedAt = null
-                )
+                // 2026-10-22 修复「已下载被降回未下载」：降级前先查媒体库——
+                // 监控目录未配置/未覆盖实际下载目录时 scan 天然扫不到，
+                // 旧实现直接把 DOWNLOADED 降回 PENDING（文件明明在媒体库），
+                // 造成「下载完不显示完成/状态漂移/媒体库有文件收件箱却未下载」。
+                // 媒体库有该推文文件 → 保持 DOWNLOADED 并回写媒体库路径；两侧都无 → 才降级。
+                val inLibrary = libraryDao?.getByTweetId(link.tweetId, link.tweetId)
+                if (inLibrary != null) {
+                    dao.applyScanResult(
+                        tweetId = link.tweetId,
+                        status = LinkStatus.DOWNLOADED,
+                        filePath = inLibrary.filePath,
+                        downloadedAt = inLibrary.completedAt,
+                        publishedAt = inLibrary.publishedAt
+                    )
+                } else {
+                    dao.applyScanResult(
+                        tweetId = link.tweetId,
+                        status = LinkStatus.PENDING,
+                        filePath = null,
+                        downloadedAt = null
+                    )
+                }
+            } else if (link.status == LinkStatus.PENDING) {
+                // 2026-10-22：PENDING 但媒体库已有同推文文件（历史下载/备份恢复丢状态/
+                // 状态被旧版误降级）——每轮同步自动回写 DOWNLOADED，不再等用户点下载才纠正
+                val inLibrary = libraryDao?.getByTweetId(link.tweetId, link.tweetId)
+                if (inLibrary != null) {
+                    dao.applyScanResult(
+                        tweetId = link.tweetId,
+                        status = LinkStatus.DOWNLOADED,
+                        filePath = inLibrary.filePath,
+                        downloadedAt = inLibrary.completedAt,
+                        publishedAt = inLibrary.publishedAt
+                    )
+                }
             }
         }
     }

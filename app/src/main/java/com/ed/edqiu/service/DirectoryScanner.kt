@@ -31,6 +31,9 @@ object DirectoryScanner {
     suspend fun scanAndRebuildHistory(context: Context) {
         try {
             val dao = AppDatabase.getInstance(context).downloadHistoryDao()
+            // 存量重复清理（2026-10-22）：旧版 id 含 quality 造成的同 filePath 多行，
+            // 幂等删除（每次扫描执行，直到旧格式行耗尽）
+            dao.dedupeByFilePath()
             val hiddenHistoryPreferences = HiddenHistoryPreferences(context)
             val existingPaths = dao.getAllFilePaths().toHashSet()
             // 2026-09-15：旧记录（sidecar 已有发布时间但 DB 还没写入）的回填清单
@@ -213,7 +216,11 @@ object DirectoryScanner {
         var duration = readDurationFromFile(file, mediaType)
 
         return DownloadHistoryEntity(
-            id = listOfNotNull(tweetId, mediaIndex?.toString(), quality, mediaType.name).joinToString("_"),
+            // 2026-10-22 重复根治：id 去掉 quality——旧公式 tweetId_mediaIndex_quality_mediaType
+            // 在画质升级（MediaQualityUpgrader 产新文件名 quality 变化）+ 扫描竞态下，
+            // 同一文件被解析出不同 id → REPLACE 不命中 → 同 filePath 多行（DB 实证 394 行 46 组）。
+            // 新公式同推文同媒体序号稳定，REPLACE 幂等；画质语义由 quality 列 + updateMediaFile 承担。
+            id = listOfNotNull(tweetId, mediaIndex?.toString(), mediaType.name).joinToString("_"),
             url = url,
             title = title,
             thumbnail = thumbnail,

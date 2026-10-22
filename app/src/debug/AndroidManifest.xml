@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!--
+          debug-only 实验页（2026-10-22）：验证「ColorOS 离屏白框坑」真伪。
+          只进 debug 包，release 不受影响。launch：
+          adb shell am start -n com.ed.Edqiu/com.ed.edqiu.BlurTestActivity
+        -->
+        <activity
+            android:name="com.ed.edqiu.BlurTestActivity"
+            android:exported="true"
+            android:label="Blur 白框实验"
+            android:theme="@style/Theme.Edqiu" />
+    </application>
+
+</manifest>

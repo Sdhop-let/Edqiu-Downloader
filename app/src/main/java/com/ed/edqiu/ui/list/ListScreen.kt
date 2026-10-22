@@ -103,6 +103,8 @@ import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.ui.theme.statusColor
 import com.ed.edqiu.data.model.SavedLink
 import com.ed.edqiu.ui.components.EdqiuTextField
+import com.ed.edqiu.ui.components.EdgeFadeEdge
+import com.ed.edqiu.ui.components.EdgeFadeScrim
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.rememberTitleCollapseProgress
@@ -282,27 +284,12 @@ fun ListScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 InboxHeader(
-                    pendingCount = links.count { it.status == LinkStatus.PENDING },
-                    downloadedCount = links.count { it.status == LinkStatus.DOWNLOADED },
-                    failedCount = links.count {
-                        it.status == LinkStatus.FAILED || it.status == LinkStatus.DELETED
-                    },
-                    searchQuery = searchQuery,
-                    onSearchChange = vm::setSearchQuery,
-                    selectedFilter = filter,
-                    onFilterChange = { filter = it },
                     onPaste = pasteFromClipboard,
                     onToggleSelection = vm::toggleSelectionMode,
                     selectionMode = selectionMode,
                     selectedCount = selectedIds.size,
                     onSelectAll = { vm.toggleSelectAll(shown.map { it.tweetId }) },
                     allSelected = allSelected,
-                    sortExpanded = sortExpanded,
-                    onSortExpandedChange = { sortExpanded = it },
-                    onSortSelected = {
-                        vm.setSortOrder(it)
-                        sortExpanded = false
-                    },
                     batchEnabled = selectedIds.isNotEmpty(),
                     onBatchCopy = {
                         val text = links
@@ -317,6 +304,10 @@ fun ListScreen(
                     collapse = titleCollapse
                 )
 
+                // ── 方案A 软着陆（2026-10-22）：列表边缘渐隐缓冲 ──
+                // 卡片撞顶（header 交界）与撞底（滑入底栏玻璃前）不再硬切，
+                // 被两层背景色调渐变温柔接住；scrim 不参与布局、不挡点击
+                Box(modifier = Modifier.fillMaxSize()) {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
@@ -328,6 +319,32 @@ fun ListScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    // ── 方案A v2（2026-10-22）：统计卡+搜索框移入列表随内容滚走，
+                    // 筛选行 sticky 吸顶——滚动后顶上只剩「标题行+吸顶筛选」，
+                    // 内容区最大化（iOS large title 语义：大元素滚走、导航条收窄）
+                    item(key = "inbox_stats_search") {
+                        InboxListHeader(
+                            pendingCount = links.count { it.status == LinkStatus.PENDING },
+                            downloadedCount = links.count { it.status == LinkStatus.DOWNLOADED },
+                            failedCount = links.count {
+                                it.status == LinkStatus.FAILED || it.status == LinkStatus.DELETED
+                            },
+                            searchQuery = searchQuery,
+                            onSearchChange = vm::setSearchQuery,
+                            sortExpanded = sortExpanded,
+                            onSortExpandedChange = { sortExpanded = it },
+                            onSortSelected = {
+                                vm.setSortOrder(it)
+                                sortExpanded = false
+                            }
+                        )
+                    }
+                    stickyHeader(key = "inbox_filters") {
+                        InboxFilterBar(
+                            selectedFilter = filter,
+                            onFilterChange = { filter = it }
+                        )
+                    }
                     if (isFirstLoad && links.isEmpty()) {
                         items(4) {
                             SkeletonCard(modifier = Modifier)
@@ -358,6 +375,21 @@ fun ListScreen(
                             )
                         }
                     }
+                }
+
+                // 边缘渐隐：顶部 24dp 三段缓曲线（标题行底缘不再僵硬）+ 底部 24dp 沉降带
+                EdgeFadeScrim(
+                    edge = EdgeFadeEdge.Top,
+                    color = MaterialTheme.colorScheme.background,
+                    height = 24.dp,
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
+                EdgeFadeScrim(
+                    edge = EdgeFadeEdge.Bottom,
+                    color = MaterialTheme.colorScheme.background,
+                    height = 24.dp,
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
                 }
             }
 
@@ -485,22 +517,12 @@ fun ListScreen(
 
 @Composable
 private fun InboxHeader(
-    pendingCount: Int,
-    downloadedCount: Int,
-    failedCount: Int,
-    searchQuery: String,
-    onSearchChange: (String) -> Unit,
-    selectedFilter: Filter,
-    onFilterChange: (Filter) -> Unit,
     onPaste: () -> Unit,
     onToggleSelection: () -> Unit,
     selectionMode: Boolean,
     selectedCount: Int,
     allSelected: Boolean,
     onSelectAll: () -> Unit,
-    sortExpanded: Boolean,
-    onSortExpandedChange: (Boolean) -> Unit,
-    onSortSelected: (LinkSortOrder) -> Unit,
     batchEnabled: Boolean,
     onBatchCopy: () -> Unit,
     onBatchDownload: () -> Unit,
@@ -515,7 +537,9 @@ private fun InboxHeader(
             .fillMaxWidth()
             .statusBarsPadding()
             .padding(horizontal = 12.dp, vertical = 12.dp)
-            .animateContentSize()
+        // animateContentSize 已移除（2026-10-22 方案A）：它对滚动驱动的逐帧
+        // 高度折叠有 spring 缓动，造成「折叠追赶滚动」的迟滞感；浏览↔批量
+        // 切换的变形由下方 Crossfade 自己完成，不需要额外尺寸动画
     ) {
         // 顶部区域在「浏览态 ↔ 批量态」之间平滑变形：
         // 浏览态 = 标题 + 粘贴/批量入口；批量态 = 退出 + 已选计数 + 全选胶囊
@@ -586,12 +610,20 @@ private fun InboxHeader(
                                 translationY = collapse * (-2).dp.toPx()
                             }
                         )
-                        Text(
-                            text = "捕获链接、下载进度与历史记录",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.graphicsLayer { alpha = titleCollapseAlpha(collapse) }
-                        )
+                        // 方案A 空间折叠（2026-10-22）：副标题行高度随 collapse 收到 0——
+                        // 空间真正让位给列表（此前只淡出，高度不动，滚动时「顶着一堵墙」）；
+                        // 高度裁剪 + alpha 渐隐双通道，20dp 行高全程 180px 滚动行程内收完
+                        if (collapse < 0.98f) {
+                            Text(
+                                text = "捕获链接、下载进度与历史记录",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                modifier = Modifier
+                                    .height((20 * (1f - collapse)).dp)
+                                    .graphicsLayer { alpha = titleCollapseAlpha(collapse) }
+                            )
+                        }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         HeaderIconButton(onClick = onPaste, contentDescription = "粘贴链接") {
@@ -657,74 +689,91 @@ private fun InboxHeader(
                 onDelete = onBatchDelete
             )
         }
+    }
+}
 
-        Column {
-            // ── 收件箱统计卡（2026-10-21 重设计）：语义色数字 + 等宽排版 + 底部完成度条 ──
-            // 三段各带状态色圆点（待处理=橙/已完成=绿/失败=红，与 statusColor 同源），
-            // 数字 tabular-nums 防跳动；卡底 3dp 完成度条把"队列消化进度"变成可感知的内容，
-            // 玻璃透出色场时有物可衬（对齐液态玻璃教程：背景要有内容玻璃才生动）
-            val inboxTotal = (pendingCount + downloadedCount + failedCount).coerceAtLeast(1)
-            GlassSurface(
-                tier = GlassTier.L1,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 14.dp)
-            ) {
-                Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        MetricItem(
-                            label = "待处理",
-                            value = pendingCount.toString(),
-                            dotColor = statusColor(LinkStatus.PENDING),
-                            emphasize = pendingCount > 0
-                        )
-                        MetricDivider()
-                        MetricItem(
-                            label = "已完成",
-                            value = downloadedCount.toString(),
-                            dotColor = statusColor(LinkStatus.DOWNLOADED)
-                        )
-                        MetricDivider()
-                        MetricItem(
-                            label = "失败",
-                            value = failedCount.toString(),
-                            dotColor = statusColor(LinkStatus.FAILED),
-                            emphasize = failedCount > 0
-                        )
-                    }
-                    // 完成度条：已完成 / 总数，primary→tertiary 渐变（收件箱消化进度一眼可读）
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(3.dp)
-                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
-                    ) {
-                        if (downloadedCount > 0) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(fraction = downloadedCount.toFloat() / inboxTotal)
-                                    .fillMaxHeight()
-                                    .background(
-                                        Brush.horizontalGradient(
-                                            colors = listOf(
-                                                MaterialTheme.colorScheme.primary,
-                                                MaterialTheme.colorScheme.tertiary
-                                            )
+/**
+ * 列表内滚动头部（2026-10-22 方案A v2）：统计卡 + 搜索框。
+ *
+ * 从固定 InboxHeader 移入 LazyColumn——随内容一起滚走，滚动后顶上只剩
+ * 标题行 + 吸顶筛选，内容区最大化（iOS large title 语义）。
+ */
+@Composable
+private fun InboxListHeader(
+    pendingCount: Int,
+    downloadedCount: Int,
+    failedCount: Int,
+    searchQuery: String,
+    onSearchChange: (String) -> Unit,
+    sortExpanded: Boolean,
+    onSortExpandedChange: (Boolean) -> Unit,
+    onSortSelected: (LinkSortOrder) -> Unit
+) {
+    Column {
+        // ── 收件箱统计卡（2026-10-21 重设计）：语义色数字 + 等宽排版 + 底部完成度条 ──
+        val inboxTotal = (pendingCount + downloadedCount + failedCount).coerceAtLeast(1)
+        GlassSurface(
+            tier = GlassTier.L1,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp)
+        ) {
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    MetricItem(
+                        label = "待处理",
+                        value = pendingCount.toString(),
+                        dotColor = statusColor(LinkStatus.PENDING),
+                        emphasize = pendingCount > 0
+                    )
+                    MetricDivider()
+                    MetricItem(
+                        label = "已完成",
+                        value = downloadedCount.toString(),
+                        dotColor = statusColor(LinkStatus.DOWNLOADED)
+                    )
+                    MetricDivider()
+                    MetricItem(
+                        label = "失败",
+                        value = failedCount.toString(),
+                        dotColor = statusColor(LinkStatus.FAILED),
+                        emphasize = failedCount > 0
+                    )
+                }
+                // 完成度条：已完成 / 总数，primary→tertiary 渐变
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+                ) {
+                    if (downloadedCount > 0) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(fraction = downloadedCount.toFloat() / inboxTotal)
+                                .fillMaxHeight()
+                                .background(
+                                    Brush.horizontalGradient(
+                                        colors = listOf(
+                                            MaterialTheme.colorScheme.primary,
+                                            MaterialTheme.colorScheme.tertiary
                                         )
                                     )
-                            )
-                        }
+                                )
+                        )
                     }
                 }
             }
+        }
 
+        // 搜索框 + 排序入口
         GlassSurface(
             tier = GlassTier.L1,
             shape = RoundedCornerShape(16.dp),
@@ -822,34 +871,47 @@ private fun InboxHeader(
                 }
             }
         }
+    }
+}
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 9.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Filter.entries.forEach { f ->
-                val selected = f == selectedFilter
-                GlassSurface(
-                    tier = if (selected) GlassTier.L2 else GlassTier.L1,
-                    shape = RoundedCornerShape(12.dp),
+/**
+ * 吸顶筛选行（2026-10-22 方案A v2）：stickyHeader 常驻。
+ *
+ * 2026-10-22 用户反馈：去掉外部长方形玻璃包围——胶囊直接浮在壁纸上，
+ * 与列表卡片同语言（无通栏底色块）；胶囊间缝隙透出滚动内容属于「透」的自然延伸。
+ */
+@Composable
+private fun InboxFilterBar(
+    selectedFilter: Filter,
+    onFilterChange: (Filter) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Filter.entries.forEach { f ->
+            val selected = f == selectedFilter
+            GlassSurface(
+                tier = if (selected) GlassTier.L2 else GlassTier.L1,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .pressableNoRipple { onFilterChange(f) }
+            ) {
+                Text(
+                    text = f.label,
                     modifier = Modifier
-                        .weight(1f)
-                        .pressableNoRipple { onFilterChange(f) }
-                ) {
-                    Text(
-                        text = f.label,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-                                 else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                }
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }

@@ -119,11 +119,19 @@ fun LiquidTabBar(
             // 透出并折射正下方滚动内容；低版本/关闭时自动回退渐变模拟玻璃。
             // 折射带 14dp ≤ 最小圆角 25dp，符合 lens 参数约束
             // 2026-09-28：blurRadius 不再写死 8dp，默认按全局「模糊强度」滑块取值（4-20dp）
+            // 2026-10-22「底部透字」定版：底栏显式固定 8dp 轻磨砂——全局滑块 0.6 档
+            // 13.6dp 会把滚入底栏的文字糊成色块（透色不透字）；网易云级透字需要
+            // 文字轮廓可辨，8dp 是「磨砂质感 + 字可辨」的平衡点。播放器控制层等
+            // 其余表面仍跟随全局滑块不受影响。
             GlassOverlaySurface(
                 shape = RoundedCornerShape(25.dp),
                 style = OverlayGlassStyle.Light,
+                blurRadius = 8.dp,
                 lensHeight = 14.dp,
                 lensAmount = 14.dp,
+                transparencyBoost = 0.35f,
+                // 2026-10-22 用户反馈：底栏外圈不要描边——干净玻璃壳
+                showEdgeAccent = false,
                 modifier = Modifier.fillMaxSize()
             ) { }
         } else {

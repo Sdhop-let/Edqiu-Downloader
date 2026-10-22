@@ -107,9 +107,12 @@ import com.ed.edqiu.data.model.MediaType
 import com.ed.edqiu.ui.components.ThumbnailWithFallback
 import com.ed.edqiu.viewmodel.HistoryViewModel
 import com.ed.edqiu.ui.components.EdqiuTextField
+import com.ed.edqiu.ui.components.EdgeFadeEdge
+import com.ed.edqiu.ui.components.EdgeFadeScrim
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.StickySectionHeader
+import com.ed.edqiu.ui.components.rememberTitleCollapseProgress
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -392,6 +395,35 @@ fun MediaLibraryScreen(
         }
     }
 
+    // ── 方案A v4（2026-10-22）：固定标题条（主行+数据副行折叠）对称收件箱；
+    // 搜索条/视图行/筛选数据卡留在列表内随内容滚走 ──
+    val titleCollapse by rememberTitleCollapseProgress(listState)
+    Column(modifier = Modifier.fillMaxSize()) {
+        MediaLibraryFixedBar(
+            allCount = allItems.size,
+            totalBytes = totalBytes,
+            onUpgrade = {
+                // 非阻塞触发：实时进度由 Backfiller/Upgrader 状态流驱动 pill 与消息条；
+                // 2026-09-16 修复「点击零反馈」：完成摘要（含空转原因）接住显示到消息条
+                scope.launch {
+                    val summary = historyViewModel.manualUpgradeNow()
+                    syncMessage = summary
+                    delay(4000)
+                    if (syncMessage == summary) syncMessage = null
+                }
+            },
+            upgrading = upgradingNow,
+            upgradeLabel = upgradePillText,
+            searchActive = searchActive,
+            onSearchToggle = {
+                searchActive = !searchActive
+                if (!searchActive) searchQuery = ""
+            },
+            onScan = syncLibrary,
+            collapse = titleCollapse
+        )
+    // ── 方案A 软着陆（2026-10-22）：列表边缘渐隐缓冲（与收件箱同款）──
+    Box(modifier = Modifier.fillMaxSize()) {
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().background(Color.Transparent),  // 透出 GlassBackground
@@ -404,33 +436,15 @@ fun MediaLibraryScreen(
                 allCount = allItems.size,
                 videoCount = videoCount,
                 imageCount = imageCount,
-                totalBytes = totalBytes,
                 onFilterChange = { filter = it },
                 syncMessage = syncMessage,
-                onScan = syncLibrary,
                 grouped = grouped,
                 onGroupToggle = { grouped = !grouped },
                 searchActive = searchActive,
                 searchQuery = searchQuery,
-                onSearchToggle = {
-                    searchActive = !searchActive
-                    if (!searchActive) searchQuery = ""
-                },
                 onSearchQueryChange = { searchQuery = it },
                 duplicateCount = duplicateGroupsList.size,
-                onOpenDuplicates = { showDuplicates = true },
-                onUpgrade = {
-                    // 非阻塞触发：实时进度由 Backfiller/Upgrader 状态流驱动 pill 与消息条；
-                    // 2026-09-16 修复「点击零反馈」：完成摘要（含空转原因）接住显示到消息条
-                    scope.launch {
-                        val summary = historyViewModel.manualUpgradeNow()
-                        syncMessage = summary
-                        delay(4000)
-                        if (syncMessage == summary) syncMessage = null
-                    }
-                },
-                upgrading = upgradingNow,
-                upgradeLabel = upgradePillText
+                onOpenDuplicates = { showDuplicates = true }
             )
         }
 
@@ -486,6 +500,22 @@ fun MediaLibraryScreen(
                 items(items, key = { it.id }) { entity -> cardFor(entity) }
             }
         }
+    }
+
+    // 边缘渐隐：顶部 24dp 三段缓曲线 + 底部 24dp 沉降带（与收件箱同款软着陆）
+    EdgeFadeScrim(
+        edge = EdgeFadeEdge.Top,
+        color = MaterialTheme.colorScheme.background,
+        height = 24.dp,
+        modifier = Modifier.align(Alignment.TopCenter)
+    )
+    EdgeFadeScrim(
+        edge = EdgeFadeEdge.Bottom,
+        color = MaterialTheme.colorScheme.background,
+        height = 24.dp,
+        modifier = Modifier.align(Alignment.BottomCenter)
+    )
+    }
     }
 
     // ── 疑似重复作品 Sheet（2026-09-15 批次3：P1-4① pHash 查重）──
@@ -562,40 +592,146 @@ fun MediaLibraryScreen(
     }
 }
 
+/**
+ * 媒体库固定标题条（2026-10-22 方案A v4，对称收件箱）。
+ *
+ * 主行元素固定不滚：E 徽章 + 「媒体库」标题 + 数据副行（件数·占用，随
+ * collapse 折叠收 0）+ 升级 pill + 搜索 + 刷新。搜索条/视图行/筛选数据卡
+ * 仍在列表内随内容滚走——滚动后顶上只剩一条紧凑标题行。
+ */
+@Composable
+private fun MediaLibraryFixedBar(
+    allCount: Int,
+    totalBytes: Long,
+    onUpgrade: () -> Unit,
+    upgrading: Boolean,
+    upgradeLabel: String,
+    searchActive: Boolean,
+    onSearchToggle: () -> Unit,
+    onScan: () -> Unit,
+    collapse: Float
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f))
+        ) {
+            Box(
+                modifier = Modifier.size(34.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "E",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Black,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+        Spacer(Modifier.width(11.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "媒体库",
+                fontSize = 20.sp,
+                lineHeight = 25.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = (-0.02).sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            // 数据副行：随 collapse 高度收到 0（空间真正让位，对齐收件箱副标题）
+            if (collapse < 0.98f) {
+                Text(
+                    text = "$allCount 件作品 · 共 ${formatFileSize(totalBytes)}",
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .height((16 * (1f - collapse)).dp)
+                        .graphicsLayer { alpha = 1f - collapse }
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        // 升级 pill：补齐发布时间排序 + 换更高画质（手动立即一轮）
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+            modifier = Modifier.pressableNoRipple(enabled = !upgrading) { onUpgrade() }
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                if (upgrading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 1.5.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Text(
+                    text = upgradeLabel,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        // 搜索入口（2026-09-15 批次5）：文案/作者/文件名模糊搜索
+        LibraryHeaderIconButton(onClick = onSearchToggle, contentDescription = "搜索媒体库") {
+            Icon(
+                if (searchActive) Icons.Outlined.SearchOff else Icons.Outlined.Search,
+                contentDescription = null,
+                tint = if (searchActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        LibraryHeaderIconButton(onClick = onScan, contentDescription = "刷新媒体库") {
+            Icon(Icons.Outlined.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
+        }
+    }
+}
+
 @Composable
 private fun LibraryHeader(
     filter: LibraryFilter,
     allCount: Int,
     videoCount: Int,
     imageCount: Int,
-    totalBytes: Long,
     onFilterChange: (LibraryFilter) -> Unit,
     syncMessage: String?,
-    onScan: () -> Unit,
     grouped: Boolean,
     onGroupToggle: () -> Unit,
     // 2026-09-15 v2 批次5：文本搜索（文案/作者/文件名）
     searchActive: Boolean,
     searchQuery: String,
-    onSearchToggle: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     // 2026-09-15 v2 批次3：pHash 查重入口
     duplicateCount: Int,
-    onOpenDuplicates: () -> Unit,
-    // 2026-09-15 新增：手动「升级」（发布时间补齐 + 画质升级，无视节流立即一轮）
-    onUpgrade: () -> Unit,
-    upgrading: Boolean,
-    // 升级 pill 实时文本：空闲「升级」/进行中「补齐 12/300 · 网络极好」
-    upgradeLabel: String
+    onOpenDuplicates: () -> Unit
 ) {
-    // L2 玻璃头部（方案 A 单行头）：E 徽章 + 媒体库 | 占用 · 刷新，下接筛选胶囊
-    // 顶部加 statusBarsPadding 让玻璃卡从状态栏底部开始（对齐收件箱）
+    // 方案A v4（2026-10-22）：主行（徽章/标题/数据副行/升级/搜索/刷新）已上移为
+    // 固定 MediaLibraryFixedBar；本卡只留搜索条（展开时）+ 视图行 + 统计筛选数据卡，
+    // 随列表滚动（对齐收件箱「大元素滚走、导航条收窄」语义）。
+    // statusBarsPadding 移除——固定条已在状态栏下方，本卡从其下开始。
     GlassSurface(
         tier = GlassTier.L2,
         shape = RoundedCornerShape(30.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
+        modifier = Modifier.fillMaxWidth()
     ) {
         Box(
             Modifier
@@ -614,90 +750,6 @@ private fun LibraryHeader(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // ── 主行：E 徽章 + 标题/数据副行 | 升级 pill + 刷新 ──
-            // 2026-09-15 头部重设计：作品数与占用提升为标题副行（数据可视化优先），
-            // 分组切换降级为独立视图行（低频操作不占主操作区）
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f))
-                ) {
-                    Box(
-                        modifier = Modifier.size(34.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "E",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Black,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-                Spacer(Modifier.width(11.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "媒体库",
-                        fontSize = 20.sp,
-                        lineHeight = 25.sp,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = (-0.02).sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "$allCount 件作品 · 共 ${formatFileSize(totalBytes)}",
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                // 升级 pill：补齐发布时间排序 + 换更高画质（手动立即一轮）
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-                    modifier = Modifier.pressableNoRipple(enabled = !upgrading) { onUpgrade() }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        if (upgrading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(12.dp),
-                                strokeWidth = 1.5.dp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Text(
-                            text = upgradeLabel,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1
-                        )
-                    }
-                }
-                Spacer(Modifier.width(8.dp))
-                // 搜索入口（2026-09-15 批次5）：文案/作者/文件名模糊搜索
-                LibraryHeaderIconButton(onClick = onSearchToggle, contentDescription = "搜索媒体库") {
-                    Icon(
-                        if (searchActive) Icons.Outlined.SearchOff else Icons.Outlined.Search,
-                        contentDescription = null,
-                        tint = if (searchActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Spacer(Modifier.width(6.dp))
-                LibraryHeaderIconButton(onClick = onScan, contentDescription = "刷新媒体库") {
-                    Icon(Icons.Outlined.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
-                }
-            }
             // ── 搜索条（展开时出现，2026-09-15 批次5）──
             AnimatedVisibility(visible = searchActive) {
                 EdqiuTextField(

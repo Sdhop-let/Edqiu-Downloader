@@ -103,6 +103,18 @@ interface DownloadHistoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: DownloadHistoryEntity)
 
+    /**
+     * 存量重复清理（2026-10-22）：旧版 id 含 quality 的升级竞态 + **路径大小写漂移**
+     * （历史扫描入库 com.ed.edqiu 小写、当前 com.ed.Edqiu 大写——Android 大小写不敏感
+     * 同一物理目录，但字符串比较/SQL 分组大小写敏感）造成同文件多行（DB 实证 394+391）。
+     * 按 lower(filePath) 分组保留最新 rowid，幂等可重复执行（每次扫描入口调用）。
+     */
+    @Query(
+        "DELETE FROM download_history WHERE rowid NOT IN " +
+            "(SELECT MAX(rowid) FROM download_history GROUP BY lower(filePath))"
+    )
+    suspend fun dedupeByFilePath()
+
     @Delete
     suspend fun delete(entity: DownloadHistoryEntity)
 

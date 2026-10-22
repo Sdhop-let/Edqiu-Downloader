@@ -28,7 +28,8 @@ import kotlin.math.abs
  *
  * 设计规范（edqiu-design-system.html §3 / edqiu-screens-content.html §媒体库）：
  * - 材质：**不用完整玻璃配方**——82% 表面色 + 12dp 圆角，避免滚动时与卡片「抢亮」；
- *   Compose 侧禁 Modifier.blur（ColorOS 离屏白框铁律），故以高 alpha 表面近似
+ *   Compose 侧未用 Modifier.blur（v1.4.8 事故保守路线；「ColorOS 禁 blur」
+ *   归因 2026-10-22 实机实验已证伪），故以高 alpha 表面近似
  *   HTML 原型中「72% 白底 + blur(14px)」的观感意图；
  * - 结构：头像（可选）+ 标题（作者 · 发布日）+ 尾部计数（N 个媒体）；
  * - 吸顶由调用方在 LazyColumn 的 stickyHeader{} 中包裹实现，本组件只负责视觉。

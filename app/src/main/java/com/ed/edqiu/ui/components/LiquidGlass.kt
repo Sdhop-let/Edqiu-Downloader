@@ -87,14 +87,22 @@ fun GlassOverlaySurface(
     // 深度=边缘折射带宽度，边缘折射感更强
     lensHeight: Dp = 18.dp,
     lensAmount: Dp = 18.dp,
+    // 2026-10-22「底部透字」：透明度增强——在全局透明度滑块基础上额外拉高
+    // 有效 t（表面色更薄、内容更透）。底栏这类「需要看清滚过内容」的表面用，
+    // 播放器控制层等需要实面的表面保持 0（默认不受影响）
+    transparencyBoost: Float = 0f,
+    // 2026-10-22：外圈描边开关（用户反馈底栏不要描边）——false 时跳过色散
+    // 暖/冷双色轮廓描边，玻璃外壳干净无轮廓线。底栏传 false，其余表面默认 true
+    showEdgeAccent: Boolean = true,
     content: @Composable BoxScope.() -> Unit
 ) {
     val backdrop = LocalAppBackdrop.current
     val liquidGlass = ThemeEffects.LiquidGlassEnabled.current
     // 磨砂度随「磨砂强度」取值（0%=通透见底 4dp，100%=重磨砂 20dp）
     val effectiveBlur = blurRadius ?: ((4f + 16f * ThemeEffects.GlassFrostStrength.current).dp)
-    // Android 13+（RuntimeShader/AGSL 折射）；31/32 设备走回退——ColorOS 上 RenderEffect
-    // 离屏渲染有白框历史 bug（v1.4.8 教训），不冒险
+    // Android 13+（RuntimeShader/AGSL 折射）；31/32 设备走回退——RenderEffect 离屏渲染
+    // 曾因 v1.4.8 白框事故被禁（当时归因 ColorOS，2026-10-22 实机实验证伪该归因）；
+    // 回退路径保留渐变模拟是兼容与性能保守选择，非 OS 限制
     val canReal = backdrop != null && liquidGlass && Build.VERSION.SDK_INT >= 33
 
     // 2026-09-21 投影已整体移除：原 elevated 参数（12dp shadow）在玻璃透明后
@@ -107,6 +115,8 @@ fun GlassOverlaySurface(
             blurRadius = effectiveBlur,
             lensHeight = lensHeight,
             lensAmount = lensAmount,
+            transparencyBoost = transparencyBoost,
+            showEdgeAccent = showEdgeAccent,
             backdrop = backdrop!!,
             content = content
         )
@@ -129,13 +139,17 @@ private fun RealGlassOverlay(
     blurRadius: Dp,
     lensHeight: Dp,
     lensAmount: Dp,
+    transparencyBoost: Float,
+    showEdgeAccent: Boolean,
     backdrop: Backdrop,
     content: @Composable BoxScope.() -> Unit
 ) {
     val darkTheme = MaterialTheme.colorScheme.background.luminance() <= 0.5f
     // 三参数独立（2026-09-28 拆分）：透明度 t 控表面色 alpha，折射 r 控边缘位移；
     // 磨砂度已由 blurRadius 承载
-    val t = ThemeEffects.GlassTransparency.current.coerceIn(0f, 1f)
+    // 2026-10-22：t 叠加 transparencyBoost（底栏透字），封顶 1
+    val t = (ThemeEffects.GlassTransparency.current.coerceIn(0f, 1f) + transparencyBoost)
+        .coerceIn(0f, 1f)
     val r = ThemeEffects.GlassRefractionStrength.current.coerceIn(0f, 1f)
     // 玻璃外观（v1.8.0）：压暗程度 + 亮边强度；默认中性元，不改变既有观感
     val dim = ThemeEffects.effectiveDim(ThemeEffects.GlassDimAmount.current, darkTheme)
@@ -222,7 +236,8 @@ private fun RealGlassOverlay(
             Modifier
                 .matchParentSize()
                 .drawBehind {
-                    if (dispersion > 0f) {
+                    // showEdgeAccent=false（底栏）：跳过描边，外壳干净无轮廓线
+                    if (showEdgeAccent && dispersion > 0f) {
                         val outline = shape.createOutline(size, layoutDirection, this)
                         // Outline → Path 轻量转换（本文件内自实现，不依赖 GlassSurface）
                         val outlinePath = when (outline) {
