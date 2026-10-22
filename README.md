@@ -4,20 +4,22 @@
 
 Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数据只存在你自己的手机和网盘里。
 
-[**下载 v1.9.4**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
+[**下载 v1.9.5**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
 
 [![Release CI](https://img.shields.io/badge/发版-推送_tag_自动构建-2EA043)](.github/workflows/release.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-F0B429)](LICENSE)
 
-> v1.9.4（versionCode 53）· Android 7.0+（API 24）· 仅 arm64-v8a
+> v1.9.5（versionCode 54）· Android 7.0+（API 24）· 仅 arm64-v8a
 > 曾用名：XInvox / EsQp / TwitterDownloader（已合并为 Edqiu）
 
 ---
 
 ## 设计原则
 
+- **玻璃背后要有真实内容**——液态玻璃的质感来自「折射真实的东西」：背景直接取你的系统壁纸虚化铺底，底栏与卡片对真实照片做磨砂与折射，而不是对着一块均匀色板空转。
 - **手动下载是唯一权威路径**——所有自动机制只负责「发现」与「准备」，真正下载永远由你点按触发，后台行为不可能挤占或误伤手动下载。
-- **失败必须说人话**——检测与下载失败一律给出具体原因与下一步指引（未走代理 / 代理超时 / 账号被限 / Cookie 失效 / 接口轮换失败……），绝无静默失败。
+- **失败必须说人话**——下载失败的原因直接写在卡片上（哪层引擎、什么错误、下一步怎么办），弹窗与卡片双通道透出，绝无静默失败。
+- **状态会自愈**——收件箱与媒体库每轮同步互相比对：文件已在媒体库的条目自动回写「已下载」，绝不出现「媒体库有文件、收件箱却显示未下载」的脱节。
 - **数据只属于你**——无账号、无埋点、无统计 SDK，登录态硬件级加密，网络请求仅面向 X / FXTwitter / 你配置的网盘与代理。
 
 ---
@@ -28,9 +30,10 @@ Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数
 
 | | |
 |---|---|
-| **收件箱** | 分享面板 / 选中文本 / 手动粘贴捕获推文链接；整理、搜索、批量管理、回收站（删除可撤销） |
-| **下载器** | FXTwitter → yt-dlp → 第三方 API 三级引擎自动降级；HLS 高码率自动转 1080p+；断点续传；引擎熔断按发起方隔离——后台路径的失败永不误伤你的手动下载 |
-| **媒体库** | 按作者 / 日期分组；pHash 感知哈希查重；发布时间联网补拉、画质升级 |
+| **收件箱** | 分享面板 / 选中文本 / 手动粘贴捕获推文链接；整理、搜索、批量管理、回收站（删除可撤销）；顶栏为 iOS large title 语义——统计卡与搜索随内容滚走、筛选行吸顶常驻、列表边缘软着陆 |
+| **下载器** | FXTwitter → yt-dlp → 第三方 API 三级引擎自动降级；HLS 高码率自动转 1080p+；**点按即刻反馈进度**（引擎链启动期不再有空窗）；断点续传；引擎熔断按发起方隔离——后台路径的失败永不误伤你的手动下载 |
+| **失败可见** | 下载失败的引擎链详情直接写在卡片上（哪层引擎、什么原因），弹窗同步完整信息；自动重试按退避策略进行，最多 3 次 |
+| **媒体库** | 按作者 / 日期分组；pHash 感知哈希查重；发布时间联网补拉、画质升级；**状态自愈**——与收件箱每轮同步互相回写，同一作品绝不重复入库 |
 | **播放器** | 抖音式纵向滑动流，按素材类型分流；媒体框比例跟手形变、切条零黑帧；倍速 / 横屏 / seek |
 
 ### 订阅与自动化
@@ -46,6 +49,7 @@ Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数
 
 | | |
 |---|---|
+| **壁纸舞台** | 液态玻璃直接折射你的系统壁纸——壁纸 28dp 高斯虚化铺底，底栏玻璃后透出滚动中的文字与卡片（网易云式透字），卡片为半透玻璃浮在真实照片上；壁纸加载失败自动降级为色场 |
 | **通知分层** | 带原因的操作结果（批量下载汇总 / 下载失败 / 无效链接）→ 居中弹窗必须确认；瞬时状态（保存成功 / 已复制 / 下载进度 / 删除可撤销）→ 底部玻璃胶囊，悬于 Tab 栏之上不遮挡 |
 | **界面** | iOS 26/27 Liquid Glass 设计语言；固定中性配色（浅色清透白 / 深色石墨黑）+ 固定强调色（iOS 绿）；玻璃透明度 / 磨砂 / 折射 / 描边 / 亮边 / 压暗 + 光学三项（光源角度 / 亮度 / 色散）全参数可调；统一组件语言——玻璃卡片 / 填充式输入场 / 勾选圆圈 / 滑杆 / 分段胶囊 / 居中弹窗体系（86% 屏宽大弹窗） |
 
@@ -60,7 +64,7 @@ Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数
 
 ## 安装
 
-1. 从 [Releases](../../releases/latest) 下载 `Edqiu-vX.X.X.apk`（约 71 MB）；
+1. 从 [Releases](../../releases/latest) 下载 `Edqiu-vX.X.X.apk`（约 74 MB）；
 2. 允许「安装未知来源应用」（仅首次）；
 3. 覆盖安装，数据全部保留。
 
@@ -101,7 +105,7 @@ X 轮换 GraphQL queryId 后，更新此文件并推送 main 即可热更新所�
 
 | 目录 | 用途 |
 |---|---|
-| **app/** | 应用全部源码与资源：Kotlin + Jetpack Compose，`app/src/main/java/com/ed/edqiu/` 下按 `ui/`（页面与组件）、`data/`（数据库与仓库）、`data/xapi/`（X GraphQL 检测客户端）、`downloader/`（三级下载引擎）、`service/`（订阅轮询 / WebDAV 同步 / 网盘联动）、`navigation/`（双层导航）等分包 |
+| **app/** | 应用全部源码与资源：Kotlin + Jetpack Compose，`app/src/main/java/com/ed/edqiu/` 下按 `ui/`（页面与组件）、`data/`（数据库与仓库）、`data/xapi/`（X GraphQL 检测客户端）、`downloader/`（三级下载引擎）、`service/`（订阅轮询 / WebDAV 同步 / 网盘联动）、`navigation/`（双层导航）等分包；`app/src/debug/` 为实验性构建源集（当前：液态玻璃渲染判决实验页，不影响 release） |
 | **docs/** | 项目文档：版本历史（CHANGELOG）、各版本发布说明（RELEASE_NOTES-\*）、架构说明、发版自动化、WebDAV 图文指南；子目录 `design/` 为图标源文件与液态玻璃原型，`archive/` 为历史文档归档 |
 | **tools/** | 开发辅助脚本（产物归档、构建推送、UI 一致性审核等），不参与 App 构建，仅本机开发用 |
 | **gradle/wrapper/** | Gradle Wrapper 本体（`gradle-wrapper.jar` + `gradle-wrapper.properties`），保证任何人克隆后用统一版本构建 |
@@ -133,6 +137,7 @@ X 轮换 GraphQL queryId 后，更新此文件并推送 main 即可热更新所�
 Cookie、网盘凭证等登录态经 AndroidKeyStore + AES/GCM 加密存储，并已排除出系统云备份与换机迁移；
 无任何统计 / 埋点 SDK，网络请求仅面向 X / FXTwitter / 你配置的网盘与代理。
 订阅检测使用 X 网页版同源的公开接口与游客令牌，不携带任何账号信息（配置 Cookie 后才会以你的身份读取时间线）。
+壁纸舞台读取的是系统壁纸（公开 API，无需任何存储权限），仅在设备本地虚化渲染，不上传。
 
 ## 已知限制
 
@@ -147,7 +152,7 @@ Cookie、网盘凭证等登录态经 AndroidKeyStore + AES/GCM 加密存储，�
 | 文档 | 说明 |
 |---|---|
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | **全部版本历史**（v1.3.0 起） |
-| [docs/RELEASE_NOTES-1.9.4.md](docs/RELEASE_NOTES-1.9.4.md) | 当前版本完整说明 |
+| [docs/RELEASE_NOTES-1.9.5.md](docs/RELEASE_NOTES-1.9.5.md) | 当前版本完整说明 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构：技术栈、模块划分、主要链路 |
 | [docs/release-automation.md](docs/release-automation.md) | 发版流程 |
 | [docs/webdav-cloud-backup-guide/](docs/webdav-cloud-backup-guide/webdav-cloud-backup-guide.html) | WebDAV 备份图文指南 |
