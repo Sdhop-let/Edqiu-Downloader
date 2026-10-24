@@ -20,11 +20,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.animateScrollBy
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FileCopy
 import androidx.compose.material.icons.outlined.FolderOpen
@@ -63,6 +63,7 @@ import kotlinx.coroutines.withContext
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.produceState
@@ -143,6 +144,14 @@ private enum class LibraryFilter(val label: String) {
     IMAGE("图片")
 }
 
+/**
+ * 媒体库排序模式（2026-10-24 排序重构）：
+ * - DOWNLOAD（默认）：按下载完成时间倒序 + 下载日分组（今天/昨天/日期）——
+ *   用户心智=下载管理器「刚下完的在最上」；旧发布时间排序会让今天下载的老作品沉底。
+ * - PUBLISH：按发布时间倒序 + 作者·发布日分组（旧默认，保留为可切换项）。
+ */
+enum class LibrarySortMode { DOWNLOAD, PUBLISH }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MediaLibraryScreen(
@@ -169,6 +178,15 @@ fun MediaLibraryScreen(
     var syncToken by remember { mutableStateOf(0) }
     var filter by remember { mutableStateOf(LibraryFilter.ALL) }
     var grouped by remember { mutableStateOf(false) }
+    // 2026-10-24 排序重构：默认按下载时间（刚下完的在最上）；选择持久化
+    val sortPrefs = remember { context.getSharedPreferences("media_library_ui", android.content.Context.MODE_PRIVATE) }
+    var sortMode by remember {
+        mutableStateOf(if (sortPrefs.getString("sort_mode", null) == "PUBLISH") LibrarySortMode.PUBLISH else LibrarySortMode.DOWNLOAD)
+    }
+    val onSortToggle = {
+        sortMode = if (sortMode == LibrarySortMode.DOWNLOAD) LibrarySortMode.PUBLISH else LibrarySortMode.DOWNLOAD
+        sortPrefs.edit().putString("sort_mode", sortMode.name).apply()
+    }
     // 2026-09-15 v2 批次5（P1-4 文本语义搜索）：文案/作者/文件名模糊搜索
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -300,12 +318,24 @@ fun MediaLibraryScreen(
     val authorTotal: Map<String, Int> = remember(items) {
         items.groupingBy { mediaAuthorOf(it) }.eachCount()
     }
-    val groups = remember(items, grouped) { if (grouped) groupLibraryByTweet(items) else emptyList() }
+    // 平铺展示序：DOWNLOAD 模式客户端按完成时间重排（查询序=发布时间）
+    val displayItems = remember(items, sortMode) {
+        if (sortMode == LibrarySortMode.DOWNLOAD) items.sortedByDescending { it.completedAt } else items
+    }
+    // 分组：发布模式=作者·发布日（旧语义）；下载模式=下载日（今天/昨天/日期）
+    val groups = remember(displayItems, grouped, sortMode) {
+        when {
+            sortMode == LibrarySortMode.PUBLISH && grouped -> groupLibraryByTweet(displayItems)
+            sortMode == LibrarySortMode.DOWNLOAD && grouped -> groupLibraryByDownloadDay(displayItems)
+            else -> emptyList()
+        }
+    }
 
     // ── 播放返回定位（2026-09-30 v1.6.8；2026-09-30 v1.6.9 修复定位失效；2026-10-03 批次D 目标卡片屏幕居中 + 落位高亮）──
     // 卡片封面矩形表（onGloballyPositioned 持续上报，仅可见卡片在表内）
     val coverBoundsMap = remember { mutableStateMapOf<String, Rect>() }
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // 2026-10-24 卡片新方案：双列封面网格（LazyVerticalGrid）；定位/居中逻辑 API 同构移植
+    val listState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     // 2026-10-03 批次D：落位高亮确认——居中完成且矩形上报后置为目标 filePath，
     // 目标卡片主色描边脉冲 1.2s 自动淡出。
     // 2026-10-03 终验修正：高亮计时独立成 effect——定位 effect 的生命周期绑定
@@ -319,7 +349,7 @@ fun MediaLibraryScreen(
             highlightedPath = null
         }
     }
-    androidx.compose.runtime.LaunchedEffect(locateFilePath, items.size, grouped, filter) {
+    androidx.compose.runtime.LaunchedEffect(locateFilePath, items.size, grouped, filter, sortMode) {
         val target = locateFilePath ?: return@LaunchedEffect
         // LazyColumn 内部索引：头部占 index 0；分组模式还要累加各组头部
         val lazyIndex = if (grouped) {
@@ -334,7 +364,7 @@ fun MediaLibraryScreen(
             }
             found
         } else {
-            items.indexOfFirst { it.filePath == target }.takeIf { it >= 0 }?.plus(1) ?: -1
+            displayItems.indexOfFirst { it.filePath == target }.takeIf { it >= 0 }?.plus(1) ?: -1
         }
         if (lazyIndex < 0) {
             // 2026-10-03 批次D 筛选兜底：目标不在当前筛选视图时切回「全部作品」后返回，
@@ -369,7 +399,7 @@ fun MediaLibraryScreen(
         if (targetInfo != null) {
             val layout = listState.layoutInfo
             val viewportCenter = (layout.viewportStartOffset + layout.viewportEndOffset) / 2
-            val delta = (targetInfo.offset + targetInfo.size / 2) - viewportCenter
+            val delta = (targetInfo.offset.y + targetInfo.size.height / 2) - viewportCenter
             if (delta != 0) {
                 // 2026-10-05 定位失效修复：居中改瞬时（scrollBy）——旧 220ms 平滑动画
                 // 使终点矩形上报晚于播放器收缩窗口（远处卡片必现「定位无效果」）；
@@ -397,23 +427,24 @@ fun MediaLibraryScreen(
 
     // ── 方案A v4（2026-10-22）：固定标题条（主行+数据副行折叠）对称收件箱；
     // 搜索条/视图行/筛选数据卡留在列表内随内容滚走 ──
-    val titleCollapse by rememberTitleCollapseProgress(listState)
+    // Grid 折叠进度（rememberTitleCollapseProgress 只支持 LazyListState，网格内联同语义）：
+    // 首项滚出即视为完全折叠，首项内按滚动量线性收敛
+    val titleCollapse by remember {
+        androidx.compose.runtime.derivedStateOf {
+            if (listState.firstVisibleItemIndex > 0) 1f
+            else (listState.firstVisibleItemScrollOffset / 160f).coerceIn(0f, 1f)
+        }
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         MediaLibraryFixedBar(
             allCount = allItems.size,
             totalBytes = totalBytes,
-            onUpgrade = {
-                // 非阻塞触发：实时进度由 Backfiller/Upgrader 状态流驱动 pill 与消息条；
-                // 2026-09-16 修复「点击零反馈」：完成摘要（含空转原因）接住显示到消息条
-                scope.launch {
-                    val summary = historyViewModel.manualUpgradeNow()
-                    syncMessage = summary
-                    delay(4000)
-                    if (syncMessage == summary) syncMessage = null
-                }
-            },
-            upgrading = upgradingNow,
-            upgradeLabel = upgradePillText,
+            // 2026-10-24 排版重排：筛选胶囊行固定在 title 正下方（用户要求滚动时吸顶）；
+            // 升级 pill 下移到列表内操作行（标题行只留 搜索/刷新，按钮不再拥挤）
+            filter = filter,
+            videoCount = videoCount,
+            imageCount = imageCount,
+            onFilterChange = { filter = it },
             searchActive = searchActive,
             onSearchToggle = {
                 searchActive = !searchActive
@@ -424,38 +455,46 @@ fun MediaLibraryScreen(
         )
     // ── 方案A 软着陆（2026-10-22）：列表边缘渐隐缓冲（与收件箱同款）──
     Box(modifier = Modifier.fillMaxSize()) {
-    LazyColumn(
+    androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
         state = listState,
+        columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(2),
         modifier = Modifier.fillMaxSize().background(Color.Transparent),  // 透出 GlassBackground
-        contentPadding = PaddingValues(start = 14.dp, top = 14.dp, end = 14.dp, bottom = 112.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        contentPadding = PaddingValues(start = 14.dp, top = 10.dp, end = 14.dp, bottom = 112.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        item {
+        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
             LibraryHeader(
-                filter = filter,
-                allCount = allItems.size,
-                videoCount = videoCount,
-                imageCount = imageCount,
-                onFilterChange = { filter = it },
                 syncMessage = syncMessage,
                 grouped = grouped,
                 onGroupToggle = { grouped = !grouped },
+                sortMode = sortMode,
+                onSortToggle = onSortToggle,
                 searchActive = searchActive,
                 searchQuery = searchQuery,
                 onSearchQueryChange = { searchQuery = it },
                 duplicateCount = duplicateGroupsList.size,
-                onOpenDuplicates = { showDuplicates = true }
+                onOpenDuplicates = { showDuplicates = true },
+                // 2026-10-24 排版重排：升级入口从固定条标题行移入操作行（原位置让位给筛选胶囊）
+                upgrading = upgradingNow,
+                upgradeLabel = upgradePillText,
+                onUpgrade = {
+                    scope.launch {
+                        val summary = historyViewModel.manualUpgradeNow()
+                        syncMessage = summary
+                        delay(4000)
+                        if (syncMessage == summary) syncMessage = null
+                    }
+                }
             )
         }
 
         if (items.isEmpty()) {
-            item { EmptyLibraryState(onScan = syncLibrary) }
+            item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) { EmptyLibraryState(onScan = syncLibrary) }
         } else {
             val cardFor: @Composable (DownloadHistoryEntity) -> Unit = { entity ->
-                val author = mediaAuthorOf(entity)
-                MediaCard(
+                GridMediaCard(
                     entity = entity,
-                    authorIndex = if ((authorTotal[author] ?: 0) >= 2) (authorSeq[entity.id] ?: 1) else null,
                     onPlay = { coverBounds -> onNavigateToPlayer(entity.filePath, coverBounds) },
                     onCoverBounds = { coverBoundsMap[entity.filePath] = it },
                     // 容器变形退场：播放层缩小落定过程中隐藏该卡片信息区，落定后淡入
@@ -486,18 +525,27 @@ fun MediaLibraryScreen(
                     val headerKey = "group_${group.author}_${group.dayLabel}"
                     // 2026-10-20：分组节头改吸顶 + 共享组件 StickySectionHeader
                     //（对齐 edqiu-screens-content.html 媒体库规格：82% 表面 + 头像 + 作者·日期 + 计数）
-                    stickyHeader(key = "group_header_$headerKey") {
-                        StickySectionHeader(
-                            title = "${group.author} · ${group.dayLabel}",
-                            modifier = Modifier.padding(vertical = 4.dp),
-                            avatarInitial = group.author.firstOrNull()?.toString(),
-                            trailingText = "${group.items.size} 个媒体"
-                        )
+                    item(key = "group_header_$headerKey", span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+                        // 2026-10-24：下载日分组（author 空）只渲染日期标签；作者·发布日分组保持原样
+                        if (group.author.isEmpty()) {
+                            StickySectionHeader(
+                                title = group.dayLabel,
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                trailingText = "${group.items.size} 个媒体"
+                            )
+                        } else {
+                            StickySectionHeader(
+                                title = "${group.author} · ${group.dayLabel}",
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                avatarInitial = group.author.firstOrNull()?.toString(),
+                                trailingText = "${group.items.size} 个媒体"
+                            )
+                        }
                     }
                     items(group.items, key = { it.id }) { entity -> cardFor(entity) }
                 }
             } else {
-                items(items, key = { it.id }) { entity -> cardFor(entity) }
+                items(displayItems, key = { it.id }) { entity -> cardFor(entity) }
             }
         }
     }
@@ -603,21 +651,24 @@ fun MediaLibraryScreen(
 private fun MediaLibraryFixedBar(
     allCount: Int,
     totalBytes: Long,
-    onUpgrade: () -> Unit,
-    upgrading: Boolean,
-    upgradeLabel: String,
+    // 2026-10-24 排版重排：筛选胶囊进固定区（title 正下方），升级移列表操作行
+    filter: LibraryFilter,
+    videoCount: Int,
+    imageCount: Int,
+    onFilterChange: (LibraryFilter) -> Unit,
     searchActive: Boolean,
     onSearchToggle: () -> Unit,
     onScan: () -> Unit,
     collapse: Float
 ) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
             .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
         Surface(
             shape = CircleShape,
             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
@@ -662,35 +713,6 @@ private fun MediaLibraryFixedBar(
             }
         }
         Spacer(Modifier.width(8.dp))
-        // 升级 pill：补齐发布时间排序 + 换更高画质（手动立即一轮）
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-            modifier = Modifier.pressableNoRipple(enabled = !upgrading) { onUpgrade() }
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                if (upgrading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        strokeWidth = 1.5.dp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                Text(
-                    text = upgradeLabel,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1
-                )
-            }
-        }
-        Spacer(Modifier.width(8.dp))
         // 搜索入口（2026-09-15 批次5）：文案/作者/文件名模糊搜索
         LibraryHeaderIconButton(onClick = onSearchToggle, contentDescription = "搜索媒体库") {
             Icon(
@@ -704,19 +726,68 @@ private fun MediaLibraryFixedBar(
         LibraryHeaderIconButton(onClick = onScan, contentDescription = "刷新媒体库") {
             Icon(Icons.Outlined.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
         }
+        }
+
+        // ── 筛选胶囊行（2026-10-24 用户要求：固定在 title 正下方，滚动不离开）──
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val options = listOf(
+                Triple(LibraryFilter.ALL, "全部", allCount),
+                Triple(LibraryFilter.VIDEO, "视频", videoCount),
+                Triple(LibraryFilter.IMAGE, "图片", imageCount)
+            )
+            options.forEach { (value, label, count) ->
+                val selected = filter == value
+                GlassSurface(
+                    tier = if (selected) GlassTier.L2 else GlassTier.L1,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .pressableNoRipple { onFilterChange(value) }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = label,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "$count",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            style = LocalTextStyle.current.copy(fontFeatureSettings = "tnum")
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
 @Composable
 private fun LibraryHeader(
-    filter: LibraryFilter,
-    allCount: Int,
-    videoCount: Int,
-    imageCount: Int,
-    onFilterChange: (LibraryFilter) -> Unit,
     syncMessage: String?,
     grouped: Boolean,
     onGroupToggle: () -> Unit,
+    // 2026-10-24 排序重构：下载时间（默认）/发布时间可切换
+    sortMode: LibrarySortMode,
+    onSortToggle: () -> Unit,
+    // 2026-10-24 排版重排：升级入口从固定条移入本操作行
+    upgrading: Boolean,
+    upgradeLabel: String,
+    onUpgrade: () -> Unit,
     // 2026-09-15 v2 批次5：文本搜索（文案/作者/文件名）
     searchActive: Boolean,
     searchQuery: String,
@@ -725,29 +796,10 @@ private fun LibraryHeader(
     duplicateCount: Int,
     onOpenDuplicates: () -> Unit
 ) {
-    // 方案A v4（2026-10-22）：主行（徽章/标题/数据副行/升级/搜索/刷新）已上移为
-    // 固定 MediaLibraryFixedBar；本卡只留搜索条（展开时）+ 视图行 + 统计筛选数据卡，
-    // 随列表滚动（对齐收件箱「大元素滚走、导航条收窄」语义）。
-    // statusBarsPadding 移除——固定条已在状态栏下方，本卡从其下开始。
-    GlassSurface(
-        tier = GlassTier.L2,
-        shape = RoundedCornerShape(30.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Box(
-            Modifier
-                .matchParentSize()
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.08f),
-                            Color.Transparent
-                        )
-                    )
-                )
-        )
-        Column(
+    // 方案A v4（2026-10-22）→ 2026-10-24 排版精简：主行已上移固定条；本区从
+    // 「L2 大卡整块包裹」改为直接浮在壁纸上的轻量元素（搜索条/筛选胶囊/视图行）——
+    // 与收件箱筛选胶囊同语言，削减头部栈高度与视觉噪音（用户反馈排版怪）。
+    Column(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -761,14 +813,65 @@ private fun LibraryHeader(
                     singleLine = true
                 )
             }
-            // ── 视图行：排序准则说明 + 分组切换 pill（低频操作降级到次行）──
+            // ── 视图行：排序切换 + 分组切换 pill（低频操作次行）──
+            // 2026-10-24 排序重构：默认「按下载时间」（刚下完的在最上——旧发布时间排序
+            // 让今天下载的老作品沉底，用户困惑根源）；点击在 下载/发布 时间间切换并持久化
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "按发帖时间排序 · 最新在前",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f)
-                )
+                // 升级 pill（2026-10-24 自固定条标题行移入）
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                    modifier = Modifier.pressableNoRipple(enabled = !upgrading) { onUpgrade() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        if (upgrading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 1.5.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Text(
+                            text = upgradeLabel,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1
+                        )
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                    modifier = Modifier.pressableNoRipple { onSortToggle() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Sort,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = if (sortMode == LibrarySortMode.DOWNLOAD) "按下载时间" else "按发布时间",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
                 Surface(
                     shape = CircleShape,
                     color = if (grouped) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f)
@@ -829,115 +932,8 @@ private fun LibraryHeader(
                     }
                 }
             }
-            // ── 统计筛选行（2026-10-21 重设计）：类型图标 + 等宽大数字 + 底部占比条 ──
-            // 三张数据卡兼作品类型筛选：每卡底部 2.5dp 占比条实时呈现该类型在全部作品中的
-            // 份额（video/image 各自占比，全部卡为满条基准）——筛选器与数据可视化合一；
-            // 数字 tabular-nums 防跳动，选中态沿用 primaryContainer + primary 描边语言
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                val total = allCount.coerceAtLeast(1)
-                val options = listOf(
-                    Quadruple(LibraryFilter.ALL, "全部作品", allCount, Icons.Outlined.VideoLibrary),
-                    Quadruple(LibraryFilter.VIDEO, "视频", videoCount, Icons.Outlined.PlayArrow),
-                    Quadruple(LibraryFilter.IMAGE, "图片", imageCount, Icons.Outlined.Image)
-                )
-                options.forEach { (value, label, count, icon) ->
-                    val selected = filter == value
-                    val share = if (value == LibraryFilter.ALL) 1f else count.toFloat() / total
-                    Surface(
-                        modifier = Modifier
-                            .weight(1f)
-                            .pressableNoRipple { onFilterChange(value) },
-                        shape = RoundedCornerShape(16.dp),
-                        color = if (selected) {
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.55f)
-                        },
-                        border = BorderStroke(
-                            1.dp,
-                            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                            else MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
-                        )
-                    ) {
-                        Column {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 9.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Icon(
-                                    icon,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(13.dp),
-                                    tint = if (selected) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
-                                )
-                                Text(
-                                    text = "$count",
-                                    fontSize = 17.sp,
-                                    fontWeight = FontWeight.Black,
-                                    letterSpacing = (-0.01).sp,
-                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                    style = LocalTextStyle.current.copy(fontFeatureSettings = "tnum")
-                                )
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    if (selected) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(4.dp)
-                                                .clip(CircleShape)
-                                                .background(MaterialTheme.colorScheme.primary)
-                                        )
-                                    }
-                                    Text(
-                                        text = label,
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            // 类型占比条：选中卡亮起（primary→tertiary 渐变），未选中灰阶细条
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(2.5.dp)
-                                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
-                            ) {
-                                if (share > 0f) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth(fraction = share)
-                                            .fillMaxHeight()
-                                            .background(
-                                                if (selected) {
-                                                    Brush.horizontalGradient(
-                                                        colors = listOf(
-                                                            MaterialTheme.colorScheme.primary,
-                                                            MaterialTheme.colorScheme.tertiary
-                                                        )
-                                                    )
-                                                } else {
-                                                    Brush.horizontalGradient(
-                                                        colors = listOf(
-                                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.28f),
-                                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.16f)
-                                                        )
-                                                    )
-                                                }
-                                            )
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // 筛选胶囊行已上移固定区（title 正下方）
+
             // 同步状态
             syncMessage?.let { message ->
                 Surface(
@@ -966,7 +962,6 @@ private fun LibraryHeader(
                 }
             }
         }
-    }
 }
 
 /** 筛选卡四元组（2026-10-21 统计卡重设计）：筛选值 + 标签 + 数量 + 类型图标。 */
@@ -1042,80 +1037,70 @@ private fun EmptyLibraryState(onScan: () -> Unit) {
 }
 
 @Composable
-private fun MediaCard(
+private fun GridMediaCard(
     entity: DownloadHistoryEntity,
-    authorIndex: Int? = null,
     onPlay: (coverBounds: Rect?) -> Unit,
     onShare: () -> Unit,
     onDelete: (deleteLocalFile: Boolean) -> Unit,
-    // 2026-09-30 v1.6.8：封面矩形变化上报（播放返回定位的落点来源）
+    // 播放返回定位的落点来源
     onCoverBounds: ((Rect) -> Unit)? = null,
-    // 容器变形退场（2026-09-30 第二版）：true = 信息区隐藏（播放层正缩小飞向本卡片），
-    // 翻回 false 时信息区淡入（作者/文案/下载信息「慢慢显示」）
+    // 容器变形退场：true 时信息行隐藏（播放层正缩小飞向本卡片）
     infoHidden: Boolean = false,
-    // 2026-10-03 批次D：播放返回落位确认——true 时卡片主色描边脉冲（1.2s 自动淡出）
+    // 落位确认高亮（主色描边脉冲，限时 3s）
     highlighted: Boolean = false
 ) {
     var showDelete by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
-    // 共享封面过渡（2026-09-30）：封面区域在窗口坐标中的边界，点击时传给播放器，
-    // 作为「封面从卡片飞入全屏」的几何起点
+    // 共享封面过渡：封面区域窗口坐标边界，点击时作为「封面飞入全屏」几何起点
     var coverBounds by remember { mutableStateOf<Rect?>(null) }
     val frameOffset = ((entity.mediaIndex ?: 1).coerceAtLeast(1) * 1.7f).coerceAtMost(12f)
-    // 信息区淡出/淡入：隐藏要快（退场一开始就让位），显示要慢（播放层落定后
-    // 「慢慢显示作者、文案、下载等信息」——340ms + 40ms 延迟，容器变形的收尾呼吸感）
-    val infoAlpha by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (infoHidden) 0f else 1f,
-        animationSpec = androidx.compose.animation.core.tween(
-            durationMillis = if (infoHidden) 130 else 340,
-            delayMillis = if (infoHidden) 0 else 40
-        ),
-        label = "mediaCardInfoAlpha"
-    )
 
-    // 2026-10-03 批次D：落位确认脉冲——主色描边 alpha 0.9↔0.25 来回 2 次共 1.2s（4×300ms）；
-    // 仅 highlighted 时创建动画，alpha 状态在绘制阶段读取（只重绘不重组），
-    // 不改变卡片尺寸与点击行为，与信息区淡入淡出互不影响
-    val pulseAlpha = if (highlighted) {
-        rememberInfiniteTransition(label = "locatePulse").animateFloat(
-            initialValue = 0.9f,
-            targetValue = 0.25f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 300, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "locatePulseAlpha"
-        )
-    } else null
+    // 落位脉冲（限时 3s 后转静态描边——无限脉冲=持续帧源，冻结攻坚定案）
     val pulseColor = MaterialTheme.colorScheme.primary
+    val pulseAlpha = if (highlighted) {
+        var pulsing by remember { mutableStateOf(true) }
+        androidx.compose.runtime.LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(3000L)
+            pulsing = false
+        }
+        if (pulsing) {
+            rememberInfiniteTransition(label = "locatePulse").animateFloat(
+                initialValue = 0.9f,
+                targetValue = 0.25f,
+                animationSpec = infiniteRepeatable(
+                    animation = androidx.compose.animation.core.tween(durationMillis = 300, easing = LinearEasing),
+                    repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+                ),
+                label = "locatePulseAlpha"
+            ).value
+        } else 0.6f
+    } else null
 
-    // L1 玻璃媒体卡
     GlassSurface(
         tier = GlassTier.L1,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(16.dp),
         modifier = Modifier
             .fillMaxWidth()
-            // 2026-10-03 批次D：落位确认脉冲描边——drawWithContent 在内容之上叠加，
-            // 圆角与卡片一致（20dp），描边内缩半个线宽避免贴边裁切
             .drawWithContent {
                 drawContent()
-                val alpha = pulseAlpha?.value ?: return@drawWithContent
+                val alpha = pulseAlpha ?: return@drawWithContent
                 val strokeWidth = 2.5.dp.toPx()
                 drawRoundRect(
                     color = pulseColor.copy(alpha = alpha),
                     topLeft = Offset(strokeWidth / 2f, strokeWidth / 2f),
                     size = Size(size.width - strokeWidth, size.height - strokeWidth),
-                    cornerRadius = CornerRadius(20.dp.toPx()),
+                    cornerRadius = CornerRadius(16.dp.toPx()),
                     style = Stroke(width = strokeWidth)
                 )
             }
             .clickable(onClick = { onPlay(coverBounds) })
     ) {
         Column {
+            // ── 封面区：1:1 方形（双列网格），点击即播放 ──
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(16f / 9f)
+                    .aspectRatio(1f)
                     .onGloballyPositioned {
                         coverBounds = it.boundsInWindow()
                         onCoverBounds?.invoke(it.boundsInWindow())
@@ -1129,159 +1114,86 @@ private fun MediaCard(
                     frameOffsetSeconds = frameOffset,
                     preferLocalFrame = entity.thumbnail.isBlank()
                 )
-
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(Color.Black.copy(alpha = 0.08f))
-                )
-
-                Surface(
-                    color = Color.Black.copy(alpha = 0.48f),
-                    shape = RoundedCornerShape(999.dp),
-                    modifier = Modifier.align(Alignment.TopStart).padding(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                Box(modifier = Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.08f)))
+                // 播放指示（视频）：中央半透明圆钮
+                if (entity.mediaType == MediaType.VIDEO) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.38f),
+                        shape = CircleShape,
+                        modifier = Modifier.align(Alignment.Center)
                     ) {
                         Icon(
-                            if (entity.mediaType == MediaType.IMAGE) Icons.Outlined.Image else Icons.Outlined.VideoLibrary,
-                            null,
-                            tint = Color.White,
-                            modifier = Modifier.size(15.dp)
+                            Icons.Outlined.PlayArrow, null, tint = Color.White,
+                            modifier = Modifier.padding(8.dp).size(20.dp)
                         )
-                        Spacer(Modifier.size(5.dp))
-                        Text(mediaBadge(entity), color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Black)
                     }
                 }
-
-                // 视频时长胶囊（缩略图右下角，视频独有信息）
+                // 时长胶囊（视频，右下角）
                 if (entity.mediaType == MediaType.VIDEO && entity.duration > 0) {
                     Surface(
                         color = Color.Black.copy(alpha = 0.52f),
                         shape = RoundedCornerShape(999.dp),
-                        modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp)
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
                     ) {
                         Text(
                             text = formatDuration(entity.duration),
                             color = Color.White,
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                         )
                     }
                 }
-
-                Box(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                // 菜单（右上角）：分享 / 删除
+                Box(modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)) {
                     CircleIconAction(onClick = { showMenu = true }) {
-                        Icon(Icons.Outlined.MoreVert, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Outlined.MoreVert, null, tint = Color.White, modifier = Modifier.size(15.dp))
                     }
                     DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                         DropdownMenuItem(
                             text = { Text("分享") },
                             leadingIcon = { Icon(Icons.Outlined.Share, null) },
-                            onClick = {
-                                showMenu = false
-                                onShare()
-                            }
+                            onClick = { showMenu = false; onShare() }
                         )
                         DropdownMenuItem(
                             text = { Text("删除") },
                             leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = Color(0xFFE11D48)) },
-                            onClick = {
-                                showMenu = false
-                                showDelete = true
-                            }
+                            onClick = { showMenu = false; showDelete = true }
                         )
                     }
-                }
-
-                Surface(color = Color.Black.copy(alpha = 0.42f), shape = CircleShape, modifier = Modifier.align(Alignment.Center)) {
-                    Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.padding(11.dp).size(29.dp))
                 }
             }
-
-            Column(
+            // ── 信息行：作者 + 画质（容器变形退场时隐藏）──
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier
-                    .graphicsLayer { alpha = infoAlpha }
-                    .padding(start = 13.dp, top = 9.dp, end = 13.dp, bottom = 9.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                    .fillMaxWidth()
+                    .graphicsLayer { alpha = if (infoHidden) 0f else 1f }
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = mediaTitle(entity),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Black,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (authorIndex != null) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.90f),
-                            shape = RoundedCornerShape(999.dp)
-                        ) {
-                            Text(
-                                text = "#$authorIndex",
-                                color = MaterialTheme.colorScheme.primary,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Black,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
-                        }
-                    }
-                }
-                val caption = entity.title.takeIf {
-                    it.isNotBlank() && it != File(entity.filePath).nameWithoutExtension
-                }
-                if (caption != null) {
-                    Text(
-                        text = caption,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // 2026-09-15 卡片信息规划：质量·大小与时间分区展示——
-                    // 「发帖」时间 = 排序主键（主题色高亮，与下载时间明确区分）；
-                    // 无发布时间（未补齐）时显示灰色「下载」时间；已归位时下载时间
-                    // 降级为同行的辅助小字（不同天才显示，避免冗余）
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            text = mediaMeta(entity),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        val hasPublished = entity.publishedAt != null
-                        Text(
-                            text = mediaTimeText(entity),
-                            color = if (hasPublished) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = if (hasPublished) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelSmall,
-                            fontWeight = if (hasPublished) FontWeight.ExtraBold else FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), shape = RoundedCornerShape(999.dp)) {
-                        Text(
-                            "播放",
-                            color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                        )
-                    }
-                }
+                Icon(
+                    if (entity.mediaType == MediaType.IMAGE) Icons.Outlined.Image else Icons.Outlined.VideoLibrary,
+                    null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.size(13.dp)
+                )
+                Text(
+                    text = mediaAuthorOf(entity),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = entity.quality.ifBlank { "·" },
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
             }
         }
     }

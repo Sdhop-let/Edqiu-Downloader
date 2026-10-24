@@ -65,3 +65,54 @@ fun groupLibraryByAuthorDay(items: List<DownloadHistoryEntity>): List<LibraryGro
 /** 兼容旧调用点的轻量包装（MediaLibraryScreen 仍有调用；推文分组逻辑已被「作者+发布日」分组取代）。 */
 fun groupLibraryByTweet(items: List<DownloadHistoryEntity>): List<LibraryGroup> =
     groupLibraryByAuthorDay(items)
+
+/**
+ * 按下载完成日分组（2026-10-24 排序重构）：今天 / 昨天 / MM月dd日 / 跨年 yyyy年MM月dd日。
+ *
+ * 用户心智模型=「下载管理器」：刚下完的在最上。旧排序按发布时间（作者+发布日分组）
+ * 导致「今天下载的老作品沉底」（DB 实证：发布于 7 月的推文当天下载却排在 10 月发布
+ * 的作品之下）——发布时间排序保留为可切换项，下载时间成为默认。
+ * 组内按 completedAt 倒序；组间按日倒序。author 置空（分组头只渲染日期标签）。
+ */
+fun groupLibraryByDownloadDay(items: List<DownloadHistoryEntity>): List<LibraryGroup> {
+    val cal = java.util.Calendar.getInstance()
+    val todayStart = cal.apply {
+        set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
+        set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val yesterdayStart = todayStart - 24 * 60 * 60 * 1000L
+    val thisYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+
+    fun labelOf(ts: Long): String {
+        val c = java.util.Calendar.getInstance().apply { timeInMillis = ts }
+        return when {
+            ts >= todayStart -> "今天"
+            ts >= yesterdayStart -> "昨天"
+            c.get(java.util.Calendar.YEAR) == thisYear ->
+                "${c.get(java.util.Calendar.MONTH) + 1}月${c.get(java.util.Calendar.DAY_OF_MONTH)}日"
+            else -> "${c.get(java.util.Calendar.YEAR)}年${c.get(java.util.Calendar.MONTH) + 1}月${c.get(java.util.Calendar.DAY_OF_MONTH)}日"
+        }
+    }
+
+    data class DayKey(val dayStart: Long, val label: String)
+    val groups = mutableListOf<LibraryGroup>()
+    val indexByDay = mutableMapOf<DayKey, Int>()
+    items.sortedByDescending { it.completedAt }.forEach { item ->
+        val ts = item.completedAt
+        val c = java.util.Calendar.getInstance().apply { timeInMillis = ts }
+        val dayStart = c.apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val key = DayKey(dayStart, labelOf(ts))
+        val existing = indexByDay[key]
+        if (existing == null) {
+            indexByDay[key] = groups.size
+            groups += LibraryGroup(author = "", dayLabel = key.label, sortAt = dayStart, items = listOf(item))
+        } else {
+            val g = groups[existing]
+            groups[existing] = g.copy(items = g.items + item)
+        }
+    }
+    return groups.sortedByDescending { it.sortAt }
+}

@@ -23,7 +23,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -202,8 +204,11 @@ fun EdqiuApp(container: AppContainer) {
                 // 主界面常驻底层；详情/网盘备份/媒体备份为浮层。
                 // 打开：浮层自右弹性滑入（spring 0.8/300，带回弹），主界面 1/3 速左滑并淡出至 0.3；
                 // 关闭/右缘拖拽：浮层跟手右移，主界面同步滑回。
-                var overlayRoute by remember { mutableStateOf<String?>(null) }
-                var overlayTweetId by remember { mutableStateOf("") }
+                // 2026-10-24 冻结攻坚加固：浮层路由/tweetId 改 rememberSaveable——
+                // FreezeProbe 自愈 recreate() 后浮层原样恢复（此前仅丢失浮层开合状态）；
+                // closeProgress/dragging 保持瞬态（重建后浮层以打开态呈现）
+                var overlayRoute by rememberSaveable { mutableStateOf<String?>(null) }
+                var overlayTweetId by rememberSaveable { mutableStateOf("") }
                 // 0f = 浮层全屏显示（打开态）；1f = 浮层完全屏外（关闭态）
                 var closeProgress by remember { mutableFloatStateOf(1f) }
                 var overlayDragging by remember { mutableStateOf(false) }
