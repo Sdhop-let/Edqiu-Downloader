@@ -731,7 +731,10 @@ private fun InboxOverviewCard(
         )
     )
     GlassSurface(
-        tier = GlassTier.L1,
+        // 2026-10-24 对比度加固：L1→L2——统计卡是信息密集组件，文字需要稳定基座；
+        // L1 采样层在「亮壁纸+深色主题」组合下透出亮色壁纸把浅色文字洗掉（用户实报）。
+        // L2 表面更实，文字对比不依赖壁纸明暗；液态感由折射边缘与色散保留
+        tier = GlassTier.L2,
         shape = RoundedCornerShape(16.dp),
         modifier = modifier.fillMaxWidth()
     ) {
@@ -788,7 +791,7 @@ private fun InboxOverviewCard(
                         )
                         Text(
                             pendingCount.toString(),
-                            fontSize = 22.sp,
+                            fontSize = 20.sp,
                             fontWeight = FontWeight.ExtraBold,
                             letterSpacing = (-0.02).sp,
                             color = MaterialTheme.colorScheme.primary,
@@ -1047,7 +1050,7 @@ private fun MetricItem(
             )
             Text(
                 value,
-                fontSize = 22.sp,
+                fontSize = 20.sp,
                 fontWeight = FontWeight.ExtraBold,
                 letterSpacing = (-0.02).sp,
                 color = accentColor,
