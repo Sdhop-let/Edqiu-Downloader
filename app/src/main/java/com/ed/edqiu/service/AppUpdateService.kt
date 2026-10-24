@@ -183,12 +183,41 @@ object AppUpdateService {
         }
     }
 
+    /** 挂起安装标记（2026-10-24）：权限页跳转前落盘，授权返回后由 UI 恢复安装。 */
+    private const val PREFS = "app_update_pending"
+    private const val KEY_PENDING_APK = "pending_apk_path"
+
+    /** 记录待安装 APK 路径（installApk 因缺权限跳设置页时调用）。 */
+    fun markPendingInstall(context: Context, apkFile: File) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(KEY_PENDING_APK, apkFile.absolutePath).apply()
+    }
+
+    /** 消费挂起的安装：权限已授予且文件仍有效则立即拉起安装器，成功后清标记。 */
+    fun resumePendingInstallIfReady(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        if (!context.packageManager.canRequestPackageInstalls()) return false
+        val path = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_PENDING_APK, null) ?: return false
+        val file = File(path)
+        if (!file.exists() || file.length() <= 0L) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
+            return false
+        }
+        val started = installApk(context, file)
+        if (started) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
+        }
+        return started
+    }
+
     fun installApk(context: Context, apkFile: File): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
             val permissionIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
                 data = Uri.parse("package:${context.packageName}")
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
+            markPendingInstall(context, apkFile)
             context.startActivity(permissionIntent)
             return false
         }

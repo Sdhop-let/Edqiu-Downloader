@@ -100,7 +100,7 @@ object XApiClient {
     class XApiException(val error: XApiError, detail: String?) : Exception(detail ?: error.name)
 
     /** UserTweets 解析出的单条推文（ID + 原始时间串）。 */
-    data class XTimelineTweet(val id: String, val createdAtRaw: String?)
+    data class XTimelineTweet(val id: String, val createdAtRaw: String?, val authorHandle: String? = null)
 
     // ==================== 查询入口 ====================
 
@@ -292,7 +292,16 @@ object XApiClient {
                 if (tweet.optString("__typename") != "Tweet") continue
                 val id = tweet.optString("rest_id")
                 if (id.isBlank()) continue
-                out += XTimelineTweet(id = id, tweet.optJSONObject("legacy")?.optString("created_at"))
+                // 2026-10-24 订阅污染修复：提取推文作者 handle——UserTweets 时间线含转推/引推，
+                // 其作者是别人（原创者）；订阅语义=只收订阅作者本人的作品，调用方据此过滤。
+                // 结构缺失（字段裁剪的响应）时置 null，调用方保守放行不误杀
+                val authorHandle = tweet.optJSONObject("core")
+                    ?.optJSONObject("user_results")
+                    ?.optJSONObject("result")
+                    ?.optJSONObject("legacy")
+                    ?.optString("screen_name")
+                    ?.takeIf { it.isNotBlank() && it != "null" }
+                out += XTimelineTweet(id = id, tweet.optJSONObject("legacy")?.optString("created_at"), authorHandle)
             }
         }
         if (out.isEmpty()) {

@@ -238,7 +238,15 @@ object SubscriptionManager {
             )) {
                 is XTimelineDetector.Outcome.Success -> {
                     softNote = if (outcome.degraded) SOFT_DEGRADED_NOTE else null
-                    outcome.tweets.map { it.id to it.publishedAt }
+                    // 2026-10-24 订阅污染修复：UserTweets 时间线含转推/引推——其作者是别人
+                    //（原创者），旧实现无差别捕获导致「没订阅作者的作品」混入订阅作品。
+                    // 只收订阅作者本人的作品；作者字段缺失（响应被裁剪）时保守放行不误杀
+                    outcome.tweets
+                        .filter { t ->
+                            t.authorHandle == null ||
+                                t.authorHandle.equals(sub.screenName, ignoreCase = true)
+                        }
+                        .map { it.id to it.publishedAt }
                 }
                 is XTimelineDetector.Outcome.Failure -> {
                     // 2026-10-17：失败原因落库 + 透出——旧实现在这里静默返回 0，
@@ -272,6 +280,13 @@ object SubscriptionManager {
         }
 
         var taken = 0
+        // 2026-10-24 重复拉取修复：回收站已删推文不再复活——旧实现只查收件箱
+        //（getByTweetId），用户删过的订阅作品下一轮检测又被原样捞回（每日重复）。
+        // 与扫描导入的「防删除复活」同一条铁律
+        val deletedIds = runCatching {
+            com.ed.edqiu.data.db.EdqiuDatabase.getDatabase(appContext)
+                .deletedLinkHistoryDao().getDeletedTweetIds().toHashSet()
+        }.getOrDefault(emptySet())
         for ((id, _) in ids) {
             if (taken >= NEW_PER_AUTHOR) break
             val cleanId = id.takeWhile { it.isDigit() || it == '-' || it.isLetterOrDigit() }
@@ -287,6 +302,7 @@ object SubscriptionManager {
             val dedupeId = if (sub.platform == SubscriptionEntity.PLATFORM_TWITTER) cleanId.takeWhile { it.isDigit() } else cleanId
             if (dedupeId.isBlank()) continue
             if (container.savedLinkRepository.getByTweetId(dedupeId) != null) continue
+            if (dedupeId in deletedIds) continue
 
             // 2026-10-17：只 capture 成订阅线作品（PENDING），不自动下载——用户在
             // 「作品订阅」页看到新作品后自己点按下载（用户线 manual=true，熔断语义与手动一致）
@@ -415,7 +431,11 @@ object SubscriptionManager {
                 val feed = root.optJSONArray("feed") ?: return@runCatching null
                 val ids = mutableListOf<String>()
                 for (i in 0 until feed.length()) {
-                    val uri = feed.optJSONObject(i)?.optJSONObject("post")?.optString("uri") ?: continue
+                    val item = feed.optJSONObject(i) ?: continue
+                    // 2026-10-24 订阅污染修复：getAuthorFeed 含转推（reason=ReasonRepost），
+                    // 其 post 作者是别人——跳过，只收订阅作者本人作品
+                    if (item.optJSONObject("reason") != null) continue
+                    val uri = item.optJSONObject("post")?.optString("uri") ?: continue
                     val rkey = uri.substringAfterLast('/').takeIf { it.isNotBlank() } ?: continue
                     ids += rkey
                 }

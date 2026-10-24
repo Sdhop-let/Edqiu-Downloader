@@ -355,6 +355,23 @@ fun DownloaderSettingsPage(
         if (section == DlSection.UPDATE) checkAppUpdate()
     }
 
+    // 2026-10-24 更新体验修复：从「未知来源安装」授权页返回本页时自动恢复安装——
+    // 旧流程跳权限页后安装意图即丢失，用户只能重新下载 74MB（现同版本包缓存复用 +
+    // 此处恢复拉起安装器，双保险）
+    val updateLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(section, updateLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (section == DlSection.UPDATE && event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                val started = AppUpdateService.resumePendingInstallIfReady(context)
+                if (started) {
+                    inlineFeedback = FeedbackMessage("权限已开启，已为你继续安装", FeedbackKind.SUCCESS)
+                }
+            }
+        }
+        updateLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { updateLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val pendingAppUpdate = appUpdateInfo
     if (pendingAppUpdate != null) {
         // 2026-10-07 更新弹窗改版（大卡片）：版本对比 + 更新内容滚动区（Release Notes，

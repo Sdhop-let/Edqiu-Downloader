@@ -29,7 +29,7 @@ object XTimelineDetector {
 
     private val CREATED_AT_FORMAT = SimpleDateFormat("EEE MMM dd HH:mm:ss Z yyyy", Locale.US)
 
-    data class DetectedTweet(val id: String, val publishedAt: Long?)
+    data class DetectedTweet(val id: String, val publishedAt: Long?, val authorHandle: String? = null)
 
     sealed interface Outcome {
         /**
@@ -121,7 +121,7 @@ object XTimelineDetector {
         return tweets.fold(
             onSuccess = { list ->
                 Outcome.Success(
-                    tweets = list.map { DetectedTweet(it.id, parseCreatedAt(it.createdAtRaw)) },
+                    tweets = list.map { DetectedTweet(it.id, parseCreatedAt(it.createdAtRaw), it.authorHandle) },
                     degraded = false,
                     viaCookie = false,
                 )
@@ -144,7 +144,7 @@ object XTimelineDetector {
         return XApiClient.userTweets(restId, TIMELINE_SCAN, channel, proxyUrl).fold(
             onSuccess = { list ->
                 Outcome.Success(
-                    tweets = list.map { DetectedTweet(it.id, parseCreatedAt(it.createdAtRaw)) },
+                    tweets = list.map { DetectedTweet(it.id, parseCreatedAt(it.createdAtRaw), it.authorHandle) },
                     degraded = false,
                     viaCookie = true,
                 )
