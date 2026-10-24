@@ -43,7 +43,10 @@ class MetadataFetcher {
                 runCatching { conn.errorStream?.close() }
                 null
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            // 2026-10-24 审计：此前完全吞错——元数据拉取失败无法排查（上层还包了一层
+            // runCatching 静默），补日志（返回值语义不变）
+            android.util.Log.w("MetadataFetcher", "fetch failed: ${conn.url}", e)
             null
         } finally {
             conn.disconnect()

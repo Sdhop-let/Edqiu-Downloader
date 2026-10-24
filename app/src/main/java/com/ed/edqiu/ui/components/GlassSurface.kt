@@ -11,6 +11,8 @@ import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
@@ -33,6 +35,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.ed.edqiu.ui.theme.ThemeEffects
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
@@ -71,7 +75,11 @@ enum class GlassTier(
     // L3 弹窗保持实感不动
     // 2026-10-22 二轮「更轻」档（用户拍板卡片优化）：L1 描边/顶光减半——玻璃更隐身、
     // 卡片内容更突出（轮廓线在壁纸上偏「贴膜感」）
-    L1(0.26f, 0.24f, edgeLight = 0.45f, topLight = 0.50f),
+    // 2026-10-24 四方面优化：L1 再平衡——bgAlpha 0.26→0.30（文字与卡片背景融合：
+    // 卡片真折射后壁纸直接透进卡面，0.26 档文字浮在噪点上，+0.04 给文字稳定基座）；
+    // edgeLight 0.45→0.35 / topLight 0.50→0.40（卡片边缘的白描边让位给真折射带——
+    // 轮廓定义 = 光学弯折 + 色散，不是白线）
+    L1(0.30f, 0.24f, edgeLight = 0.35f, topLight = 0.40f),
     L2(0.38f, 0.30f, edgeLight = 1.15f, topLight = 1.20f),
     L3(0.58f, 0.34f, edgeLight = 1.45f, topLight = 1.50f)
 }
@@ -393,39 +401,31 @@ fun GlassSurface(
     val edgeSeed = MaterialTheme.colorScheme.primary
         .takeIf { it != Color.Unspecified && it.alpha > 0f }
         ?: tint
-    // ── 真折射路径判定（2026-10-22 A+ 方案尝试，实机 SIGSEGV 后关闭）──
-    // 原设计：Android 13+ 且液态玻璃开启且 backdrop 可用且 CornerBasedShape（lens 要求）→
-    // drawBackdrop 采样 shellBackdrop（AppNavigation.kt:264-268 就近覆盖 LocalAppBackdrop，
-    // 其 layerBackdrop 捕获整个 NavHost 页面内容 :317）。
-    // 库标准用法：玻璃在捕获链内、自身内容画在采样之后，不会自采样变实色。
-    // 与 A 方案的本质区别：Modifier.blur 只糊本层绘制内容（白色渐变糊自己 = 白叠白），
-    // drawBackdrop 糊的是背后真实像素（前序卡片/缩略图/GlassBackground 色场）——
-    // 滚动时相邻内容从卡片玻璃后透出，即 Apple 列表的标志性效果。
+    // ── 真折射路径判定（2026-10-24 独立舞台架构落地，重新开放）──
+    // 采样源从 LocalAppBackdrop（AppNavigation 就近覆盖为 shellBackdrop，捕获 NavHost
+    // 页面内容——链内含卡片自身）切换为 LocalStageBackdrop（GlassBackground 背景层捕获，
+    // 链内只有静态壁纸/scrim，不含卡片）。递归捕获的结构前提被移除，与生产环境稳定的
+    // 底栏（链内元素采样链外 backdrop）结构同位。
     //
-    // ⚠️ 2026-10-22 14:56 实机判决（PLK110）：item 内 drawBackdrop 触发
-    // RenderThread SIGSEGV（Fatal signal 11 SEGV_ACCERR, tid RenderThread）——
-    // 根因：NavHost 的 modifier 链上 graphicsLayer(compositingStrategy = Offscreen)
-    // （底部渐隐 DstOut 所需，AppNavigation.kt:326）与 layerBackdrop 同链，离屏 RenderNode
-    // 既是捕获源又是渲染目标，item 采样后画回同一纹理 = GPU feedback loop。
-    // 库 demo 能跑因其无 Offscreen 包装。底栏 GlassOverlaySurface 稳定是因它在捕获链
-    // **之外**（采样已完成的页面纹理）。结论：链内 item 采样此结构下不可用，
-    // 强制 canReal=false 保留代码待「独立 backdrop + 捕获链外浮层」架构（见 MEMORY）。
-    val backdrop = LocalAppBackdrop.current
-    // 2026-10-22 15:36 二次实机判决（决定性）：canReal=true 时 RenderThread
-    // 「Fatal signal 11 SIGSEGV … Cause: stack pointer is close to top of stack;
-    // likely stack overflow」——item 内 drawBackdrop 采样包含自身的捕获链 =
-    // 递归捕获（采样→链脏→重捕获→再采样→栈溢出），与 Offscreen 擦除层无关
-    //（该层移除后依旧崩，实锤机制性死路）。库 demo 能跑是因玻璃在捕获链外
-    // （采样不含自己）。**最终铁律：捕获链内的组件永远不能 drawBackdrop 该链**；
-    // 卡片玻璃维持自绘（A 方案 blur），真折射只允许链外浮层（底栏模式）。
-    val canReal = false
+    // 历史判决记录（2026-10-22 两次实机 SIGSEGV，PLK110）：当时 item 内 drawBackdrop
+    // 采样包含自身的捕获链 = 递归捕获（RenderThread「stack pointer is close to top of
+    // stack; likely stack overflow」，与 Offscreen 擦除层无关）——那是「采样链含自己」
+    // 的问题，不是「链内元素不能有真折射」的问题。铁律修正表述：**任何组件都不能
+    // drawBackdrop 一条包含自己的捕获链**；链内元素采样「不含自己的另一条链」是安全的。
+    val stageBackdrop = LocalStageBackdrop.current
+    val canReal = stageBackdrop != null &&
+        Build.VERSION.SDK_INT >= 33 &&
+        liquidGlass &&
+        shape is CornerBasedShape
     // 真折射磨砂半径跟随全局磨砂强度（与 GlassOverlaySurface 同源 4-20dp：
     // 0%=通透见底 4dp，100%=重磨砂 20dp）
     val realBlur = (4f + 16f * frost).dp
     // 边缘折射（2026-10-21 对齐教程：深度 18dp = 折射带宽度；位移随折射强度缩放）
     val realRefraction = ThemeEffects.GlassRefractionStrength.current.coerceIn(0f, 1f)
     val realLensHeight = 18.dp
-    val realLensAmount = 18.dp * (0.2f + 1.4f * realRefraction)
+    // 2026-10-24 卡片边缘强化：位移曲线 0.2+1.4r → 0.4+1.6r（默认 r=0.6 时
+    // 18.7dp → 24.5dp）——边缘弯折更明显，折射带承担轮廓定义
+    val realLensAmount = 18.dp * (0.4f + 1.6f * realRefraction)
 
     val m = modifier
         .clip(shape)
@@ -459,12 +459,18 @@ fun GlassSurface(
                 Modifier
                     .matchParentSize()
                     .drawBackdrop(
-                        backdrop = backdrop!!,
+                        backdrop = stageBackdrop!!,
                         shape = { shape as CornerBasedShape },
                         effects = {
                             vibrancy()
                             blur(realBlur.toPx())
-                            lens(realLensHeight.toPx(), realLensAmount.toPx())
+                            // 2026-10-24 液态试点：色散滑块 >0 时切七光谱采样（边缘彩虹色差，
+                            // 库 RefractionWithDispersion shader）；卡片大平面不开 depthEffect
+                            lens(
+                                realLensHeight.toPx(),
+                                realLensAmount.toPx(),
+                                chromaticAberration = dispersion > 0f
+                            )
                         },
                         onDrawSurface = { drawRect(glassColor) }
                     )
@@ -631,6 +637,9 @@ fun MediaGlassSurface(
  * - 有壁纸：壁纸 Image（Crop + blur 28dp 虚化，全屏层默认 clamp 正确用法）
  *   + 可读性 scrim（深色压暗 0.42 / 浅色提亮 0.38）+ **光斑减半**保留色彩氛围；
  * - 无壁纸（加载失败/无壁纸）：落回「中性基底 + 局部光斑团」色场，无缝降级。
+ * - **舞台捕获层（2026-10-24）**：本函数同时捕获一份「壁纸锐源 + scrim」（无 blur）
+ *   经 [LocalStageBackdrop] 提供出去——卡片等链内元素的真玻璃采样源，
+ *   详见该 CompositionLocal 的 KDoc。
  *
  * [blurRadius] 仍作用于该背景层（柔化光晕边缘）。
  */
@@ -643,17 +652,65 @@ fun GlassBackground(
     val scheme = MaterialTheme.colorScheme
     val dark = scheme.background.luminance() <= 0.5f
     val density = LocalDensity.current
-    // 壁纸异步加载（IO 线程 decode，进程级缓存）；null = 未加载完成或无壁纸 → 色场降级
+    // 壁纸异步加载（IO 线程 decode，进程级缓存）；null = 未加载完成或无壁纸 → 色场降级。
+    // 热更新（2026-10-24）：采集 WallpaperProvider.version，壁纸变更（invalidate）即
+    // 强制重载（version=0 = 进程内无变更，走缓存）；重载完成前保留旧图，避免闪回色场
     val context = LocalContext.current
-    val wallpaper by produceState<ImageBitmap?>(initialValue = WallpaperProvider.current) {
-        value = WallpaperProvider.load(context)
+    val wallpaperVersion by WallpaperProvider.version.collectAsState()
+    val wallpaper by produceState<ImageBitmap?>(initialValue = WallpaperProvider.current, wallpaperVersion) {
+        value = WallpaperProvider.load(context, force = wallpaperVersion > 0)
     }
 
+    // ── 舞台捕获层（2026-10-24 独立舞台架构）──
+    // stageBackdrop 捕获下方「壁纸锐源 + scrim」Box，经 LocalStageBackdrop 提供给卡片等
+    // 捕获链内元素做真玻璃采样：舞台链内只有静态壁纸，不含卡片自身 → 无递归捕获，
+    // 与生产环境稳定的底栏（链内元素采样链外 shellBackdrop）结构同位。
+    // 锐源（不经页面 28dp 虚化）是折射可读的前提——折射要弯折可辨识内容，
+    // 采预模糊层则无素材可弯。舞台层本身被下方可见背景层完全遮盖，仅作采样用。
+    val stageBackdrop = rememberLayerBackdrop {
+        drawContent()
+    }
+    // 2026-10-24 浅色衬托修复：浅色 scrim 降档 0.30→0.18——浅色壁纸普遍偏亮偏平，
+    // 白 scrim 只会把背景抹成均匀白场，玻璃折射「无素材可采」；少压一点让壁纸的
+    // 明暗起伏留在场上（深色 0.34 不变，深色本来就有对比）
+    val scrimColor = if (dark) Color.Black.copy(alpha = 0.34f) else Color.White.copy(alpha = 0.18f)
+    val baseGradient = Brush.verticalGradient(
+        0f to scheme.background,
+        0.6f to scheme.surfaceContainer,
+        1f to scheme.surfaceContainerHigh
+    )
+    CompositionLocalProvider(LocalStageBackdrop provides stageBackdrop) {
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         // 窗口实际尺寸 → 像素（radialGradient 的 center/radius 以 px 计）
         val wPx = with(density) { maxWidth.toPx() }
         val hPx = with(density) { maxHeight.toPx() }
         val minPx = minOf(wPx, hPx)
+        // ── 舞台锐源层：drawBackdrop 采样源（无页面 blur）──
+        // 2026-10-24 浅色衬托修复：光斑进入舞台层——此前舞台只捕获「壁纸+scrim」，
+        // 卡片折射采不到任何色彩与明暗差（光斑只画在可见层，被不透明可见层盖住）；
+        // 浅色壁纸偏亮偏平时卡片折射 = 对均匀白场弯折，液态效果完全不可见。
+        // 舞台层是静态纹理（仅主题/壁纸变更时重录），加光斑无逐帧成本
+        // 2026-10-24 光斑强度分主题：浅色近全强（0.9，合成衬托玻璃所需的色彩与
+        // 明暗），深色保持减半（0.5，壁纸+深 scrim 已有对比）
+        val spotScale = if (wallpaper != null) (if (dark) 0.5f else 0.9f) else 1f
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .layerBackdrop(stageBackdrop)
+        ) {
+            if (wallpaper != null) {
+                Image(
+                    bitmap = wallpaper!!,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(Modifier.fillMaxSize().background(scrimColor))
+            } else {
+                Box(Modifier.fillMaxSize().background(baseGradient))
+            }
+            StageSpots(scheme = scheme, dark = dark, wPx = wPx, hPx = hPx, minPx = minPx, spotScale = spotScale)
+        }
         // 背景层包在内部 Box 中应用 blur → 仅柔化背景，不影响前景 content
         Box(
             modifier = Modifier
@@ -678,10 +735,7 @@ fun GlassBackground(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(
-                            if (dark) Color.Black.copy(alpha = 0.42f)
-                            else Color.White.copy(alpha = 0.38f)
-                        )
+                        .background(scrimColor)
                 )
             } else {
                 // 基底降级：中性面三段渐变（background → surfaceContainer → surfaceContainerHigh），
@@ -689,106 +743,123 @@ fun GlassBackground(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                0f to scheme.background,
-                                0.6f to scheme.surfaceContainer,
-                                1f to scheme.surfaceContainerHigh
-                            )
-                        )
+                        .background(baseGradient)
                 )
             }
-            // 色场光斑：壁纸模式下整体减半——只保留色彩氛围，不再承担"舞台主体"
-            val spotScale = if (wallpaper != null) 0.5f else 1f
-            // ── 色场（2026-10-22 重做：「中性基底 + 局部光斑团」替代全屏平铺染色）──
-            // 旧版主色场 = primary/tertiary linearGradient 0.48/0.42 alpha 全屏平铺——
-            // 实测把整屏染成单色（深色 RGB 45-123 暗绿/浅色 150-230 亮薄荷绿），
-            // 光斑叠在已染透的底上层次全失效，玻璃背后无任何可折射素材（用户定性
-            // 「一坨屎」的像素级根因，见 MEMORY）。新版原则：
-            // 1. 基底永远中性（iOS systemBackground 族），色彩只出现在局部光斑里；
-            // 2. 光斑团 = 高对比、有边界、位置错落的「物」——玻璃磨砂/折射才有素材；
-            // 3. 每个主题都有一明一暗一对团（深色：黑影团压中部；浅色：灰影团），
-            //    明暗差是玻璃「存在感」的第一来源（Apple 草地演示的核心）。
-            // 左上主光斑：primary 饱和团（局部，非平铺）
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(
-                                scheme.primary.copy(alpha = (if (dark) 0.55f else 0.38f) * spotScale),
-                                Color.Transparent
-                            ),
-                            center = Offset(wPx * 0.15f, hPx * 0.10f),
-                            radius = minPx * 0.42f
-                        )
-                    )
-            )
-            // 右中次光斑：tertiary 青，与主光斑对角呼应
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(
-                                scheme.tertiary.copy(alpha = (if (dark) 0.45f else 0.32f) * spotScale),
-                                Color.Transparent
-                            ),
-                            center = Offset(wPx * 0.88f, hPx * 0.32f),
-                            radius = minPx * 0.38f
-                        )
-                    )
-            )
-            // 中部暗影团（2026-10-22 新增）：深色 = 大黑团、浅色 = 灰影团——
-            // 制造整屏唯一的大暗部，让上方光斑「亮得起来」、玻璃明暗可辨
-            // 壁纸模式下暗影交给壁纸自身明暗，此团减半只作辅助
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(
-                                (if (dark) Color.Black else Color(0xFF48484A))
-                                    .copy(alpha = (if (dark) 0.55f else 0.12f) * spotScale),
-                                Color.Transparent
-                            ),
-                            center = Offset(wPx * 0.50f, hPx * 0.54f),
-                            radius = minPx * 0.58f
-                        )
-                    )
-            )
-            // 左下小高光团：白光「物」（深色模式玻璃高光素材；浅色改淡绿补光）
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(
-                                (if (dark) Color.White else scheme.primary)
-                                    .copy(alpha = (if (dark) 0.10f else 0.22f) * spotScale),
-                                Color.Transparent
-                            ),
-                            center = Offset(wPx * 0.12f, hPx * 0.74f),
-                            radius = minPx * 0.30f
-                        )
-                    )
-            )
-            // 底部反光团：primary 回弹，给底栏玻璃一点色彩素材
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(
-                                scheme.primary.copy(alpha = (if (dark) 0.20f else 0.16f) * spotScale),
-                                Color.Transparent
-                            ),
-                            center = Offset(wPx * 0.78f, hPx * 0.90f),
-                            radius = minPx * 0.36f
-                        )
-                    )
-            )
+            // 色场光斑（2026-10-24 提取为 StageSpots 双层共用：本层负责人眼可见的
+            // 氛围，舞台层负责给卡片折射供色彩与明暗素材）
+            StageSpots(scheme = scheme, dark = dark, wPx = wPx, hPx = hPx, minPx = minPx, spotScale = spotScale)
         }
         content()
+        }
     }
+}
+
+/**
+ * 舞台光斑（2026-10-24 从 GlassBackground 提取，双层共用）。
+ *
+ * 绘制在两个层：可见背景层（人眼直接看的氛围）与舞台捕获层（卡片 drawBackdrop
+ * 的采样源）。后者此前缺席光斑——浅色壁纸偏亮偏平时卡片折射采到均匀白场，
+ * 「透明/折射/液态」不可见（用户实测反馈浅色衬托不足）。两层各自静态
+ * （仅主题/壁纸/尺寸变更时重录），无逐帧成本。
+ *
+ * ── 色场设计原则（2026-10-22 重做，2026-10-24 浅色增强）──
+ * 旧版主色场 = primary/tertiary linearGradient 全屏平铺——把整屏染成单色，
+ * 光斑叠在已染透的底上层次全失效。新版原则：
+ * 1. 基底永远中性（iOS systemBackground 族），色彩只出现在局部光斑里；
+ * 2. 光斑团 = 高对比、有边界、位置错落的「物」——玻璃磨砂/折射才有素材；
+ * 3. 每个主题都有一明一暗一对团（深色：黑影团压中部；浅色：灰影团），
+ *    明暗差是玻璃「存在感」的第一来源（Apple 草地演示的核心）；
+ * 4. 浅色档 alpha 整体上调（0.38/0.32/0.12/0.22/0.16 → 0.44/0.40/0.22/0.28/0.22）
+ *    ——Apple 浅色玻璃演示的底从来不是白纸，是彩色渐变团；浅色要「衬托」玻璃，
+ *    衬底必须有色彩与明暗差。
+ */
+@Composable
+private fun StageSpots(
+    scheme: androidx.compose.material3.ColorScheme,
+    dark: Boolean,
+    wPx: Float,
+    hPx: Float,
+    minPx: Float,
+    spotScale: Float
+) {
+    // 左上主光斑：primary 饱和团（局部，非平铺）
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(
+                        scheme.primary.copy(alpha = (if (dark) 0.55f else 0.44f) * spotScale),
+                        Color.Transparent
+                    ),
+                    center = Offset(wPx * 0.15f, hPx * 0.10f),
+                    radius = minPx * 0.42f
+                )
+            )
+    )
+    // 右中次光斑：tertiary 青，与主光斑对角呼应
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(
+                        scheme.tertiary.copy(alpha = (if (dark) 0.45f else 0.40f) * spotScale),
+                        Color.Transparent
+                    ),
+                    center = Offset(wPx * 0.88f, hPx * 0.32f),
+                    radius = minPx * 0.38f
+                )
+            )
+    )
+    // 中部暗影团：深色 = 大黑团、浅色 = 灰影团——制造整屏唯一的大暗部，
+    // 让上方光斑「亮得起来」、玻璃明暗可辨（浅色档 0.12→0.22：白场上这条
+    // 灰带就是浅色玻璃「存在感」的主要来源）
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(
+                        (if (dark) Color.Black else Color(0xFF48484A))
+                            .copy(alpha = (if (dark) 0.55f else 0.22f) * spotScale),
+                        Color.Transparent
+                    ),
+                    center = Offset(wPx * 0.50f, hPx * 0.54f),
+                    radius = minPx * 0.58f
+                )
+            )
+    )
+    // 左下小高光团：白光「物」（深色模式玻璃高光素材；浅色改淡绿补光）
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(
+                        (if (dark) Color.White else scheme.primary)
+                            .copy(alpha = (if (dark) 0.10f else 0.28f) * spotScale),
+                        Color.Transparent
+                    ),
+                    center = Offset(wPx * 0.12f, hPx * 0.74f),
+                    radius = minPx * 0.30f
+                )
+            )
+    )
+    // 底部反光团：primary 回弹，给底栏玻璃一点色彩素材
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(
+                        scheme.primary.copy(alpha = (if (dark) 0.20f else 0.22f) * spotScale),
+                        Color.Transparent
+                    ),
+                    center = Offset(wPx * 0.78f, hPx * 0.90f),
+                    radius = minPx * 0.36f
+                )
+            )
+    )
 }

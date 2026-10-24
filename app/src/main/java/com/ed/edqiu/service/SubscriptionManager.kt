@@ -159,7 +159,16 @@ object SubscriptionManager {
 
     /** 手动触发一轮检测（订阅页用）。@return 新作品数 + 失败原因（null=正常）。 */
     suspend fun pollNow(context: Context): DetectOutcome = withContext(Dispatchers.IO) {
-        poll(context, ignoreThrottle = true)
+        // 2026-10-24 审计修复：与后台轮询互斥——两路并发 detectAndCapture 同一订阅时
+        // dao.update 整行覆写会互相回退 lastCheckedAt/lastError
+        if (!pollInFlight.compareAndSet(false, true)) {
+            return@withContext DetectOutcome(newCount = 0, failure = "已有检测在进行中，请稍候")
+        }
+        try {
+            poll(context, ignoreThrottle = true)
+        } finally {
+            pollInFlight.set(false)
+        }
     }
 
     /** 检测单个订阅（订阅页逐作者「立即检测」）。@return 新作品数 + 失败/降级说明。 */

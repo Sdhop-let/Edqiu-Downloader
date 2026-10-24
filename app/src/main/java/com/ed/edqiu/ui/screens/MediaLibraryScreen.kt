@@ -639,7 +639,8 @@ private fun MediaLibraryFixedBar(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = "媒体库",
-                fontSize = 20.sp,
+                // 2026-10-24 与收件箱折叠语言对齐：标题随滚动 20→17sp 收缩
+                fontSize = com.ed.edqiu.ui.components.titleCollapseSize(collapse, 20.sp, 17.sp),
                 lineHeight = 25.sp,
                 fontWeight = FontWeight.Black,
                 letterSpacing = (-0.02).sp,

@@ -47,6 +47,20 @@ import com.ed.edqiu.ui.theme.ThemeEffects
  */
 val LocalAppBackdrop = staticCompositionLocalOf<Backdrop?> { null }
 
+/**
+ * 舞台 backdrop（2026-10-24「独立舞台架构」）：捕获 [GlassBackground] 的背景层——
+ * 壁纸锐源 + 可读性 scrim（无页面级 blur）。
+ *
+ * 存在意义：卡片/吸顶条等**捕获链内元素**不能采样 LocalAppBackdrop（shellBackdrop
+ * 捕获 NavHost 页面内容，链内含卡片自身 → 递归捕获 → RenderThread SIGSEGV，
+ * 2026-10-22 两次实机判决）；但它们采样舞台链是安全的——舞台链内只有静态壁纸，
+ * 不含任何卡片，与生产环境稳定的底栏（链内采样链外 shellBackdrop）结构同位。
+ *
+ * 锐源（不经 28dp 页面虚化）是关键：折射要弯折「可辨识内容」才有液态感，
+ * 采预模糊层则无素材可弯。弹窗（独立窗口）取不到 → null → 自动回退程序化玻璃。
+ */
+val LocalStageBackdrop = staticCompositionLocalOf<Backdrop?> { null }
+
 /** 悬浮玻璃明暗风格。Dark 对应媒体/胶囊场景的深色玻璃语义。 */
 enum class OverlayGlassStyle { Light, Dark }
 
@@ -94,6 +108,10 @@ fun GlassOverlaySurface(
     // 2026-10-22：外圈描边开关（用户反馈底栏不要描边）——false 时跳过色散
     // 暖/冷双色轮廓描边，玻璃外壳干净无轮廓线。底栏传 false，其余表面默认 true
     showEdgeAccent: Boolean = true,
+    // 2026-10-24：顶光白洗开关（用户反馈 tab 栏边缘不要白线描边）——false 时跳过
+    // 沿光源方向的白色渐变洗光（顶部亮缘观感的主要来源）。底栏传 false，
+    // 播放器控制层等保持默认 true
+    showSheen: Boolean = true,
     content: @Composable BoxScope.() -> Unit
 ) {
     val backdrop = LocalAppBackdrop.current
@@ -117,6 +135,7 @@ fun GlassOverlaySurface(
             lensAmount = lensAmount,
             transparencyBoost = transparencyBoost,
             showEdgeAccent = showEdgeAccent,
+            showSheen = showSheen,
             backdrop = backdrop!!,
             content = content
         )
@@ -141,6 +160,7 @@ private fun RealGlassOverlay(
     lensAmount: Dp,
     transparencyBoost: Float,
     showEdgeAccent: Boolean,
+    showSheen: Boolean,
     backdrop: Backdrop,
     content: @Composable BoxScope.() -> Unit
 ) {
@@ -186,6 +206,8 @@ private fun RealGlassOverlay(
     // 顺序：clip（内容裁剪）→ drawBackdrop（按 shape 绘制折射层）
     // 2026-09-21 投影已移除：原 shadow 在 clip 之前，玻璃透明后投影外扩暴露成色块。
     val m = modifier.clip(shape)
+    // effects lambda 是绘制期（非 Composable 上下文），全局参数在组合期读取后捕获
+    val dispersionOn = ThemeEffects.GlassDispersion.current > 0f
 
     Box(
         modifier = m.drawBackdrop(
@@ -194,10 +216,16 @@ private fun RealGlassOverlay(
             effects = {
                 // Kyant0 iOS 26 复刻效果链（顺序为库文档规定）：饱和度提升 → 磨砂 → 边缘折射。
                 // vibrancy 的饱和度增益是"如水般通透"的核心；lens 位移随「折射强度」
-                // 0.2x-1.6x 缩放——低强度水面平静，高强度边缘如水滴折动
+                // 0.2x-1.6x 缩放——低强度水面平静，高强度边缘如水滴折动。
+                // 2026-10-24 液态试点：色散滑块 >0 时切库 RefractionWithDispersion
+                // 七光谱采样（边缘彩虹色差）；底栏大平面不开 depthEffect（径向扭曲只适合小曲面）
                 vibrancy()
                 blur(blurRadius.toPx())
-                lens(lensHeight.toPx(), lensAmount.toPx() * (0.2f + 1.4f * r))
+                lens(
+                    lensHeight.toPx(),
+                    lensAmount.toPx() * (0.2f + 1.4f * r),
+                    chromaticAberration = dispersionOn
+                )
             },
             onDrawSurface = { drawRect(drawnSurface) }
         )
@@ -205,30 +233,34 @@ private fun RealGlassOverlay(
         // 2026-10-21 对齐液态玻璃教程：顶部窄镜面高光由固定竖直渐变改为沿光源方向的
         // linearGradient（亮端贴光源侧），alpha 乘 GlassLightIntensity（0-1 亮度）。
         // background 拿不到 size，改用 drawBehind 在 DrawScope 内现场构造 Brush，
-        // lightAngle 重组时 drawBehind lambda 捕获新值自动重绘，实时跟随
-        Box(
-            Modifier
-                .matchParentSize()
-                .drawBehind {
-                    val cx = size.width / 2f
-                    val cy = size.height / 2f
-                    val l = 60f
-                    val topAlpha = ((if (style == OverlayGlassStyle.Dark) 0.14f else 0.10f) *
-                        lightStrength * lightIntensity).coerceIn(0f, 1f)
-                    val midAlpha = (0.02f * lightStrength * lightIntensity).coerceIn(0f, 1f)
-                    // 渐变第 0 色标位于 start：start 取光源方向点，让高光亮端贴光源侧
-                    val brush = Brush.linearGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = topAlpha),
-                            Color.White.copy(alpha = midAlpha),
-                            Color.Transparent
-                        ),
-                        start = Offset(cx + lightDx * l, cy + lightDy * l),
-                        end = Offset(cx - lightDx * l, cy - lightDy * l)
-                    )
-                    drawRect(brush)
-                }
-        )
+        // lightAngle 重组时 drawBehind lambda 捕获新值自动重绘，实时跟随。
+        // 2026-10-24：showSheen=false（tab 栏）跳过整层白洗——用户反馈 tab 栏边缘
+        // 不要白线描边，透字玻璃壳由 drawBackdrop 采样本身承担质感
+        if (showSheen) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .drawBehind {
+                        val cx = size.width / 2f
+                        val cy = size.height / 2f
+                        val l = 60f
+                        val topAlpha = ((if (style == OverlayGlassStyle.Dark) 0.14f else 0.10f) *
+                            lightStrength * lightIntensity).coerceIn(0f, 1f)
+                        val midAlpha = (0.02f * lightStrength * lightIntensity).coerceIn(0f, 1f)
+                        // 渐变第 0 色标位于 start：start 取光源方向点，让高光亮端贴光源侧
+                        val brush = Brush.linearGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = topAlpha),
+                                Color.White.copy(alpha = midAlpha),
+                                Color.Transparent
+                            ),
+                            start = Offset(cx + lightDx * l, cy + lightDy * l),
+                            end = Offset(cx - lightDx * l, cy - lightDy * l)
+                        )
+                        drawRect(brush)
+                    }
+            )
+        }
         // 2026-10-21 对齐液态玻璃教程：色散内描边——棱镜色散（Dispersion）模拟。
         // 暖/冷双层描边沿轮廓：暖层向光源方向偏移 1.5px、冷层反向偏移，
         // 模拟不同波长光在玻璃边缘的分离折射；alpha = 0.09 × 色散强度

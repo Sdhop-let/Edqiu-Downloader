@@ -8,11 +8,12 @@ import androidx.room.PrimaryKey
  *
  * 订阅键 = screenName（平台 handle，无 @ 前缀，保留原大小写）。
  * 2026-10 多平台（真正作品订阅）：+platform 列（twitter / bluesky / instagram）——
- * - twitter：yt-dlp 用户页（--flat-playlist）检测最新推文 ID；
+ * - twitter：X GraphQL 双通道（data/xapi，guest/Cookie + 远程 manifest 轮换；
+ *   v1.9.3 重建——旧 yt-dlp 用户页通道是死通道，已废弃）；
  * - bluesky：公共 AppView API（public.api.bsky.app，无需登录）检测最新 post rkey；
  * - instagram：yt-dlp 用户页（实验性，风控严，失败静默）。
  * 轮询：SubscriptionManager 每 25 分钟取 lastCheckedAt 最旧的 ≤3 个 enabled 订阅，
- * 新作品走收件箱 capture + 三层引擎链下载。
+ * 新作品走订阅线 capture（不进收件箱）+ 用户点按下载。
  */
 @Entity(tableName = "subscriptions")
 data class SubscriptionEntity(

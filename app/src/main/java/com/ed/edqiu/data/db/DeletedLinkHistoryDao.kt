@@ -35,6 +35,14 @@ interface DeletedLinkHistoryDao {
     @Query("DELETE FROM deleted_link_history WHERE archive_id IN (:archiveIds)")
     suspend fun deleteByArchiveIds(archiveIds: List<String>)
 
+    /**
+     * 30 天保留期清理（2026-10-24 审计落地）：删除 deleted_at 早于阈值的归档行。
+     * 过期后该推文重新可被捕获（getDeletedTweetIds 不再拦截）；物理媒体文件
+     * 不在此处理——文件归媒体库下载记录管，回收站只管链接记录。
+     */
+    @Query("DELETE FROM deleted_link_history WHERE deleted_at < :thresholdMs")
+    suspend fun purgeOlderThan(thresholdMs: Long): Int
+
     @Query("DELETE FROM deleted_link_history")
     suspend fun clearAll()
 }

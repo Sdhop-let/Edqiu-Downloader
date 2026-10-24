@@ -257,6 +257,11 @@ fun DownloaderSettingsPage(
                 )
                 WebDavManualSync.consumeResult()
             }
+            is WebDavManualSync.State.Skipped -> {
+                // 互斥跳过（2026-10-24）：中性提示，不再报「双向同步完成」假成功
+                inlineFeedback = FeedbackMessage(state.message, FeedbackKind.NEUTRAL)
+                WebDavManualSync.consumeResult()
+            }
             else -> {}
         }
     }

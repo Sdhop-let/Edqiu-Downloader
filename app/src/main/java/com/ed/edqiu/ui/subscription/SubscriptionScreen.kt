@@ -61,6 +61,7 @@ import com.ed.edqiu.ui.components.LinkCard
 import com.ed.edqiu.ui.components.DynamicSwitch
 import com.ed.edqiu.ui.components.EdqiuTextField
 import com.ed.edqiu.ui.components.FeedbackDialog
+import com.ed.edqiu.ui.components.SmoothAlertDialog
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.PillChip
@@ -99,6 +100,26 @@ fun SubscriptionScreen(
         message = state.message,
         onDismiss = vm::consumeMessage
     )
+
+    // 2026-10-24 审计补齐：订阅作品删除入口——长按作品卡确认后走收件箱同款 archive
+    // 链路（此前订阅线全工程无删除入口，不想要的帖子永久留在库）
+    var deletePostTarget by remember { mutableStateOf<String?>(null) }
+    deletePostTarget?.let { tweetId ->
+        SmoothAlertDialog(
+            onDismissRequest = { deletePostTarget = null },
+            title = { Text("删除作品") },
+            text = { Text("从订阅作品中移除这条记录，可从回收站恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deletePost(tweetId)
+                    deletePostTarget = null
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deletePostTarget = null }) { Text("取消") }
+            }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -206,7 +227,8 @@ fun SubscriptionScreen(
                     LinkCard(
                         link = link,
                         onClick = { openInBrowser(context, link.rawUrl) },
-                        onLongClick = {},
+                        // 2026-10-24：长按删除订阅作品（此前订阅线无任何删除入口）
+                        onLongClick = { deletePostTarget = link.tweetId },
                         onDownload = if (link.status == LinkStatus.PENDING ||
                             link.status == LinkStatus.FAILED
                         ) {
@@ -362,7 +384,8 @@ private fun SubscriptionRow(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (sub.enabled) "订阅中 · 新作品自动入库下载" else "已暂停 · 检测轮询跳过",
+                    // 2026-10-24 文案修正：实际行为=自动入库、点按下载（capture-only）
+                    if (sub.enabled) "订阅中 · 新作品自动入库，点按下载" else "已暂停 · 检测轮询跳过",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (sub.enabled) Color(0xFF1F8A3D) else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),

@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -55,10 +56,19 @@ class DetailViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     fun load(tweetId: String) {
+        // 2026-10-24 审计修复：改为 Room Flow 实时订阅——此前是一次性快照，后台自动重试
+        // 或另一入口下载完成后，已打开的详情页停留旧状态（显示未下载、按钮可再点）。
+        // 首发即覆盖初始加载；后续 DB 变化（下载完成/状态自愈）实时刷新。
+        viewModelScope.launch {
+            repo.observeAll()
+                .map { list -> list.firstOrNull { it.tweetId == tweetId } }
+                .distinctUntilChanged()
+                .collect { link -> linkMutable.value = link }
+        }
         viewModelScope.launch(Dispatchers.IO) {
+            // 作者信息缺失（保存时元数据抓取失败等）：进入详情页自动补抓一次并刷新
             val link = repo.getByTweetId(tweetId)
             linkMutable.value = link
-            // 作者信息缺失（保存时元数据抓取失败等）：进入详情页自动补抓一次并刷新
             if (link != null && (link.authorId == null || link.authorName == null || link.avatarUrl == null)) {
                 if (repo.fetchMetadata(tweetId)) {
                     linkMutable.value = repo.getByTweetId(tweetId)

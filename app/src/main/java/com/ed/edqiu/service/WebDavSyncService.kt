@@ -59,6 +59,8 @@ data class WebDavSyncResult(
     val conflicts: Int = 0,
     val pausedCount: Int = 0,
     val bytesTransferred: Long = 0L,
+    /** 本轮因「已有同步在执行」被互斥跳过（2026-10-24 审计修复假成功）：没有任何同步发生。 */
+    val roundSkipped: Boolean = false,
 ) {
     /** 是否有任何实际数据变动（驱动提示文案与计数器更新）。 */
     val hasChanges: Boolean get() = uploaded > 0 || downloaded > 0
@@ -103,10 +105,12 @@ object WebDavSyncService {
         onProgress: (WebDavSyncProgress) -> Unit = {},
     ): Result<WebDavSyncResult> {
         // 同步轮互斥（2026-10）：自动备份/设置页手动同步/预下载联动共用一个运行令牌，
-        // 已有同步轮在跑时直接跳过，避免双传同一文件；暂停/优先控制集随轮结束一并清空
+        // 已有同步轮在跑时直接跳过，避免双传同一文件；暂停/优先控制集随轮结束一并清空。
+        // 2026-10-24：跳过轮标记 roundSkipped——调用方据此区分「跳过」与「完成」，
+        // 不再记 success 历史并提示「双向同步完成：上传 0，下载 0」的假成功
         if (!SyncTaskControl.tryBeginRun()) {
             Log.i(TAG, "已有同步轮在执行，跳过本轮 syncDownloads")
-            return Result.success(WebDavSyncResult())
+            return Result.success(WebDavSyncResult(roundSkipped = true))
         }
         // 运行标记（2026-10 备份中心「冻结自愈恢复」判定）：进程被杀/冻结时残留 true，
         // 下一轮开始前读到此值 = 上一轮未正常收尾

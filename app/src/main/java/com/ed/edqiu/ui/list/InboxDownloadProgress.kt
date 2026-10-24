@@ -21,18 +21,22 @@ import com.ed.edqiu.data.model.DownloadTask
  * - 引擎二：`ytdlp_<tweetId>`
  * - 占位（2026-10-22）：`pending_<tweetId>`——引擎链启动期（API 分析/yt-dlp 初始化）
  *   的「准备下载」占位任务，消除点下载后 5-10s 的反馈空窗
+ * - 第三方 API 兜底（2026-10-24 审计补齐）：`tpapi_<tweetId>_<mediaIndex>`——此前不在
+ *   归并正则内，兜底下载期间收件箱卡片全程无进度（下载中心却看得到任务）
  */
 object InboxDownloadProgress {
 
     private val XINVOX_ID = Regex("""^xinvox_(\d+)_\d+$""")
     private val YTDLP_ID = Regex("""^ytdlp_(\d+)$""")
     private val PENDING_ID = Regex("""^pending_(\d+)$""")
+    private val TPAPI_ID = Regex("""^tpapi_(\d+)_\d+$""")
 
     /** 从下载任务 ID 解析 tweetId；非收件箱任务（如手动 URL 下载）返回 null。 */
     fun tweetIdOf(taskId: String): String? =
         XINVOX_ID.find(taskId)?.groupValues?.get(1)
             ?: YTDLP_ID.find(taskId)?.groupValues?.get(1)
             ?: PENDING_ID.find(taskId)?.groupValues?.get(1)
+            ?: TPAPI_ID.find(taskId)?.groupValues?.get(1)
 
     /**
      * 归并下载中任务：tweetId → 0..99 总进度百分比。

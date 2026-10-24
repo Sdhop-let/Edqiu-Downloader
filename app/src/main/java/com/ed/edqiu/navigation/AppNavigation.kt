@@ -43,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -147,7 +148,6 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector)
     data object Inbox : Screen("edqiu_inbox", "收件箱", EdqiuIcons.Inbox)
     data object Trash : Screen("edqiu_trash", "回收站", Icons.Outlined.Delete)
     data object Settings : Screen("settings", "我的", EdqiuIcons.Profile)
-    data object Player : Screen("player", "播放", Icons.Outlined.Download)
     /** 二级页：收件箱设置（分组过滤） */
     data object EdqiuSettings : Screen("edqiu_settings", "收件箱设置", Icons.Outlined.Settings)
     /** 二级页：作者作品 */
@@ -379,6 +379,8 @@ fun AppNavigation(
                         downloadViewModel = downloadViewModel,
                         historyViewModel = historyViewModel,
                         onBack = { navController.popBackStack() },
+                        // 2026-10-24：扫描本地完成反馈走全局胶囊
+                        onFeedback = onFeedback,
                         onNavigateToPlayer = { filePath ->
                             // 2026-09-30 容器变形：入口只定位/预载不起播（autoStart=false），
                             // 真正 play() 由 PlayerScreen 展开落定后触发，进场期间无声；
@@ -495,10 +497,18 @@ fun AppNavigation(
         //  基础间距提到 24dp：手势设备距屏底 24dp，三键设备由 navigationBarsPadding
         //  先吃掉导航栏高度——两种设备视觉间距一致（都是距系统底部构件 24dp）。）
         if (showBottomBar && floatingTabBarEnabled) {
+            // 2026-10-24 死功能救活：badgeCount 参数此前从未被喂值——接入收件箱用户线
+            // 待处理数（Room Flow，捕获/下载完成/删除实时刷新），Tab 栏红点=下载队列积压
+            val badgeContext = androidx.compose.ui.platform.LocalContext.current
+            val inboxPendingBadge by remember {
+                com.ed.edqiu.data.db.EdqiuDatabase.getDatabase(badgeContext)
+                    .savedLinkDao().observeUserPendingCount()
+            }.collectAsStateWithLifecycle(initialValue = 0)
             LiquidTabBar(
                 tabs = tabScreens.map { LiquidTab(label = it.label, icon = it.icon) },
                 selectedIndex = selectedTabIndex,
                 onSelect = selectTab,
+                badgeCount = inboxPendingBadge,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()

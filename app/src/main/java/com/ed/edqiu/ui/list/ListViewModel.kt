@@ -65,9 +65,6 @@ class ListViewModel(
         .map { tasks -> InboxDownloadProgress.progressByTweet(tasks) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
-    val pendingCount: StateFlow<Int> = repo.countPending()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
-
     val monitorUri: StateFlow<String?> = settings.monitorDirUriFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
@@ -239,7 +236,10 @@ class ListViewModel(
         if (!downloadAllInFlight.compareAndSet(false, true)) return
         downloadScope.launch {
             try {
-                val ids = repo.pendingTweetIds()
+                // 2026-10-24 审计修复：只派发用户线——统计卡待处理数只算用户线，
+                // 旧全量 pendingTweetIds() 会把订阅线 PENDING 一并按 manual 下载，
+                // 失败计入全局熔断，违背双线隔离设计
+                val ids = repo.pendingTweetIds(SavedLink.ORIGIN_USER)
                 if (ids.isEmpty()) {
                     batchDownloadStateMutable.value = BatchDownloadUiState(
                         running = false,

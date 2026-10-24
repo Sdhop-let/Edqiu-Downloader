@@ -70,12 +70,20 @@ fun DownloadScreen(
     downloadViewModel: DownloadViewModel,
     historyViewModel: HistoryViewModel,
     onBack: (() -> Unit)? = null,
+    // 2026-10-24 审计补齐：扫描本地完成反馈通道（顶部胶囊，经 AppNavigation 注入）——
+    // 此前全盘扫描数秒~数十秒零反馈
+    onFeedback: ((com.ed.edqiu.ui.components.FeedbackKind, String) -> Unit)? = null,
     onNavigateToPlayer: (String) -> Unit
 ) {
     val state by downloadViewModel.uiState.collectAsState()
     val activeCount = state.tasks.count { it.isActive }
     val completedCount = state.tasks.count { it.status == DownloadStatus.COMPLETED }
     val failedCount = state.tasks.count { it.status == DownloadStatus.FAILED || it.status == DownloadStatus.CANCELLED }
+    val scanWithFeedback = {
+        historyViewModel.scanLocalVideos {
+            onFeedback?.invoke(com.ed.edqiu.ui.components.FeedbackKind.NEUTRAL, "媒体库扫描完成")
+        }
+    }
 
     // iOS 大标题：列表内大标题滚走后，顶部紧凑导航条淡入接住导航职责
     val listState = rememberLazyListState()
@@ -103,20 +111,20 @@ fun DownloadScreen(
                 completedCount = completedCount,
                 failedCount = failedCount,
                 onBack = onBack,
-                onScan = { historyViewModel.scanLocalVideos() }
+                onScan = scanWithFeedback
             )
         }
 
         item {
             DownloadActions(
-                onScan = { historyViewModel.scanLocalVideos() },
+                onScan = scanWithFeedback,
                 onClearCompleted = downloadViewModel::clearCompleted
             )
         }
 
         if (state.tasks.isEmpty()) {
             item {
-                EmptyDownloadState(onScan = { historyViewModel.scanLocalVideos() })
+                EmptyDownloadState(onScan = scanWithFeedback)
             }
         } else {
             items(state.tasks, key = { it.id }) { task ->

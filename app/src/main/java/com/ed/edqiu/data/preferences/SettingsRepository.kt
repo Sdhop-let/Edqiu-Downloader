@@ -130,10 +130,6 @@ class SettingsRepository(context: Context) {
     val liquidGlassEnabledFlow: Flow<Boolean> =
         safeData.map { it[LIQUID_GLASS_ENABLED] ?: true }
 
-    /** 预测性返回手势（默认 ON；Android 14+） */
-    val predictiveBackFlow: Flow<Boolean> =
-        safeData.map { it[PREDICTIVE_BACK] ?: true }
-
     /** 界面缩放 0.5-1.0（默认 0.8 = 80%）；同时缩放 density（dp 排版/卡片）与字号（sp） */
     val displayScaleFlow: Flow<Float> =
         safeData.map { it[DISPLAY_SCALE] ?: 0.8f }
@@ -333,7 +329,6 @@ class SettingsRepository(context: Context) {
         private val FLOATING_TAB_BAR = booleanPreferencesKey("floating_tab_bar")
         private val DUAL_PLAYER = booleanPreferencesKey("dual_player")
         private val LIQUID_GLASS_ENABLED = booleanPreferencesKey("liquid_glass_enabled")
-        private val PREDICTIVE_BACK = booleanPreferencesKey("predictive_back")
         private val DISPLAY_SCALE = floatPreferencesKey("display_scale")
         private val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
     }

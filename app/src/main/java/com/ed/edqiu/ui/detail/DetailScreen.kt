@@ -144,7 +144,7 @@ fun DetailScreen(
                 downloading = downloading,
                 downloadProgress = downloadProgress[data.tweetId],
                 onOpenProfile = { handle ->
-                    if (!openTwitterProfile(context, handle)) snackbar.show("无法打开作者主页")
+                    if (!openTwitterProfile(context, handle)) snackbar.show("无法打开作者主页", kind = FeedbackKind.ERROR)
                 }
             )
 
@@ -160,7 +160,7 @@ fun DetailScreen(
             AuthorCard(
                 data = data,
                 onOpenProfile = { handle ->
-                    if (!openTwitterProfile(context, handle)) snackbar.show("无法打开作者主页")
+                    if (!openTwitterProfile(context, handle)) snackbar.show("无法打开作者主页", kind = FeedbackKind.ERROR)
                 }
             )
 
@@ -170,11 +170,11 @@ fun DetailScreen(
                 data = data,
                 onCopy = {
                     copyToClipboard(context, "Edqiu 链接", data.rawUrl)
-                    snackbar.show("已复制链接")
+                    snackbar.show("已复制链接", kind = FeedbackKind.SUCCESS)
                 },
                 onOpenTwitter = {
                     val success = openTwitterStatus(context, data.tweetId)
-                    if (!success) snackbar.show("无法打开 X/Twitter")
+                    if (!success) snackbar.show("无法打开 X/Twitter", kind = FeedbackKind.ERROR)
                 }
             )
 

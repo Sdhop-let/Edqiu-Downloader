@@ -45,7 +45,12 @@ object DirectoryScanner {
                 .filter { it.exists() && it.isDirectory }
                 .flatMap { it.walkTopDown() }
                 .filter { MediaFileTypes.isSupportedMediaFile(it) }
-                .distinctBy { it.absolutePath }
+                // 2026-10-24 排查修复：扫描根含大小写两种拼写（resolveDownloadDir 与
+                // getExternalFilesDir 的 download/Download；FUSE 大小写不敏感=同一物理目录），
+                // 同一文件被走两遍 → 每轮扫描 ~1191 次重复 parse+MediaMetadataRetriever+
+                // 全量 REPLACE（DB 实证 rebuilt=1191 但行数不变）。按小写路径去重；
+                // 外置存储是大小写不敏感卷，不存在「仅大小写不同的两个真实文件」
+                .distinctBy { it.absolutePath.lowercase() }
                 .toList()
 
             var newCount = 0
@@ -84,9 +89,115 @@ object DirectoryScanner {
                 TAG,
                 "Directory scan complete: existing=${existingPaths.size}, files=${candidateFiles.size}, rebuilt=$newCount, backfilled=$backfilledCount, skipped=$skippedCount"
             )
+
+            // 2026-10-24 同媒体重下合并（#1/#2 重复根治）：幂等，每次扫描执行
+            val mergedCount = mergeRedownloadedVideos(context, dao)
+            if (mergedCount > 0) {
+                Log.i(TAG, "Merged $mergedCount redownloaded duplicate video(s)")
+            }
+
+            // 2026-10-24 幽灵行清理（联动补全）：文件被外部删除（文件管理器/清理工具）
+            // 后 DB 行残留——媒体库出现点开即坏的条目，且统计数虚高。扫描即核验：
+            // 文件不存在且非回收站隐藏 → 删行（磁盘文件级真相优先）。
+            val ghostCleaned = cleanGhostRows(context, dao)
+            if (ghostCleaned > 0) {
+                Log.i(TAG, "Cleaned $ghostCleaned ghost row(s) (file missing on disk)")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Directory scan failed", e)
         }
+    }
+
+    /**
+     * 同媒体重下合并（2026-10-24，DB 实证驱动）。
+     *
+     * 现象：媒体库同一作品以 #1/#2 双条目出现。实证（PLK110 库 398 行）：
+     * - tweet 2096224407274324225：同一视频（同时长 256697ms、同大小 12.3MB）以 _1/_2/_3 三行共存；
+     * - tweet 1699364687128023046：同视频低画质(16.5MB)+高画质(20.0MB)共存——
+     *   画质升级意图是「替换」，实际低画质文件未删、且新文件按「下一个可用序号」命名成 _2。
+     *
+     * 根因：文件名里的 mediaIndex 是下载器「下一个可用位」（_1 被占就写 _2），
+     * 不是「推文第几个媒体」——同媒体重下必然产生新序号新 id 新行。
+     * 多视频推文的真第 2 个视频时长不同，可区分。
+     *
+     * 判定同一媒体：同 tweetId + VIDEO + 时长差 <500ms（≥3s 的视频；不同片段
+     * 时长几乎不可能精确到 500ms 内）。保留 fileSize 最大者（最高画质）；
+     * 大小相当（±1%）保留 mediaIndex 较小者（规范命名）。删除多余行 + 文件 + sidecar。
+     * 回收站隐藏条目（HiddenHistoryPreferences）跳过不动。
+     */
+    private suspend fun mergeRedownloadedVideos(
+        context: Context,
+        dao: com.ed.edqiu.data.database.DownloadHistoryDao
+    ): Int {
+        val hidden = HiddenHistoryPreferences(context)
+        val videos = dao.getAllVideosOnce().filter {
+            it.duration >= 3000L && !hidden.isHidden(it.filePath)
+        }
+        // 2026-10-24 排查修复（危险 bug）：合成 id（文件名解析不出推文号）的 tweetId
+        // 键为 null——groupBy 会把所有 null 键实体归进同一组，两个不相干的视频只要
+        // 时长相近就会被误判同媒体删文件。null 键实体直接不参与合并。
+        val byTweet = videos.mapNotNull { entity ->
+            val key = TWEET_ID_REGEX.find(entity.id)?.value
+                ?: com.ed.edqiu.domain.TweetIdExtractor.fromUrl(entity.url)
+            key?.to(entity)
+        }.groupBy({ it.first }, { it.second })
+        var removed = 0
+        byTweet.values.forEach { group ->
+            if (group.size < 2) return@forEach
+            // 按时长聚类：排序后与簇首差 <500ms 归入同簇（与簇尾比会链式放宽——
+            // 10000/10400/10800 三个不同视频会串成一簇，2026-10-24 排查修正）
+            val sorted = group.sortedBy { it.duration }
+            val clusters = mutableListOf<MutableList<DownloadHistoryEntity>>()
+            sorted.forEach { entity ->
+                val current = clusters.lastOrNull()
+                if (current != null && entity.duration - current.first().duration < 500L) {
+                    current.add(entity)
+                } else {
+                    clusters.add(mutableListOf(entity))
+                }
+            }
+            clusters.filter { it.size > 1 }.forEach { cluster ->
+                val max = cluster.maxOf { it.fileSize }
+                // 大小相当（±1%）取 mediaIndex 较小者（规范命名），否则取最大者（最高画质）
+                val top = cluster.filter { it.fileSize >= max * 0.99f }
+                val keep = if (top.size > 1) {
+                    top.minByOrNull { it.mediaIndex ?: Int.MAX_VALUE } ?: cluster.first()
+                } else {
+                    cluster.maxBy { it.fileSize }
+                }
+                cluster.filter { it.id != keep.id }.forEach { dup ->
+                    // 守卫：dup 与 keep 指向同一物理文件（历史路径漂移残留）时
+                    // 绝不能删文件——那是保留行的文件本身
+                    if (dup.filePath != keep.filePath) {
+                        runCatching {
+                            File(dup.filePath).delete()
+                            File(dup.filePath + ".meta.json").delete()
+                        }
+                    }
+                    dao.deleteById(dup.id)
+                    removed++
+                    Log.i(TAG, "Merged duplicate video: removed ${dup.id} (${dup.fileSize}B), kept ${keep.id} (${keep.fileSize}B)")
+                }
+            }
+        }
+        return removed
+    }
+
+    /** 幽灵行清理（2026-10-24）：文件已不在磁盘的 DB 行删除（回收站隐藏行跳过）。 */
+    private suspend fun cleanGhostRows(
+        context: Context,
+        dao: com.ed.edqiu.data.database.DownloadHistoryDao
+    ): Int {
+        val hidden = HiddenHistoryPreferences(context)
+        var cleaned = 0
+        dao.getAllOnce().forEach { row ->
+            if (row.filePath.isBlank() || File(row.filePath).exists()) return@forEach
+            if (hidden.isHidden(row.filePath)) return@forEach
+            dao.deleteById(row.id)
+            cleaned++
+            Log.i(TAG, "Ghost row cleaned (file missing): ${row.id}")
+        }
+        return cleaned
     }
 
     private fun scanRoots(context: Context): List<File> {

@@ -250,7 +250,10 @@ object YoutubeDLService {
             cookieFile.outputStream().use { output -> tmp.inputStream().use { it.copyTo(output) } }
             tmp.delete()
         }
-        Log.d(TAG, "Cookie file written to: ${cookieFile.absolutePath}")
+        // 2026-10-24 审计：cookie 文件路径属敏感信息，仅 debug 构建记录
+        if (com.ed.edqiu.BuildConfig.DEBUG) {
+            Log.d(TAG, "Cookie file written to: ${cookieFile.absolutePath}")
+        }
         return cookieFile.absolutePath
     }
 

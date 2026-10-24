@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object WebDavManualSync {
 
-    /** 手动同步状态机：Idle ↔ Syncing → (Succeeded | Failed) → Idle（UI 消费后复位）。 */
+    /** 手动同步状态机：Idle ↔ Syncing → (Succeeded | Skipped | Failed) → Idle（UI 消费后复位）。 */
     sealed interface State {
         data object Idle : State
 
@@ -37,6 +37,9 @@ object WebDavManualSync {
 
         /** @property result 双向同步账面（上传/下载/跳过/冲突）。 */
         data class Succeeded(val result: WebDavSyncResult) : State
+
+        /** 互斥跳过（2026-10-24 审计修复）：恰逢自动同步在跑，本轮未发生任何同步，不记历史。 */
+        data class Skipped(val message: String) : State
         data class Failed(val message: String) : State
     }
 
@@ -70,6 +73,12 @@ object WebDavManualSync {
             }
             result.fold(
                 onSuccess = { syncResult ->
+                    // 互斥跳过（2026-10-24）：不记 success 历史、不动计数器——
+                    // 旧实现把空结果当完成，用户看到「双向同步完成：上传 0，下载 0」假成功
+                    if (syncResult.roundSkipped) {
+                        _state.value = State.Skipped("已有同步正在进行中，本轮已跳过（未产生任何传输）")
+                        return@fold
+                    }
                     if (syncResult.hasChanges) {
                         prefs.syncedFileCount = prefs.syncedFileCount + syncResult.uploaded
                         prefs.lastSyncTime = System.currentTimeMillis()

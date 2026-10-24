@@ -181,6 +181,16 @@ class MediaBackupViewModel(
                         WebDavManualSync.consumeResult()
                         reloadHistory()
                     }
+                    is WebDavManualSync.State.Skipped -> {
+                        // 互斥跳过：中性提示，不刷新对账（本轮什么都没发生）
+                        _state.update {
+                            it.copy(
+                                syncProgress = null,
+                                message = FeedbackMessage(st.message, FeedbackKind.NEUTRAL)
+                            )
+                        }
+                        WebDavManualSync.consumeResult()
+                    }
                     WebDavManualSync.State.Idle -> Unit
                 }
             }

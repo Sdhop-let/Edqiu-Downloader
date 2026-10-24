@@ -1,7 +1,6 @@
 package com.ed.edqiu.ui.screens
 
 import com.ed.edqiu.data.database.DownloadHistoryEntity
-import com.ed.edqiu.domain.TweetIdExtractor
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -63,11 +62,6 @@ fun groupLibraryByAuthorDay(items: List<DownloadHistoryEntity>): List<LibraryGro
     return groups.sortedByDescending { it.sortAt }
 }
 
-/** 兼容旧调用点的轻量包装（推文分组逻辑已被「作者+发布日」分组取代）。 */
-@Deprecated("Use groupLibraryByAuthorDay", ReplaceWith("groupLibraryByAuthorDay(items)"))
+/** 兼容旧调用点的轻量包装（MediaLibraryScreen 仍有调用；推文分组逻辑已被「作者+发布日」分组取代）。 */
 fun groupLibraryByTweet(items: List<DownloadHistoryEntity>): List<LibraryGroup> =
     groupLibraryByAuthorDay(items)
-
-/** 从记录中提取 tweetId（分组头展示原推文链接等扩展用）。 */
-fun LibraryGroup.tweetIds(): List<String?> =
-    items.map { TweetIdExtractor.fromUrl(it.url) }

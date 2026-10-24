@@ -511,9 +511,36 @@ object MediaQualityUpgrader {
             return false
         }
 
-        // sidecar：旧 → 新（quality 标注 HLS best）
+        // 2026-10-24 #1/#2 重复根治配套：yt-dlp 产物按模板 {uploader}/{title}.mp4 命名，
+        // 完全脱离 Edqiu 规约 {uploader}_{tweetId}_{idx}_video_{quality}.mp4——下轮扫描
+        // 会把它解析成不同 id（title 通常不含 tweetId → 合成 id）插入新行 = 重复条目。
+        // 落 DB 前重命名/移动回旧文件同目录的规约名（同 mediaIndex、quality=best），
+        // 扫描幂等命中同一行。目标被占（上次残留孤儿）先删——与 performUpgrade 同策略。
+        val finalFile = if (samePath) newFile else run {
+            val oldDir = File(entity.filePath).parentFile ?: outputDir
+            val conventionName = sanitize(
+                "${entity.uploader.ifBlank { "unknown" }}_${tweetId}_${entity.mediaIndex ?: 1}_video_best.mp4"
+            )
+            val target = File(oldDir, conventionName)
+            if (target.absolutePath != entity.filePath && target.exists()) {
+                Log.i(TAG, "Convention target exists (stale orphan), delete: ${target.name}")
+                target.delete()
+            }
+            if (target.absolutePath == entity.filePath) {
+                newFile // 旧文件本身就是规约名（quality=best 场景）：保持 yt-dlp 产物，由下方原路径逻辑处理
+            } else if (newFile.renameTo(target) || runCatching {
+                    newFile.copyTo(target, overwrite = true).let { newFile.delete() }
+                    true
+                }.getOrDefault(false)) {
+                target
+            } else {
+                newFile // 重命名失败（跨卷等）：退回原名，行为同旧版
+            }
+        }
+
+        // sidecar：旧 → 新（quality 标注 HLS best；路径跟最终规约名）
         val oldSidecar = File(entity.filePath + ".meta.json")
-        val newSidecar = File(newPath + ".meta.json")
+        val newSidecar = File(finalFile.absolutePath + ".meta.json")
         runCatching {
             val json = if (oldSidecar.exists()) JSONObject(oldSidecar.readText()) else JSONObject()
             json.put("quality", "best")
@@ -527,8 +554,8 @@ object MediaQualityUpgrader {
         withContext(kotlinx.coroutines.NonCancellable) {
             dao.updateMediaFile(
                 oldPath = entity.filePath,
-                newPath = newFile.absolutePath,
-                fileSize = newFile.length(),
+                newPath = finalFile.absolutePath,
+                fileSize = finalFile.length(),
                 quality = "best"
             )
             if (!samePath) {
@@ -536,7 +563,13 @@ object MediaQualityUpgrader {
                 oldSidecar.delete()
             }
         }
-        Log.i(TAG, "HLS upgraded: ${File(entity.filePath).name} -> ${newFile.name}")
+        // 移动后清理 yt-dlp 留下的空 {uploader} 子目录
+        if (finalFile.absolutePath != newFile.absolutePath) {
+            runCatching {
+                newFile.parentFile?.takeIf { it.isDirectory && it.list()?.isEmpty() == true }?.delete()
+            }
+        }
+        Log.i(TAG, "HLS upgraded: ${File(entity.filePath).name} -> ${finalFile.name}")
         return true
     }
 

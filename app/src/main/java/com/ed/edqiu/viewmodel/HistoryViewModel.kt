@@ -56,17 +56,27 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    // 2026-10-24 审计修复：防重入守卫——下载中心三个入口（头部/操作行/空态）直调本方法，
+    // 连点会并发跑多轮全盘扫描（walk+MediaMetadataRetriever），与回填 Worker 竞争；
+    // 媒体库侧的 MediaLibraryAutoScanCoordinator 只护媒体库自己
+    private val scanInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun scanLocalVideos(onComplete: (String) -> Unit = {}) {
+        if (!scanInFlight.compareAndSet(false, true)) return
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                DirectoryScanner.scanAndRebuildHistory(getApplication())
-                // 2026-09-15：旧记录发布时间网络补拉（FXTwitter by tweetId，内部 10 分钟节流，
-                // 每轮最多 10 条）——存量旧文件 sidecar 无发布时间，必须联网补齐排序才归位
-                runCatching {
-                    com.ed.edqiu.service.PublishedAtBackfiller.backfillAfterScan(getApplication())
+            try {
+                withContext(Dispatchers.IO) {
+                    DirectoryScanner.scanAndRebuildHistory(getApplication())
+                    // 2026-09-15：旧记录发布时间网络补拉（FXTwitter by tweetId，内部 10 分钟节流，
+                    // 每轮最多 10 条）——存量旧文件 sidecar 无发布时间，必须联网补齐排序才归位
+                    runCatching {
+                        com.ed.edqiu.service.PublishedAtBackfiller.backfillAfterScan(getApplication())
+                    }
                 }
+                onComplete("已检索当前存储目录下的视频和图片文件")
+            } finally {
+                scanInFlight.set(false)
             }
-            onComplete("已检索当前存储目录下的视频和图片文件")
         }
     }
 

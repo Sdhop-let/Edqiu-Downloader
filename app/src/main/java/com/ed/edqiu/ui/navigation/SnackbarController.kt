@@ -13,8 +13,8 @@ import kotlinx.coroutines.launch
 /**
  * Snackbar 消息数据。
  *
- * [kind] 为 null → 走传统 Snackbar（带操作按钮的消息，如「撤销」）；
- * [kind] 非 null → 走底部玻璃胶囊提醒（纯状态反馈：下载/保存/复制结果）。
+ * 2026-10-24 起：**带 kind 的消息（含带操作按钮的「撤销」类）全部走底部玻璃胶囊**——
+ * 胶囊已具备 action 渲染能力；无 kind 的调用仅作存量兜底走 M3 Snackbar。
  */
 data class SnackbarMessage(
     val message: String,
@@ -60,11 +60,16 @@ class SnackbarController {
         scope.launch {
             messages.collect { msg ->
                 if (msg.kind != null) {
-                    // 状态类反馈 → 底部玻璃胶囊（不打断操作流）；先撤在显示的 Snackbar
+                    // 胶囊反馈（2026-10-24 起含带操作按钮的消息：「撤销」直接渲染在胶囊尾部）
                     snackbarHostState.currentSnackbarData?.dismiss()
-                    capsuleController.show(msg.kind, msg.message)
+                    capsuleController.show(
+                        kind = msg.kind,
+                        text = msg.message,
+                        actionLabel = msg.actionLabel,
+                        onAction = msg.onAction
+                    )
                 } else {
-                    // 操作类反馈（带按钮）→ 传统 Snackbar；先收起在显示的胶囊
+                    // 无 kind 兜底 → 传统 Snackbar（存量调用点未标注语义色时）
                     capsuleController.clear()
                     val result = snackbarHostState.showSnackbar(
                         message = msg.message,

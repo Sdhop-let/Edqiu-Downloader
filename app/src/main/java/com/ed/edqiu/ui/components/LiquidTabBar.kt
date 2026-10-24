@@ -128,10 +128,15 @@ fun LiquidTabBar(
                 style = OverlayGlassStyle.Light,
                 blurRadius = 8.dp,
                 lensHeight = 14.dp,
-                lensAmount = 14.dp,
-                transparencyBoost = 0.35f,
+                // 2026-10-24 液态强化：折射位移 14→16dp，边缘弯折更明显（≤ 最小圆角 25dp 约束）
+                lensAmount = 16.dp,
+                // 2026-10-24 透光强化：0.35→0.5（t 封顶 1.0，表面 alpha 下探 0.16）——
+                // 透光底部：内容从底栏下方穿透可辨
+                transparencyBoost = 0.5f,
                 // 2026-10-22 用户反馈：底栏外圈不要描边——干净玻璃壳
                 showEdgeAccent = false,
+                // 2026-10-24 用户反馈：tab 栏边缘取消白线描边——跳过顶光白洗整层
+                showSheen = false,
                 modifier = Modifier.fillMaxSize()
             ) { }
         } else {
@@ -143,7 +148,9 @@ fun LiquidTabBar(
             )
         }
 
-        // 选中胶囊：玻璃模式下用 primaryContainer 实底突出选中态（叠在外壳玻璃上），
+        // 选中胶囊（2026-10-24 按钮透明可观重做）：primary 低透明色洗替代
+        // primaryContainer 0.94 实底——内容从胶囊下穿透可辨，选中态由
+        // 主题色 tint（图标/文字转 primary，Apple tab 选中语言）承担；
         // 圆角随位置动态贴合外壳内壁
         if (liquidGlass) {
             Box(
@@ -153,7 +160,11 @@ fun LiquidTabBar(
                     .fillMaxHeight()
                     .padding(horizontal = 3.dp, vertical = 3.dp)
                     .clip(RoundedCornerShape(capsuleRadius.dp))
-                    .background(primaryContainer.copy(alpha = 0.94f))
+                    .background(
+                        MaterialTheme.colorScheme.primary.copy(
+                            alpha = if (dark) 0.38f else 0.28f
+                        )
+                    )
             )
         } else {
             Box(
@@ -206,7 +217,11 @@ fun LiquidTabBar(
                         Icon(
                             imageVector = if (selected) tab.selectedIcon else tab.icon,
                             contentDescription = tab.label,
-                            tint = if (selected) onPrimaryContainer else onSurfaceVariant,
+                            // 2026-10-24 选中态语言：胶囊改透明色洗后，选中图标/文字
+                            // 转 primary 主题色（与胶囊 tint 同色系，透明玻璃上的确定对比）
+                            tint = if (selected && liquidGlass) MaterialTheme.colorScheme.primary
+                            else if (selected) onPrimaryContainer
+                            else onSurfaceVariant,
                             modifier = Modifier.size(21.dp)
                         )
                         AnimatedVisibility(
@@ -216,7 +231,8 @@ fun LiquidTabBar(
                         ) {
                             Text(
                                 text = tab.label,
-                                color = onPrimaryContainer,
+                                color = if (liquidGlass) MaterialTheme.colorScheme.primary
+                                else onPrimaryContainer,
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
                                 lineHeight = 11.sp,

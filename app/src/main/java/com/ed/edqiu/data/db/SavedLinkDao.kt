@@ -218,18 +218,19 @@ interface SavedLinkDao {
     @Query("DELETE FROM saved_links")
     suspend fun clearAll()
 
-    @Query("SELECT COUNT(*) FROM saved_links WHERE status = :status")
-    fun countByStatus(status: LinkStatus): Flow<Int>
-
-    /** 收件箱计数（2026-10 我的页统计卡）：非 DELETED 终态的用户线链接（不含订阅线）。 */
-    @Query("SELECT COUNT(*) FROM saved_links WHERE status != 'DELETED' AND origin != 'subscription'")
+    /**
+     * 收件箱计数（我的页统计卡）：用户线全部链接（不含订阅线）。
+     * 2026-10-24 审计口径统一：含 DELETED——收件箱把 DELETED 死链归入「失败」正常
+     * 显示并计入统计卡总数，旧的排除口径会让我的页数字恒小于收件箱实际条数。
+     */
+    @Query("SELECT COUNT(*) FROM saved_links WHERE origin != 'subscription'")
     fun observeInboxCount(): Flow<Int>
 
-    /** 按状态取 tweetId 列表（自动预下载攒批用）。 */
-    @Query("SELECT tweetId FROM saved_links WHERE status = :status ORDER BY saved_at DESC")
-    suspend fun getTweetIdsByStatus(status: LinkStatus): List<String>
+    /** 用户线待处理数（2026-10-24：Tab 栏红点徽标——badgeCount 参数此前从未被喂值，死功能救活）。 */
+    @Query("SELECT COUNT(*) FROM saved_links WHERE status = 'PENDING' AND origin != 'subscription'")
+    fun observeUserPendingCount(): Flow<Int>
 
-    /** 按状态 + 来源线取 tweetId（自动预下载只取 user 线；订阅线归订阅队列）。 */
+    /** 按状态 + 来源线取 tweetId（收件箱「全部下载」取 user 线；订阅线归订阅队列）。 */
     @Query(
         "SELECT tweetId FROM saved_links WHERE status = :status AND origin = :origin ORDER BY saved_at DESC"
     )

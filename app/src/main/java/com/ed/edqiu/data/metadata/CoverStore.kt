@@ -108,9 +108,4 @@ object CoverStore {
             }
         }
     }
-
-    /** 清理全部本地封面（预留：备份恢复/数据重置场景可调用）。 */
-    fun clearAll(context: Context) {
-        runCatching { coversDir(context).deleteRecursively() }
-    }
 }

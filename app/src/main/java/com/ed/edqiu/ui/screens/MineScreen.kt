@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -109,68 +108,85 @@ fun MineScreen(mineNav: MineNav) {
             .fillMaxSize()
             .statusBarsPadding(),
     ) {
-        // ===== 身份头部：220dp 平台色渐变（160deg）=====
+        // ===== 身份头部（2026-10-24 重设计）：不透明平台色横幅退役 =====
+        // 旧版 220dp #5E5CE6→#007AFF→#0A2540 实底渐变在壁纸舞台上是「贴上去的色块」，
+        // 与底缘玻璃卡片的衔接生硬（用户反馈突兀）。新版 = 「浮在舞台上的身份区」：
+        // primary 光晕衬底（与 GlassBackground 光斑同语言，色彩氛围保留）+
+        // 玻璃环头像（暖色核心保留品牌身份）+ 主题色文字（浅深双主题可读），
+        // 与下方统计卡/领域卡同处一个玻璃世界，无边界线。
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(220.dp)
-                .background(
-                    Brush.verticalGradient(
-                        colorStops = arrayOf(
-                            0.0f to Color(0xFF5E5CE6),
-                            0.6f to Color(0xFF007AFF),
-                            1.0f to Color(0xFF0A2540),
-                        )
-                    )
-                ),
+                .height(170.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Column(
+            // primary 径向光晕：身份区的色彩来源，边缘透明融进壁纸（默认圆心=区域中心）
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(top = 40.dp),
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
+                                Color.Transparent
+                            ),
+                            radius = 620f
+                        )
+                    )
+            )
+            Column(
+                modifier = Modifier.padding(top = 18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(68.dp)
-                        .shadow(10.dp, CircleShape)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.linearGradient(
-                                listOf(Color(0xFFFFD36E), Color(0xFFFF375F))
-                            )
-                        ),
-                    contentAlignment = Alignment.Center,
+                // 玻璃环 + 暖色核心：外圈 L2 玻璃圆接入材质世界，内核保留品牌暖渐变
+                GlassSurface(
+                    tier = GlassTier.L2,
+                    shape = CircleShape,
+                    modifier = Modifier.size(84.dp)
                 ) {
-                    Text(
-                        text = "秋",
-                        color = Color.White,
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(8.dp)
+                            .shadow(8.dp, CircleShape)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(Color(0xFFFFD36E), Color(0xFFFF375F))
+                                )
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "秋",
+                            color = Color.White,
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                    }
                 }
-                Spacer(Modifier.height(9.dp))
+                Spacer(Modifier.height(12.dp))
                 Text(
                     text = "小秋",
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onBackground,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.ExtraBold,
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
                     text = "Edqiu v${BuildConfig.VERSION_NAME} · 本地账户",
-                    color = Color.White.copy(alpha = 0.75f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 10.5.sp,
                 )
             }
         }
 
-        // ===== 主体：统计卡 + 六领域卡菜单（上移 24dp 叠进渐变头底部）=====
+        // ===== 主体：统计卡 + 六领域卡菜单（2026-10-24 常规流式布局，
+        // 移除旧 -24dp 上叠 hack——头部不再是不透明横幅，无需压边衔接）=====
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .offset(y = (-24).dp)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -188,6 +204,7 @@ fun MineScreen(mineNav: MineNav) {
             ) {
                 SubMenuItemRow(Icons.Default.Download, "下载中心", "正在下载与已完成的作品", mineNav.openDownloadCenter)
                 SubMenuDivider()
+                // 2026-10-24：30 天保留期清理已实装（启动时清过期归档），文案恢复承诺
                 SubMenuItemRow(Icons.Default.Delete, "回收站", "已删除项目保留 30 天，可随时恢复", mineNav.openTrash)
                 SubMenuDivider()
                 SubMenuItemRow(Icons.Default.Person, "作者中心", "按作者归档浏览与订阅", mineNav.openAuthors)
@@ -199,7 +216,7 @@ fun MineScreen(mineNav: MineNav) {
                 isExpanded = expandedSection == SubMenu.AUTOMATION,
                 onToggle = { expandedSection = toggle(expandedSection, SubMenu.AUTOMATION) }
             ) {
-                SubMenuItemRow(Icons.Default.NotificationsActive, "作品订阅", "订阅作者主页，新作品自动入库下载") { mineNav.openSubscription() }
+                SubMenuItemRow(Icons.Default.NotificationsActive, "作品订阅", "订阅作者主页，新作品自动入库，点按下载") { mineNav.openSubscription() }
                 SubMenuDivider()
                 SubMenuItemRow(Icons.Default.ContentPaste, "下载行为", "失败重试策略与后台状态核对") { mineNav.openEdqiuSection(XSection.CAPTURE) }
             }

@@ -100,6 +100,14 @@ interface DownloadHistoryDao {
     @Query("SELECT filePath FROM download_history")
     suspend fun getAllFilePaths(): List<String>
 
+    /** 全量视频行（一次性快照，2026-10-24 同媒体重下合并用）。 */
+    @Query("SELECT * FROM download_history WHERE mediaType = 'VIDEO'")
+    suspend fun getAllVideosOnce(): List<DownloadHistoryEntity>
+
+    /** 全量行（一次性快照，2026-10-24 幽灵行清理=文件外部删除后的 DB 残留）。 */
+    @Query("SELECT * FROM download_history")
+    suspend fun getAllOnce(): List<DownloadHistoryEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: DownloadHistoryEntity)
 

@@ -61,7 +61,7 @@
              填写（下载/解析 API 均为 https），必须放行明文；http 明文含 Basic Auth 凭证，
              公网服务仍建议 https（见 docs/WEBDAV-SYNC.md §9） -->
 
-        <!-- Titanic 开屏动画（2026-09-30）：LAUNCHER 入口，3s 后进 MainActivity；
+        <!-- 开屏（2026-10-24 液态玻璃重设计）：LAUNCHER 入口，就绪即走（1.5s 保底/3s 兜底）；
              shortcuts meta-data 必须挂在 LAUNCHER activity 上，随入口一并迁来 -->
         <!-- 2026-10-03：开屏与主界面均锁定竖屏（用户定案，App 不跟随系统自动旋转） -->
         <activity

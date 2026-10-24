@@ -205,7 +205,9 @@ class DownloadMonitor(private val context: Context) {
                 ?.bufferedReader()
                 ?.use { it.readText() }
         }
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        // 2026-10-24 审计：文件读取失败静默返回 null 无法排查，补日志（语义不变）
+        android.util.Log.w("DownloadMonitor", "readText failed: $uri", e)
         null
     }
 

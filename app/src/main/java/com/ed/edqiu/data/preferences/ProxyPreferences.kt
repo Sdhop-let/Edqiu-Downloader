@@ -31,14 +31,5 @@ class ProxyPreferences(context: Context) {
             .putString("proxy_type", settings.type)
             .apply()
     }
-
-    private fun parsePort(value: String?): Int? =
-        value?.toIntOrNull()?.takeIf { it in 1..65535 }
-
-    companion object {
-        private const val LOCAL_PROXY_HOST = "127.0.0.1"
-        private const val DEFAULT_PROXY_PORT = 7890
-        private val COMMON_PROXY_PORTS = listOf(7890, 7897, 10809, 10808, 1080, 8080)
-    }
 }
 

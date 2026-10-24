@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ed.edqiu.ui.theme.ThemeEffects
+import com.ed.edqiu.ui.util.pressableNoRipple
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -80,7 +81,10 @@ data class CapsuleMessage(
     val kind: FeedbackKind,
     val text: String,
     /** true = 常驻胶囊（如「正在保存…」），不自动消失，直到新消息覆盖或 [CapsuleFeedbackController.clear]。 */
-    val sticky: Boolean = false
+    val sticky: Boolean = false,
+    /** 可选操作按钮文案（2026-10-24 设计：如「撤销」）——非 null 时胶囊尾部渲染操作入口，停留时长延长。 */
+    val actionLabel: String? = null,
+    val onAction: (() -> Unit)? = null
 )
 
 /**
@@ -93,8 +97,8 @@ class CapsuleFeedbackController {
 
     private var seq = 0L
 
-    fun show(kind: FeedbackKind, text: String, sticky: Boolean = false) {
-        current.value = CapsuleMessage(id = ++seq, kind = kind, text = text, sticky = sticky)
+    fun show(kind: FeedbackKind, text: String, sticky: Boolean = false, actionLabel: String? = null, onAction: (() -> Unit)? = null) {
+        current.value = CapsuleMessage(id = ++seq, kind = kind, text = text, sticky = sticky, actionLabel = actionLabel, onAction = onAction)
     }
 
     fun clear() {
@@ -102,10 +106,11 @@ class CapsuleFeedbackController {
     }
 }
 
-/** 胶囊自动消失时长：成功 2.4s，中性（订阅更新等轻提示）3.2s，失败 3.6s。 */
-private fun autoDismissMillis(kind: FeedbackKind): Long = when (kind) {
-    FeedbackKind.ERROR -> 3600L
-    FeedbackKind.NEUTRAL -> 3200L
+/** 胶囊自动消失时长：成功 2.4s，中性（订阅更新等轻提示）3.2s，失败 3.6s；带操作按钮 5.2s（留反应时间）。 */
+private fun autoDismissMillis(kind: FeedbackKind, hasAction: Boolean): Long = when {
+    hasAction -> 5200L
+    kind == FeedbackKind.ERROR -> 3600L
+    kind == FeedbackKind.NEUTRAL -> 3200L
     else -> 2400L
 }
 
@@ -125,7 +130,7 @@ fun CapsuleFeedbackHost(
                 displayed = message
                 visible = true
                 if (!message!!.sticky) {
-                    delay(autoDismissMillis(message!!.kind))
+                    delay(autoDismissMillis(message!!.kind, message!!.actionLabel != null))
                     visible = false
                 }
             }
@@ -166,7 +171,16 @@ fun CapsuleFeedbackHost(
             ) + scaleOut(tween(200), targetScale = 0.9f) + fadeOut(tween(160))
         ) {
             displayed?.let { msg ->
-                CapsulePill(kind = msg.kind, text = msg.text)
+                CapsulePill(
+                    kind = msg.kind,
+                    text = msg.text,
+                    actionLabel = msg.actionLabel,
+                    // 点操作：执行回调并立即收起（不等 5.2s 计时）
+                    onActionClick = {
+                        msg.onAction?.invoke()
+                        visible = false
+                    }
+                )
             }
         }
     }
@@ -175,7 +189,9 @@ fun CapsuleFeedbackHost(
 @Composable
 private fun CapsulePill(
     kind: FeedbackKind,
-    text: String
+    text: String,
+    actionLabel: String? = null,
+    onActionClick: (() -> Unit)? = null
 ) {
     val accent = when (kind) {
         FeedbackKind.SUCCESS -> Color(0xFF34C759)
@@ -185,6 +201,8 @@ private fun CapsulePill(
     // 2026-09-16 液态玻璃升级：Android 13+ 真折射深玻璃（透出并折射底层内容），
     // 回退路径保持原深色 pill 视觉（94% 深底），可读性零回归
     if (rememberRealGlassAvailable()) {
+        // effects lambda 是绘制期（非 Composable 上下文），全局参数在组合期读取后捕获
+        val dispersionOn = ThemeEffects.GlassDispersion.current > 0f
         Box(
             modifier = Modifier
                 .padding(horizontal = 24.dp)
@@ -202,13 +220,20 @@ private fun CapsulePill(
                         vibrancy()
                         blur(10.dp.toPx())
                         // 2026-10-21 对齐液态玻璃教程：玻璃深度 10/12 → 14/16dp，
-                        // 与 GlassOverlaySurface 深度增强同步（Depth=20 对应物）
-                        lens(14.dp.toPx(), 16.dp.toPx())
+                        // 与 GlassOverlaySurface 深度增强同步（Depth=20 对应物）。
+                        // 2026-10-24 液态试点：胶囊=小曲面水珠，开 depthEffect 径向深度扭曲 +
+                        // 通道级色散（库 RefractionWithDispersion 七光谱采样，随色散滑块开关）
+                        lens(
+                            14.dp.toPx(),
+                            16.dp.toPx(),
+                            depthEffect = true,
+                            chromaticAberration = dispersionOn
+                        )
                     },
                     onDrawSurface = { drawRect(Color(0xB314181C)) }
                 )
         ) {
-            PillInner(kind = kind, accent = accent, text = text)
+            PillInner(kind = kind, accent = accent, text = text, actionLabel = actionLabel, onActionClick = onActionClick)
         }
     } else {
         Box(
@@ -223,7 +248,7 @@ private fun CapsulePill(
                 .clip(RoundedCornerShape(50))
                 .background(Color(0xF01A1D21))
         ) {
-            PillInner(kind = kind, accent = accent, text = text)
+            PillInner(kind = kind, accent = accent, text = text, actionLabel = actionLabel, onActionClick = onActionClick)
         }
     }
 }
@@ -233,7 +258,9 @@ private fun CapsulePill(
 private fun BoxScope.PillInner(
     kind: FeedbackKind,
     accent: Color,
-    text: String
+    text: String,
+    actionLabel: String? = null,
+    onActionClick: (() -> Unit)? = null
 ) {
     // 2026-10-21 对齐液态玻璃教程：顶部镜面高光亮度跟随全局光源强度（0-1）
     val lightIntensity = ThemeEffects.GlassLightIntensity.current.coerceIn(0f, 1f)
@@ -304,5 +331,25 @@ private fun BoxScope.PillInner(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.widthIn(max = 300.dp)
         )
+        // 操作入口（2026-10-24 设计：胶囊承载「撤销」类带按钮反馈，替代 M3 Snackbar）：
+        // 分隔线 + 强调色粗体按钮，点按执行回调并由 Host 立即收起胶囊
+        if (actionLabel != null && onActionClick != null) {
+            Spacer(Modifier.size(10.dp))
+            Box(
+                Modifier
+                    .size(width = 1.dp, height = 14.dp)
+                    .background(Color.White.copy(alpha = 0.25f))
+            )
+            Spacer(Modifier.size(10.dp))
+            Text(
+                text = actionLabel,
+                color = if (accent.alpha >= 0.5f) accent else Color.White.copy(alpha = 0.92f),
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier
+                    .pressableNoRipple { onActionClick() }
+                    .padding(vertical = 2.dp)
+            )
+        }
     }
 }

@@ -40,8 +40,8 @@ android {
         //   16KB 页设备上 ffmpeg 功能不可用——需升级上游依赖或等待重打包后复测。
         targetSdk = 37
         // 2026-10-21 v1.9.4：液态玻璃光学升级（光源角度/亮度/色散对齐 Apple 液态玻璃）+ 强调色定版固定绿 + 统计块数据可视化重设计
-        versionCode = 54
-        versionName = "1.9.5"
+        versionCode = 55
+        versionName = "1.9.6"
 
         // 2026-09-15：只保留 arm64-v8a（Android 16/17 手机端均为 arm64），APK 从 225.9MB 降至约 80MB；
         // ffmpeg/yt-dlp 功能完整保留，x86 系模拟器不再支持

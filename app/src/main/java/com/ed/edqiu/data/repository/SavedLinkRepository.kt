@@ -45,12 +45,7 @@ class SavedLinkRepository(
     /** 上次离开（since 之后）订阅线捕获的新作品数（进软件胶囊提示用）。 */
     suspend fun countNewSubscriptionSince(since: Long): Int = dao.countNewSubscriptionSince(since)
 
-    fun countPending(): Flow<Int> = dao.countByStatus(LinkStatus.PENDING)
-
-    /** 当前 PENDING 条目的 tweetId 列表（自动预下载批量处理用）。 */
-    suspend fun pendingTweetIds(): List<String> = dao.getTweetIdsByStatus(LinkStatus.PENDING)
-
-    /** 当前 PENDING + 指定来源线的 tweetId（自动预下载只取 user 线，2026-10-17 双线隔离）。 */
+    /** 当前 PENDING + 指定来源线的 tweetId（收件箱「全部下载」只取 user 线，双线隔离）。 */
     suspend fun pendingTweetIds(origin: String): List<String> =
         dao.getTweetIdsByStatusAndOrigin(LinkStatus.PENDING, origin)
 

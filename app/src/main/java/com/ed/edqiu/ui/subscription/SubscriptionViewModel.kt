@@ -270,6 +270,19 @@ class SubscriptionViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    /**
+     * 删除订阅线捕获的单条作品（2026-10-24 审计补齐：订阅作品此前全工程无删除入口，
+     * 不想要的帖子永久留在库并持续计入「共收录 N 条」）。长按作品卡触发，确认弹窗后走
+     * 收件箱同一条 archive 链路（可从回收站恢复）。
+     */
+    fun deletePost(tweetId: String) {
+        viewModelScope.launch {
+            val repo = savedLinkRepository ?: return@launch
+            runCatching { repo.delete(tweetId) }
+            _state.update { it.copy(message = FeedbackMessage("已删除作品（回收站可恢复）", FeedbackKind.NEUTRAL)) }
+        }
+    }
+
     private fun platformLabel(platform: String): String =
         SubPlatform.entries.firstOrNull { it.key == platform }?.label ?: platform
 }

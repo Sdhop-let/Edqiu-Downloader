@@ -127,7 +127,6 @@ fun ListScreen(
     val context = LocalContext.current
     val snackbar = LocalSnackbarController.current
     val links by vm.links.collectAsStateWithLifecycle()
-    val pendingCount by vm.pendingCount.collectAsStateWithLifecycle()
     val monitorUri by vm.monitorUri.collectAsStateWithLifecycle()
     val captureFeedback by vm.captureFeedback.collectAsStateWithLifecycle()
     val actionFeedback by vm.actionFeedback.collectAsStateWithLifecycle()
@@ -233,10 +232,17 @@ fun ListScreen(
                         null -> FeedbackKind.NEUTRAL
                     },
                 )
+                // 2026-10-24：撤销类消息补 kind → 走胶囊（胶囊已支持操作按钮，
+                // M3 Snackbar 退役路径）；语义色沿用三态映射
                 feedback.actionLabel != null -> snackbar.show(
                     message = feedback.message,
                     actionLabel = feedback.actionLabel,
-                    onAction = feedback.onAction
+                    onAction = feedback.onAction,
+                    kind = when (feedback.success) {
+                        true -> FeedbackKind.SUCCESS
+                        false -> FeedbackKind.ERROR
+                        null -> FeedbackKind.NEUTRAL
+                    }
                 )
                 else -> snackbar.show(
                     message = feedback.message,
@@ -296,11 +302,18 @@ fun ListScreen(
                             .filter { it.tweetId in selectedIds }
                             .joinToString("\n") { it.rawUrl }
                         copyToClipboard(context, "Edqiu 批量链接", text)
-                        snackbar.show("已复制 ${selectedIds.size} 条链接")
+                        snackbar.show("已复制 ${selectedIds.size} 条链接", kind = FeedbackKind.SUCCESS)
                     },
                     onBatchDownload = { showBatchPreview = true },
-                    onBatchDownloadAll = vm::downloadAllPending,
                     onBatchDelete = vm::deleteSelected,
+                    // 2026-10-24：统计总览卡（数据与「全部下载」动作合一）移入固定头部区，
+                    // 随滚动收缩折叠；右上角「下载」按钮退役（动作进了统计卡）
+                    pendingCount = links.count { it.status == LinkStatus.PENDING },
+                    downloadedCount = links.count { it.status == LinkStatus.DOWNLOADED },
+                    failedCount = links.count {
+                        it.status == LinkStatus.FAILED || it.status == LinkStatus.DELETED
+                    },
+                    onDownloadAll = vm::downloadAllPending,
                     collapse = titleCollapse
                 )
 
@@ -319,16 +332,10 @@ fun ListScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // ── 方案A v2（2026-10-22）：统计卡+搜索框移入列表随内容滚走，
-                    // 筛选行 sticky 吸顶——滚动后顶上只剩「标题行+吸顶筛选」，
-                    // 内容区最大化（iOS large title 语义：大元素滚走、导航条收窄）
-                    item(key = "inbox_stats_search") {
+                    // ── 2026-10-24：统计卡已上移固定区（InboxOverviewCard 收缩折叠），
+                    // 列表首项只留搜索行（偶发动作，随内容滚走）
+                    item(key = "inbox_search") {
                         InboxListHeader(
-                            pendingCount = links.count { it.status == LinkStatus.PENDING },
-                            downloadedCount = links.count { it.status == LinkStatus.DOWNLOADED },
-                            failedCount = links.count {
-                                it.status == LinkStatus.FAILED || it.status == LinkStatus.DELETED
-                            },
                             searchQuery = searchQuery,
                             onSearchChange = vm::setSearchQuery,
                             sortExpanded = sortExpanded,
@@ -526,9 +533,12 @@ private fun InboxHeader(
     batchEnabled: Boolean,
     onBatchCopy: () -> Unit,
     onBatchDownload: () -> Unit,
-    // 右上角「下载」= 直接下载全部待处理（不再是"进入批量选择"，避免误以为点了没反应）
-    onBatchDownloadAll: () -> Unit,
     onBatchDelete: () -> Unit,
+    // 2026-10-24：统计总览卡数据与动作（「全部下载」随待处理数进卡，不再占标题行按钮位）
+    pendingCount: Int,
+    downloadedCount: Int,
+    failedCount: Int,
+    onDownloadAll: () -> Unit,
     // 大标题折叠进度（2026-10-10）：0=展开（大标题+副标题）1=折叠（紧凑标题）
     collapse: Float = 0f
 ) {
@@ -634,25 +644,8 @@ private fun InboxHeader(
                                 modifier = Modifier.size(20.dp)
                             )
                         }
-                        // 右上角「下载」：直接批量下载全部待处理，结果走弹窗反馈
-                        HeaderIconButton(
-                            onClick = onBatchDownloadAll,
-                            contentDescription = "下载全部待处理"
-                        ) {
-                            Text(
-                                "下载",
-                                color = MaterialTheme.colorScheme.primary,
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.ExtraBold,
-                                    lineHeightStyle = LineHeightStyle(
-                                        alignment = LineHeightStyle.Alignment.Center,
-                                        trim = LineHeightStyle.Trim.Both
-                                    )
-                                ),
-                                modifier = Modifier.offset(y = (-1).dp)
-                            )
-                        }
-                        // 批量选择入口独立成「多选」，不再占用「下载」语义
+                        // 2026-10-24：「下载」按钮退役——全部下载动作并入统计总览卡
+                        //（动作与待处理数据同位，语义更直观）；标题行只留 粘贴/多选
                         HeaderIconButton(
                             onClick = onToggleSelection,
                             contentDescription = "进入批量选择"
@@ -675,6 +668,24 @@ private fun InboxHeader(
             }
         }
 
+        // 统计总览卡（2026-10-24 重设计）：固定头部区内随滚动收缩——
+        // 完整态（三指标+全部下载）↔ 紧凑态（进度条+摘要），与标题折叠同进度驱动，
+        // 滚动全程连续变形无弹簧迟滞；批量模式下退场聚焦操作
+        androidx.compose.animation.AnimatedVisibility(
+            visible = !selectionMode,
+            enter = androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.fadeOut()
+        ) {
+            InboxOverviewCard(
+                pendingCount = pendingCount,
+                downloadedCount = downloadedCount,
+                failedCount = failedCount,
+                onDownloadAll = onDownloadAll,
+                collapse = collapse,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
+
         // 批量模式下在「待处理」统计版块上方展开操作栏（尺寸与搜索栏统一）
         AnimatedVisibility(
             visible = selectionMode,
@@ -693,16 +704,169 @@ private fun InboxHeader(
 }
 
 /**
- * 列表内滚动头部（2026-10-22 方案A v2）：统计卡 + 搜索框。
+ * 收件箱统计总览卡（2026-10-24 重设计）：数据与「全部下载」动作合一 + 滚动收缩折叠。
  *
- * 从固定 InboxHeader 移入 LazyColumn——随内容一起滚走，滚动后顶上只剩
- * 标题行 + 吸顶筛选，内容区最大化（iOS large title 语义）。
+ * - 完整态（collapse=0）：三指标（待处理/已完成/失败，语义色圆点+tnum 等宽数字）
+ *   + 第 4 槽「全部下载」（下载图标+待处理数，动作与数据同位）；底部 3dp 完成度条常驻
+ * - 紧凑态（collapse=1）：指标行收 0，浮出 22dp 摘要行（mini 完成度条 + "283/312"）
+ *   ——统计信息以最密度形态留在导航区，不随列表滚走丢失
+ * - 过渡：全部由滚动进度直接驱动（高度/alpha 双通道线性映射），无弹簧补间 =
+ *   跟手零迟滞（与标题折叠同一驱动源，2026-10-22 方案A 移除 animateContentSize 教训）
  */
 @Composable
-private fun InboxListHeader(
+private fun InboxOverviewCard(
     pendingCount: Int,
     downloadedCount: Int,
     failedCount: Int,
+    onDownloadAll: () -> Unit,
+    collapse: Float,
+    modifier: Modifier = Modifier
+) {
+    val inboxTotal = (pendingCount + downloadedCount + failedCount).coerceAtLeast(1)
+    val doneFraction = (downloadedCount.toFloat() / inboxTotal).coerceIn(0f, 1f)
+    val progressBrush = Brush.horizontalGradient(
+        colors = listOf(
+            MaterialTheme.colorScheme.primary,
+            MaterialTheme.colorScheme.tertiary
+        )
+    )
+    GlassSurface(
+        tier = GlassTier.L1,
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column {
+            // ── 完整态：指标行 + 全部下载槽（随 collapse 收到 0 高）──
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height((46 * (1f - collapse)).dp)
+                    .graphicsLayer { alpha = 1f - collapse }
+                    .padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                MetricItem(
+                    label = "待处理",
+                    value = pendingCount.toString(),
+                    dotColor = statusColor(LinkStatus.PENDING),
+                    emphasize = pendingCount > 0
+                )
+                MetricDivider()
+                MetricItem(
+                    label = "已完成",
+                    value = downloadedCount.toString(),
+                    dotColor = statusColor(LinkStatus.DOWNLOADED)
+                )
+                MetricDivider()
+                MetricItem(
+                    label = "失败",
+                    value = failedCount.toString(),
+                    dotColor = statusColor(LinkStatus.FAILED),
+                    emphasize = failedCount > 0
+                )
+                MetricDivider()
+                // 第 4 槽：全部下载（动作与待处理数据同位）——有待处理时主色强调，
+                // 无待处理时降透明度禁用（不再是永远可点的孤立按钮）
+                val active = pendingCount > 0
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .graphicsLayer { alpha = if (active) 1f else 0.35f }
+                        .pressableNoRipple(enabled = active) { onDownloadAll() }
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            pendingCount.toString(),
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = (-0.02).sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            style = LocalTextStyle.current.copy(fontFeatureSettings = "tnum")
+                        )
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "全部下载",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+            // ── 紧凑态：摘要行（mini 完成度条 + 计数，随 collapse 浮出）──
+            if (collapse > 0.02f) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height((24 * collapse).dp)
+                        .graphicsLayer { alpha = collapse }
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(3.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(doneFraction)
+                                .fillMaxHeight()
+                                .background(progressBrush)
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "$downloadedCount/$inboxTotal",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = LocalTextStyle.current.copy(fontFeatureSettings = "tnum")
+                    )
+                }
+            }
+            // ── 底部完成度条（完整态常驻，与紧凑态摘要条无缝衔接）──
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+            ) {
+                if (downloadedCount > 0) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(doneFraction)
+                            .fillMaxHeight()
+                            .background(progressBrush)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 列表内滚动头部（2026-10-24 瘦身）：只留搜索框 + 排序入口。
+ *
+ * 统计卡 2026-10-24 移入固定头部区（InboxOverviewCard，随滚动收缩折叠）——
+ * 搜索是「偶发动作」随内容滚走（iOS large title 语义），统计是「常态信息」
+ * 以紧凑形态留在导航区，两类信息各归其位。
+ */
+@Composable
+private fun InboxListHeader(
     searchQuery: String,
     onSearchChange: (String) -> Unit,
     sortExpanded: Boolean,
@@ -710,69 +874,6 @@ private fun InboxListHeader(
     onSortSelected: (LinkSortOrder) -> Unit
 ) {
     Column {
-        // ── 收件箱统计卡（2026-10-21 重设计）：语义色数字 + 等宽排版 + 底部完成度条 ──
-        val inboxTotal = (pendingCount + downloadedCount + failedCount).coerceAtLeast(1)
-        GlassSurface(
-            tier = GlassTier.L1,
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 2.dp)
-        ) {
-            Column {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    MetricItem(
-                        label = "待处理",
-                        value = pendingCount.toString(),
-                        dotColor = statusColor(LinkStatus.PENDING),
-                        emphasize = pendingCount > 0
-                    )
-                    MetricDivider()
-                    MetricItem(
-                        label = "已完成",
-                        value = downloadedCount.toString(),
-                        dotColor = statusColor(LinkStatus.DOWNLOADED)
-                    )
-                    MetricDivider()
-                    MetricItem(
-                        label = "失败",
-                        value = failedCount.toString(),
-                        dotColor = statusColor(LinkStatus.FAILED),
-                        emphasize = failedCount > 0
-                    )
-                }
-                // 完成度条：已完成 / 总数，primary→tertiary 渐变
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(3.dp)
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
-                ) {
-                    if (downloadedCount > 0) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(fraction = downloadedCount.toFloat() / inboxTotal)
-                                .fillMaxHeight()
-                                .background(
-                                    Brush.horizontalGradient(
-                                        colors = listOf(
-                                            MaterialTheme.colorScheme.primary,
-                                            MaterialTheme.colorScheme.tertiary
-                                        )
-                                    )
-                                )
-                        )
-                    }
-                }
-            }
-        }
-
         // 搜索框 + 排序入口
         GlassSurface(
             tier = GlassTier.L1,
