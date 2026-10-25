@@ -125,7 +125,21 @@ class DownloaderClient(private val context: Context) {
                     // 这是路由决策而非引擎故障：API 活着，不计熔断。
                     if (error is HlsBetterSourceException) {
                         health.recordEngineSuccess(DownloadEngineHealth.ENGINE_FXTWITTER)
-                        return ytdlpFallback(normalizedUrl, tweetId, error.message ?: "存在 HLS 高画质源")
+                        val ytResult = ytdlpFallback(normalizedUrl, tweetId, error.message ?: "存在 HLS 高画质源")
+                        // 2026-10-25 宽路由保底：yt-dlp 拉流失败（无 HLS / 登录失效 / 网络）时
+                        // 回退内部引擎直下 mp4——「拉不到最高画质」不能变成「什么都拿不到」。
+                        // 用户主动取消不回退（尊重取消）
+                        if (ytResult is LaunchResult.Failed && ytResult.reason != "下载已取消") {
+                            val files = internalDownloader
+                                .downloadTweet(normalizedUrl, effectiveProxy, allowHlsRouting = false)
+                                .getOrNull()
+                                .orEmpty()
+                            if (files.isNotEmpty()) {
+                                health.recordEngineSuccess(DownloadEngineHealth.ENGINE_FXTWITTER)
+                                return LaunchResult.Downloaded(files)
+                            }
+                        }
+                        return ytResult
                     }
                     // 双线隔离（2026-10-17）：仅用户线失败计入全局熔断，
                     // 订阅线失败只记推文亲和（下方 markTweetFailed），不打熔断器
@@ -197,7 +211,12 @@ class DownloaderClient(private val context: Context) {
     }
 
     /** yt-dlp 回退下载：进度进下载中心、成功写 sidecar 供收件箱匹配。 */
-    private suspend fun ytdlpFallback(url: String, tweetId: String, internalError: String?): LaunchResult {
+    private suspend fun ytdlpFallback(
+        url: String,
+        tweetId: String,
+        internalError: String?,
+        uploader: String = "unknown",
+    ): LaunchResult {
         return runCatching {
             val proxyUrl = ProxyPreferences(context).getProxySettings().toProxyUrl()
             val cookiePreferences = CookiePreferences(context)
@@ -238,7 +257,28 @@ class DownloaderClient(private val context: Context) {
                 playlistIndex = null,
                 processId = task.id
             ).fold(
-                onSuccess = { path ->
+                onSuccess = { rawPath ->
+                    // 2026-10-25 产物规约化（对齐 MediaQualityUpgrader.performHlsUpgrade 修复）：
+                    // yt-dlp 模板产物在 {uploader}/{标题}.mp4 子目录且名含推文无关标题——
+                    // 扫描期解析依赖规约名，历史遗留曾因此产生重复条目。此处重命名/移动回
+                    // 规约名 {uploader}_{tweetId}_1_video_best.mp4（根目录），并清空残留子目录
+                    val rawFile = File(rawPath)
+                    val safeUploader = uploader.replace(Regex("[/\\:*?\"<>|]"), "_").ifBlank { "unknown" }
+                    val convention = File(outputDir, "${safeUploader}_${tweetId}_1_video_best.mp4")
+                    val finalFile = if (convention.absolutePath != rawFile.absolutePath) {
+                        runCatching {
+                            if (convention.exists()) convention.delete()
+                            if (rawFile.renameTo(convention)) {
+                                rawFile.parentFile
+                                    ?.takeIf { it.isDirectory && it.list()?.isEmpty() == true }
+                                    ?.delete()
+                                convention
+                            } else {
+                                rawFile.copyTo(convention, overwrite = true).also { rawFile.delete() }
+                            }
+                        }.getOrElse { rawFile }
+                    } else rawFile
+                    val path = finalFile.absolutePath
                     writeSidecar(File(path), url, tweetId)
                     DownloadTaskBus.updateTask(task.id) {
                         it.copy(

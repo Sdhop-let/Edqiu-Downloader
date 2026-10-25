@@ -33,8 +33,11 @@ class TweetGoneException(message: String) : Exception(message)
  * 下载层收到该异常后转交 yt-dlp 引擎拉取 HLS 最佳画质（2026-09-15 源头画质优化：
  * 避免先落盘低清 mp4 再靠后台升级，X 网页清晰而 App 内模糊的根源即在此）。
  */
-class HlsBetterSourceException(val maxMp4Bitrate: Int) :
-    Exception("检测到 HLS 高画质流（mp4 最高仅 ${maxMp4Bitrate}bps）")
+class HlsBetterSourceException(
+    val maxMp4Bitrate: Int,
+    // 2026-10-25：携带作者 handle——ytdlpFallback 据此把产物重命名回 App 规约名
+    val uploader: String = "unknown",
+) : Exception("检测到 HLS 高画质流（mp4 最高仅 ${maxMp4Bitrate}bps）")
 
 /**
  * 引擎一：FXTwitter 直连下载器。
@@ -58,7 +61,13 @@ class InternalMediaDownloader(private val context: Context) {
         val publishedAt: Long? = null
     )
 
-    suspend fun downloadTweet(rawUrl: String, proxy: ProxySettings? = null): Result<List<DownloadedFile>> = withContext(Dispatchers.IO) {
+    suspend fun downloadTweet(
+        rawUrl: String,
+        proxy: ProxySettings? = null,
+        // 2026-10-25：false = 禁用 HLS 路由（DownloaderClient 回退直下 mp4 时用，
+        // 防止「yt-dlp 拉流失败 → 重试内部 → 又被路由回 yt-dlp」死循环）
+        allowHlsRouting: Boolean = true,
+    ): Result<List<DownloadedFile>> = withContext(Dispatchers.IO) {
         runCatching {
             val tweetId = TweetIdExtractor.fromUrl(rawUrl)
                 ?: error("链接中没有有效的推文 ID")
@@ -81,11 +90,23 @@ class InternalMediaDownloader(private val context: Context) {
             val media = extractMedia(tweet)
             if (media.isEmpty()) error("推文中没有可下载的视频或图片")
 
-            // 2026-09-15 源头画质优化：mp4 变体最高码率不足 2Mbps 且存在 HLS 流时，
-            // 不落盘低清文件，直接转交 yt-dlp 引擎拉 HLS 最佳画质（1080p+）
+            // 2026-09-15 源头画质优化 → 2026-10-25 放宽（对齐 MediaQualityUpgrader 语义）：
+            // 旧条件 = hasHls && <2Mbps——FXTwitter 的 HLS 标记经常缺失，大量 ≤720p 视频先落盘
+            // 低清文件、再靠后台升级器二次下载（重复流量+等待）。现对齐升级器的激进档：
+            // 已配置 X Cookie（登录态可拉 1080p HLS）时，最高 mp4 <2Mbps 即直接转 yt-dlp 一次到位。
+            // 守卫：仅含视频的推文路由（纯图片推文无流可拉）；16KB 页机型 ffmpeg 不可用不路由；
+            // 调用方 allowHlsRouting=false 时跳过（回退通道专用）
             val (maxMp4Bitrate, hasHls) = analyzeVariants(tweet)
-            if (hasHls && maxMp4Bitrate < 2_000_000) {
-                throw HlsBetterSourceException(maxMp4Bitrate)
+            val hasVideoMedia = media.any { it.kind != "image" }
+            val cookieBoost = runCatching {
+                com.ed.edqiu.data.preferences.CookiePreferences(context).hasCookies()
+            }.getOrDefault(false)
+            val is16kPage = (context.applicationContext as? com.ed.edqiu.TwitterDownloaderApp)
+                ?.is16kPageDevice == true
+            if (allowHlsRouting && hasVideoMedia && !is16kPage &&
+                maxMp4Bitrate < 2_000_000 && (hasHls || cookieBoost)
+            ) {
+                throw HlsBetterSourceException(maxMp4Bitrate, uploader)
             }
 
             val outputDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)

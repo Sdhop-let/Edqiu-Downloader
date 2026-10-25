@@ -4,12 +4,12 @@
 
 Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数据只存在你自己的手机和网盘里。
 
-[**下载 v1.9.9**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
+[**下载 v1.9.10**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
 
 [![Release CI](https://img.shields.io/badge/发版-推送_tag_自动构建-2EA043)](.github/workflows/release.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-F0B429)](LICENSE)
 
-> v1.9.9（versionCode 58）· Android 7.0+（API 24）· 仅 arm64-v8a
+> v1.9.10（versionCode 59）· Android 7.0+（API 24）· 仅 arm64-v8a
 > 曾用名：XInvox / EsQp / TwitterDownloader（已合并为 Edqiu）
 
 ---
@@ -34,7 +34,7 @@ Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数
 |---|---|
 | **链接捕获** | 四通道共用一条捕获管线：系统分享面板、任意 App 划词、跨 App 下载契约（`DOWNLOAD_TWEET`）、收件箱粘贴（自动读剪贴板，多条链接一键批量入库） |
 | **收件箱** | iOS large title 语义：统计总览卡（待处理 / 已完成 / 失败 + **全部下载**与数据同位）随滚动收缩成进度摘要条，筛选行吸顶常驻；批量管理与多选；删除可撤销（撤销按钮直接在玻璃胶囊上） |
-| **下载器** | FXTwitter → yt-dlp → 第三方 API 三级引擎自动降级；HLS 高码率自动升级 1080p+；点按即刻反馈进度（引擎链启动期无空窗）；引擎熔断按发起方隔离——后台路径的失败永不误伤手动下载 |
+| **下载器** | FXTwitter → yt-dlp → 第三方 API 三级引擎自动降级；HLS 直拉（配 Cookie 时 ≤720p 视频下载即拉 1080p+，失败自动回退 mp4）；点按即刻反馈进度（引擎链启动期无空窗）；引擎熔断按发起方隔离——后台路径的失败永不误伤手动下载 |
 | **失败可见** | 失败的引擎链详情直接写在卡片上，弹窗同步完整信息；自动重试按退避策略最多 3 次 |
 | **媒体库** | **双列封面网格**（大封面 + 时长角标 + 作者/画质行，一屏尽览）；**默认按下载时间排序**——刚下完的在最上，可一键切换按发布时间（作者 · 发布日分组）；筛选计数胶囊固定在标题正下方；pHash 感知哈希查重；画质升级；与收件箱状态互相自愈 |
 | **播放器** | 抖音式纵向滑动流，按素材类型分流；媒体框比例跟手形变、切条零黑帧；倍速 / 横屏 / seek；返回自动落位回网格中该卡片并高亮 |
