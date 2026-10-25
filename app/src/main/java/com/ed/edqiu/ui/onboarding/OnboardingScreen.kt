@@ -223,12 +223,17 @@ private fun StepShell(
             }
         )
         Spacer(Modifier.height(26.dp))
-        Box(
-            modifier = Modifier.graphicsLayer {
-                val s = stage(0.36f)
-                alpha = s
-                translationY = (1f - s) * 16.dp.toPx()
-            }
+        // 2026-10-25 修复：Box 是层叠容器——content() 的多个直接子组件（三张能力卡/
+        // 两组输入框+按钮）全部堆在同一位置互相覆盖（首启引导排版重叠的根因）；
+        // 改 Column 纵向排布
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer {
+                    val s = stage(0.36f)
+                    alpha = s
+                    translationY = (1f - s) * 16.dp.toPx()
+                }
         ) {
             content()
         }
@@ -246,7 +251,7 @@ private fun WelcomeStep(isCurrent: Boolean) {
     ) {
         FeatureRow("分享保存", "在 X 里点分享选 Edqiu，或粘贴推文链接到收件箱")
         FeatureRow("一键下载", "自动选最高画质；支持批量与作者订阅")
-        FeatureRow("历史备份", "下载历史本地留存，可直连备份到百度/阿里/123/WebDAV")
+        FeatureRow("历史备份", "下载历史本地留存，可直连备份到你的 WebDAV 网盘（123 / 坚果云 / NAS…）")
         Spacer(Modifier.height(8.dp))
         Text(
             "后两步是可选配置，跳过也能正常使用",

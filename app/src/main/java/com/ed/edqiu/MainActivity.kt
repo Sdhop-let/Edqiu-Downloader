@@ -103,36 +103,42 @@ class MainActivity : ComponentActivity() {
             }
             val showOnboarding = !onboardingDone && !onboardingDismissed && !legacyUserSkipped
 
-            if (showSplash) {
-                // remember 必须！否则每次重组 splashDone 重置为 false → 永远停在开屏
-                var splashDone by remember { mutableStateOf(false) }
-                // 开屏 → （引导）→ 主界面：淡入交接（2026-09-28 统一过渡语言），替代硬切
-                Crossfade(
-                    targetState = splashDone,
-                    animationSpec = tween(320),
-                    label = "splashHandoff"
-                ) { done ->
-                    if (!done) {
-                        LaunchSplash {
-                            splashDone = true
-                            FirstLaunchManager.markShown(this@MainActivity)
+            // 2026-10-25 修复：引导分支此前未包 EdqiuTheme——Material 默认紫色主题
+            //（与全 app 固定 iOS 配色完全脱节）。开屏/引导/主界面三段统一 EdqiuTheme
+            val themeMode by container.settingsRepository.themeModeFlow
+                .collectAsState(initial = com.ed.edqiu.ui.theme.ThemeMode.SYSTEM)
+            com.ed.edqiu.ui.theme.EdqiuTheme(themeMode = themeMode) {
+                if (showSplash) {
+                    // remember 必须！否则每次重组 splashDone 重置为 false → 永远停在开屏
+                    var splashDone by remember { mutableStateOf(false) }
+                    // 开屏 → （引导）→ 主界面：淡入交接（2026-09-28 统一过渡语言），替代硬切
+                    Crossfade(
+                        targetState = splashDone,
+                        animationSpec = tween(320),
+                        label = "splashHandoff"
+                    ) { done ->
+                        if (!done) {
+                            LaunchSplash {
+                                splashDone = true
+                                FirstLaunchManager.markShown(this@MainActivity)
+                            }
+                        } else if (showOnboarding) {
+                            OnboardingScreen(
+                                settingsRepository = container.settingsRepository,
+                                onFinished = { onboardingDismissed = true }
+                            )
+                        } else {
+                            EdqiuApp(container = container)
                         }
-                    } else if (showOnboarding) {
-                        OnboardingScreen(
-                            settingsRepository = container.settingsRepository,
-                            onFinished = { onboardingDismissed = true }
-                        )
-                    } else {
-                        EdqiuApp(container = container)
                     }
+                } else if (showOnboarding) {
+                    OnboardingScreen(
+                        settingsRepository = container.settingsRepository,
+                        onFinished = { onboardingDismissed = true }
+                    )
+                } else {
+                    EdqiuApp(container = container)
                 }
-            } else if (showOnboarding) {
-                OnboardingScreen(
-                    settingsRepository = container.settingsRepository,
-                    onFinished = { onboardingDismissed = true }
-                )
-            } else {
-                EdqiuApp(container = container)
             }
         }
     }
