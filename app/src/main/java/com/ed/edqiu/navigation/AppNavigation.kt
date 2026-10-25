@@ -25,6 +25,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Home
@@ -504,8 +510,24 @@ fun AppNavigation(
                 com.ed.edqiu.data.db.EdqiuDatabase.getDatabase(badgeContext)
                     .savedLinkDao().observeUserPendingCount()
             }.collectAsStateWithLifecycle(initialValue = 0)
+            // 2026-10-25 Tab 图形换新：轮廓版（未选中）/ 实底版（选中）成对切换——
+            // 配合动态胶囊布局（选中=胶囊内图标+文字，未选中=纯图标）
             LiquidTabBar(
-                tabs = tabScreens.map { LiquidTab(label = it.label, icon = it.icon) },
+                tabs = tabScreens.mapIndexed { index, screen ->
+                    LiquidTab(
+                        label = screen.label,
+                        icon = when (index) {
+                            0 -> Icons.Outlined.Inbox
+                            1 -> Icons.Outlined.VideoLibrary
+                            else -> Icons.Outlined.Person
+                        },
+                        selectedIcon = when (index) {
+                            0 -> Icons.Filled.Inbox
+                            1 -> Icons.Filled.VideoLibrary
+                            else -> Icons.Filled.Person
+                        }
+                    )
+                },
                 selectedIndex = selectedTabIndex,
                 onSelect = selectTab,
                 badgeCount = inboxPendingBadge,

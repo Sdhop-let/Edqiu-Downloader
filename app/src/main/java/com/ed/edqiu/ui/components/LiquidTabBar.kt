@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -184,17 +184,14 @@ fun LiquidTabBar(
         ) {
             tabs.forEachIndexed { index, tab ->
                 val selected = index == selectedIndex
-                val iconScale by animateFloatAsState(
-                    targetValue = if (selected) 1.12f else 1f,
-                    animationSpec = spring(dampingRatio = 0.7f, stiffness = 900f),
-                    label = "scale$index"
-                )
-                // 2026-09-16 对齐 demo 交互：未选中项明度 0.55，180ms 明度呼吸过渡
-                val contentAlpha by animateFloatAsState(
-                    targetValue = if (selected) 1f else 0.55f,
-                    animationSpec = tween(180),
-                    label = "alpha$index"
-                )
+                // ── 2026-10-25 Tab 项重设计 v2（用户要求重设计图标/文字/布局）──
+                // 布局语言从「三列同构（图标+文字）」改为「动态胶囊导航」：
+                // - 选中项：滑动胶囊内 **实底图标 + 文字横排**（iOS 动态岛式聚合，
+                //   选中态的信息密度与视觉重量显著高于未选中态）；
+                // - 未选项：纯 24dp 大图标居中（轮廓版图形，退为环境元素）；
+                // - 图形全部换新：轮廓版（未选）/ 实底版（选中）成对切换，
+                //   实底图形是「已进入」的强语义，替代旧版的颜色+缩放微调。
+                // 尺寸不变：外壳胶囊 50dp、三等分、点击区全宽。
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -207,38 +204,36 @@ fun LiquidTabBar(
                         ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                        modifier = Modifier
-                            .alpha(contentAlpha)
-                            .scale(iconScale)
-                    ) {
-                        Icon(
-                            imageVector = if (selected) tab.selectedIcon else tab.icon,
-                            contentDescription = tab.label,
-                            // 2026-10-24 选中态语言：胶囊改透明色洗后，选中图标/文字
-                            // 转 primary 主题色（与胶囊 tint 同色系，透明玻璃上的确定对比）
-                            tint = if (selected && liquidGlass) MaterialTheme.colorScheme.primary
-                            else if (selected) onPrimaryContainer
-                            else onSurfaceVariant,
-                            modifier = Modifier.size(21.dp)
-                        )
-                        AnimatedVisibility(
-                            visible = selected,
-                            enter = fadeIn(tween(180)) + slideInVertically(tween(180)) { it / 3 },
-                            exit = fadeOut(tween(100)) + slideOutVertically(tween(100)) { it / 3 }
+                    if (selected) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.alpha(1f)
                         ) {
+                            Icon(
+                                imageVector = tab.selectedIcon,
+                                contentDescription = null,
+                                tint = if (liquidGlass) MaterialTheme.colorScheme.primary
+                                else onPrimaryContainer,
+                                modifier = Modifier.size(19.dp)
+                            )
                             Text(
                                 text = tab.label,
                                 color = if (liquidGlass) MaterialTheme.colorScheme.primary
                                 else onPrimaryContainer,
-                                fontSize = 9.sp,
+                                fontSize = 11.5.sp,
                                 fontWeight = FontWeight.Bold,
-                                lineHeight = 11.sp,
-                                modifier = Modifier.padding(top = 1.dp)
+                                letterSpacing = 0.3.sp,
+                                maxLines = 1
                             )
                         }
+                    } else {
+                        Icon(
+                            imageVector = tab.icon,
+                            contentDescription = tab.label,
+                            tint = onSurfaceVariant.copy(alpha = 0.72f),
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
                 }
             }
