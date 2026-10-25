@@ -176,7 +176,7 @@ fun MineScreen(mineNav: MineNav) {
                 Text(
                     text = "Edqiu v${BuildConfig.VERSION_NAME} · 本地账户",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 10.5.sp,
+                    fontSize = 11.5.sp,
                 )
             }
         }
@@ -400,9 +400,9 @@ private fun ExpandableMenuSection(
                 Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                 Text(
                     subtitle,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 15.sp,
+                    lineHeight = 16.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -553,7 +553,7 @@ private fun SubMenuItemRow(
             Text(title, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
             Text(
                 subtitle,
-                fontSize = 10.5.sp,
+                fontSize = 11.5.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 lineHeight = 14.sp,
                 maxLines = 1,

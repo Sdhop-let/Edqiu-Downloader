@@ -553,14 +553,16 @@ fun MediaLibraryScreen(
     // 边缘渐隐：顶部 24dp 三段缓曲线 + 底部 24dp 沉降带（与收件箱同款软着陆）
     EdgeFadeScrim(
         edge = EdgeFadeEdge.Top,
-        color = MaterialTheme.colorScheme.background,
+        color = Color.Black,
         height = 24.dp,
+        maxAlpha = 0.26f,
         modifier = Modifier.align(Alignment.TopCenter)
     )
     EdgeFadeScrim(
         edge = EdgeFadeEdge.Bottom,
-        color = MaterialTheme.colorScheme.background,
+        color = Color.Black,
         height = 24.dp,
+        maxAlpha = 0.30f,
         modifier = Modifier.align(Alignment.BottomCenter)
     )
     }

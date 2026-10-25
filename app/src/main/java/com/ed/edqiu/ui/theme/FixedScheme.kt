@@ -90,7 +90,9 @@ fun fixedLightColorScheme(): ColorScheme {
         surface = Color(0xFFFFFFFF),
         onSurface = Color(0xFF000000),
         surfaceVariant = Color(0xFFE5E5EA),
-        onSurfaceVariant = Color(0xFF8A8A8E),
+        // 2026-10-25 壁纸舞台对比度加固：原 #8A8A8E 在亮色壁纸照片上可读性差（用户实报
+        // 「灰色文字可观度不高」），加深到 iOS secondaryLabel 加浓档
+        onSurfaceVariant = Color(0xFF5C5C61),
         surfaceTint = t.primary,
         outline = Color(0xFFC6C6C8),
         outlineVariant = Color(0xFFE5E5EA),
@@ -134,7 +136,8 @@ fun fixedDarkColorScheme(): ColorScheme {
         surface = Color(0xFF000000),
         onSurface = Color(0xFFFFFFFF),
         surfaceVariant = Color(0xFF2C2C2E),
-        onSurfaceVariant = Color(0xFF9E9EA6),
+        // 2026-10-25 壁纸舞台对比度加固：深色主题黑 scrim 压暗壁纸后，灰字提亮一档
+        onSurfaceVariant = Color(0xFFB0B0B8),
         surfaceTint = t.primary,
         outline = Color(0xFF545458),
         outlineVariant = Color(0xFF38383A),

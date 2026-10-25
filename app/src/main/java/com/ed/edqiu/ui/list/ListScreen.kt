@@ -385,16 +385,19 @@ fun ListScreen(
                 }
 
                 // 边缘渐隐：顶部 24dp 三段缓曲线（标题行底缘不再僵硬）+ 底部 24dp 沉降带
+                // 2026-10-25 白带修复：阴影式渐隐（原 background 白渐变在壁纸上=白色分界线）
                 EdgeFadeScrim(
                     edge = EdgeFadeEdge.Top,
-                    color = MaterialTheme.colorScheme.background,
+                    color = Color.Black,
                     height = 24.dp,
+                    maxAlpha = 0.26f,
                     modifier = Modifier.align(Alignment.TopCenter)
                 )
                 EdgeFadeScrim(
                     edge = EdgeFadeEdge.Bottom,
-                    color = MaterialTheme.colorScheme.background,
+                    color = Color.Black,
                     height = 24.dp,
+                    maxAlpha = 0.30f,
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
                 }
@@ -743,7 +746,9 @@ private fun InboxOverviewCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height((46 * (1f - collapse)).dp)
+                    // 2026-10-25：46→54dp——第四槽（图标+数字+label）比三列指标高，
+                    // 46dp 时 label「全部下载」被卡片下缘裁掉（用户实报文字丢失）
+                    .height((54 * (1f - collapse)).dp)
                     .graphicsLayer { alpha = 1f - collapse }
                     .padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
@@ -801,7 +806,7 @@ private fun InboxOverviewCard(
                     Spacer(Modifier.height(2.dp))
                     Text(
                         "全部下载",
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -1060,7 +1065,7 @@ private fun MetricItem(
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             label,
-            fontSize = 11.sp,
+            fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.SemiBold
         )

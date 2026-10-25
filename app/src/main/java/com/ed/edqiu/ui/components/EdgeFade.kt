@@ -24,8 +24,11 @@ import androidx.compose.ui.unit.dp
  * 使用约束：
  * - 叠在 LazyColumn 之上（Box 对齐上/下缘），**不参与布局、不挡点击**
  *   （Box 无 clickable，触摸穿透到下层列表）；
- * - color 传页面基调色（scheme.background）的半透明档——渐隐进背景色调
- *   而不是硬盖一层色块；壁纸舞台上 background 本身就是 scrim 后基调。
+ * - **2026-10-25 白带修复**：color 早期传 scheme.background（浅色=白，
+ *   maxAlpha 0.9 = 90% 不透明白带）——壁纸舞台时代 background 不再是页面
+ *   背景（背景是壁纸照片），白渐变盖在壁纸上就是一条刺眼白色分界线
+ *   （用户实报）。现统一传阴影色（Black 低 maxAlpha）：壁纸上读作
+ *   「内容沉入阴影」，深浅主题皆自然。
  */
 enum class EdgeFadeEdge { Top, Bottom }
 

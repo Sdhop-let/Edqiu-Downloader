@@ -15,6 +15,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
@@ -703,6 +704,9 @@ fun GlassBackground(
                     bitmap = wallpaper!!,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
+                    // 2026-10-25 错位修复：对齐桌面壁纸的顶部锚定（Crop 默认居中会把
+                    // 壁纸主体压到中下部，与桌面所见不一致——用户实报「头像与背景错位」）
+                    alignment = Alignment.TopCenter,
                     modifier = Modifier.fillMaxSize()
                 )
                 Box(Modifier.fillMaxSize().background(scrimColor))
@@ -726,6 +730,7 @@ fun GlassBackground(
                     bitmap = wallpaper!!,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
+                    alignment = Alignment.TopCenter,
                     modifier = Modifier
                         .fillMaxSize()
                         .blur(28.dp)
