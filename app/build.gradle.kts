@@ -40,8 +40,8 @@ android {
         //   16KB 页设备上 ffmpeg 功能不可用——需升级上游依赖或等待重打包后复测。
         targetSdk = 37
         // 2026-10-21 v1.9.4：液态玻璃光学升级（光源角度/亮度/色散对齐 Apple 液态玻璃）+ 强调色定版固定绿 + 统计块数据可视化重设计
-        versionCode = 59
-        versionName = "1.9.10"
+        versionCode = 60
+        versionName = "1.9.11"
 
         // 2026-09-15：只保留 arm64-v8a（Android 16/17 手机端均为 arm64），APK 从 225.9MB 降至约 80MB；
         // ffmpeg/yt-dlp 功能完整保留，x86 系模拟器不再支持
@@ -77,6 +77,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
+        }
+        // 2026-10-25 签名密钥更换：debug 与 release 同用正式密钥——调试机与正式版
+        // 同签名互可覆盖安装（旧 debug-fixed 密钥退役后，若 debug 仍用 ~/.android
+        // 旧密钥，装过新签名 release 的设备将无法再装 debug 包）
+        debug {
             signingConfig = signingConfigs.getByName("release")
         }
     }
