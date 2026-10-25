@@ -4,12 +4,12 @@
 
 Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数据只存在你自己的手机和网盘里。
 
-[**下载 v1.9.13**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
+[**下载 v1.9.14**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
 
 [![Release CI](https://img.shields.io/badge/发版-推送_tag_自动构建-2EA043)](.github/workflows/release.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-F0B429)](LICENSE)
 
-> v1.9.13（versionCode 62，新签名——v1.9.10 及更早版本须卸载重装，先网盘全量备份）· Android 7.0+（API 24）· 仅 arm64-v8a
+> v1.9.14（versionCode 63，新签名——v1.9.10 及更早版本须卸载重装，先网盘全量备份）· Android 7.0+（API 24）· 仅 arm64-v8a
 > 曾用名：XInvox / EsQp / TwitterDownloader（已合并为 Edqiu）
 
 ---

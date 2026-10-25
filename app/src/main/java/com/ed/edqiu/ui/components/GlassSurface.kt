@@ -387,7 +387,10 @@ fun GlassSurface(
     val base = if (dark) {
         Color(0xFF1A1D21).copy(alpha = (tier.bgAlpha + 0.10f) * alphaScale)
     } else {
-        Color.White.copy(alpha = tier.bgAlpha * alphaScale)
+        // 2026-10-25 壁纸舞台灰字可读性：浅色主题卡面 +0.12 白——灰字（onSurfaceVariant）
+        // 需要稳定浅色衬底，壁纸照片的暗区透过薄卡面会让深灰字不可读（用户实报）。
+        // 壁纸仍透出 50%+，玻璃感由折射边缘与色散保留
+        Color.White.copy(alpha = (tier.bgAlpha + 0.12f) * alphaScale)
     }
     // tint 叠加：磨砂越强 → tint 越轻，让被磨砂的背景色域更透出
     val glassColor = androidx.compose.ui.graphics.lerp(
@@ -674,7 +677,11 @@ fun GlassBackground(
     // 2026-10-24 浅色衬托修复：浅色 scrim 降档 0.30→0.18——浅色壁纸普遍偏亮偏平，
     // 白 scrim 只会把背景抹成均匀白场，玻璃折射「无素材可采」；少压一点让壁纸的
     // 明暗起伏留在场上（深色 0.34 不变，深色本来就有对比）
-    val scrimColor = if (dark) Color.Black.copy(alpha = 0.34f) else Color.White.copy(alpha = 0.18f)
+    // 2026-10-25 可读性总根源修复：浅色 scrim 0.18→0.35——0.18 时壁纸近乎裸奔
+    //（亮暗区并存），任何固定字色都会在某类壁纸区域失效（灰字/青字看不清，用户实报）。
+    // 0.35 白把舞台压成「稳定浅色衬底」，文字在任意壁纸下均可读；壁纸细节仍清晰可辨。
+    // 深色 0.34 不变（黑 scrim 下浅字对比本就充足）
+    val scrimColor = if (dark) Color.Black.copy(alpha = 0.34f) else Color.White.copy(alpha = 0.35f)
     val baseGradient = Brush.verticalGradient(
         0f to scheme.background,
         0.6f to scheme.surfaceContainer,
