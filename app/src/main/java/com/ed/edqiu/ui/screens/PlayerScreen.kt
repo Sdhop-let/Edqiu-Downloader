@@ -107,6 +107,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImagePainter
 import com.ed.edqiu.R
+import com.ed.edqiu.ui.privacy.privacyBlur
 import com.ed.edqiu.data.database.DownloadHistoryEntity
 import com.ed.edqiu.data.model.MediaFileTypes
 import com.ed.edqiu.domain.TweetIdExtractor
@@ -237,6 +238,16 @@ fun PlayerScreen(
     var pendingDelete by remember { mutableStateOf<DownloadHistoryEntity?>(null) }
     var showActions by remember { mutableStateOf(false) }
 
+    // 隐私模式（2026-11-07）：进场不自动播放、媒体面全模糊；按住画面 ≥200ms 临时
+    // 查看（起播），松手暂停并恢复模糊。privacyHold = 当前按住查看中（观察手势，不消费
+    // 事件——点击唤控制层/图片缩放手势不受影响）
+    val privacyBlur = com.ed.edqiu.ui.privacy.LocalPrivacyBlur.current
+    var privacyHold by remember { mutableStateOf(false) }
+    LaunchedEffect(privacyHold) {
+        if (!privacyBlur) return@LaunchedEffect
+        if (privacyHold) playerViewModel.play() else playerViewModel.pauseVideo()
+    }
+
     // ===================== 容器变形引擎（2026-09-30 第二版） =====================
     // 全屏矩形（窗口坐标；LocalConfiguration 与 boundsInWindow 同一坐标系）
     val configuration = LocalConfiguration.current
@@ -317,7 +328,10 @@ fun PlayerScreen(
                     snapshotFlow { playerViewModel.playerState.value.isReady }.first { it }
                 }
             }
-            playerViewModel.play()
+            // 2026-11-07 隐私模式：不起播——封面模糊常驻，按住画面才播放（松手暂停）
+            if (!privacyBlur) {
+                playerViewModel.play()
+            }
         }
     }
 
@@ -780,6 +794,31 @@ fun PlayerScreen(
                                 indication = null,
                                 onClick = { controlsVisible = !controlsVisible }
                             )
+                            // 隐私模式按住查看（2026-11-07）：纯观察手势不消费事件——
+                            // 按住 ≥200ms 临时解除模糊（视频同时起播，松手暂停恢复）；
+                            // 快速点按（唤控制层）与图片缩放手势完全不受影响
+                            .pointerInput(privacyBlur) {
+                                if (!privacyBlur) return@pointerInput
+                                awaitEachGesture {
+                                    awaitFirstDown(requireUnconsumed = false)
+                                    val held = withTimeoutOrNull(200) {
+                                        do {
+                                            val event = awaitPointerEvent()
+                                        } while (event.changes.any { it.pressed })
+                                        false
+                                    } ?: true
+                                    if (held) {
+                                        privacyHold = true
+                                        try {
+                                            do {
+                                                val event = awaitPointerEvent()
+                                            } while (event.changes.any { it.pressed })
+                                        } finally {
+                                            privacyHold = false
+                                        }
+                                    }
+                                }
+                            }
                     ) {
                         if (entity != null) {
                             if (sessionIsImage) {
@@ -797,6 +836,8 @@ fun PlayerScreen(
                                             ratio = { displayedRatio.value },
                                             fullscreen = { state.isFullscreen }
                                         )
+                                        // 隐私模式：图片整面模糊，按住页面临时查看
+                                        .privacyBlur(privacyBlur && !privacyHold)
                                 ) {
                                     ZoomableImageViewerPage(
                                         filePath = entity.filePath,
@@ -876,6 +917,9 @@ fun PlayerScreen(
                                                 ratio = { displayedRatio.value },
                                                 fullscreen = { state.isFullscreen }
                                             )
+                                            // 隐私模式：视频面模糊（封面/预览/暂停画面一并盖住），
+                                            // 按住页面临时查看
+                                            .privacyBlur(privacyBlur && !privacyHold)
                                     )
                                 }
                                 // 页内占位封面：
@@ -906,6 +950,8 @@ fun PlayerScreen(
                                         modifier = Modifier
                                             .fillMaxSize()
                                             .alpha(coverAlpha)
+                                            // 隐私模式：封面模糊（按住页面解除）
+                                            .privacyBlur(privacyBlur && !privacyHold)
                                     ) {
                                         // 2026-10-03 批次E：视频页封面优先渲染邻页预取的真实首帧
                                         //（非播放页 peek 未命中会补取；播放页仅 peek，不额外抽帧），

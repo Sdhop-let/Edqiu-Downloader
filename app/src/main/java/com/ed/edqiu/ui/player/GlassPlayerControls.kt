@@ -464,7 +464,9 @@ private fun GlassPlaylistThumb(
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
             frameOffsetSeconds = frameOffset,
-            preferLocalFrame = item.thumbnail.isBlank()
+            preferLocalFrame = item.thumbnail.isBlank(),
+            // 隐私模式（2026-11-07）：抽屉缩略模糊（一次性弹层，无需按住查看）
+            blurred = com.ed.edqiu.ui.privacy.LocalPrivacyBlur.current
         )
         if (selected) {
             Box(

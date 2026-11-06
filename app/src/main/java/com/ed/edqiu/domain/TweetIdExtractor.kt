@@ -15,8 +15,10 @@ import java.util.regex.Pattern
 object TweetIdExtractor {
 
     private const val MAX_INPUT_LENGTH = 8_192
+    // 2026-11-04 裸链容错：scheme 变为可选（x.com/user/status/123 不带 https:// 也认），
+    // 前置负向断言 (?<![A-Za-z0-9.]) 防止在 fox.com / box.com 等域名内部误命中 x.com
     private val STATUS_URL = Pattern.compile(
-        """(?i)https?://(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/(?:i/(?:web/)?status|[A-Za-z0-9_]+/status)/(\d{11,25})(?!\d)"""
+        """(?i)(?<![A-Za-z0-9.])(?:https?://)?(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/(?:i/(?:web/)?status|[A-Za-z0-9_]+/status)/(\d{11,25})(?!\d)"""
     )
     // 2026-10：\b 在下划线相邻处不成立（Twitter 屏幕名带下划线极常见）——数字边界改前后瞻
     private val RAW_ID = Pattern.compile("""(?<!\d)\d{11,25}(?!\d)""")
@@ -30,9 +32,13 @@ object TweetIdExtractor {
         return "https://x.com/i/status/$tweetId"
     }
 
+    // 2026-11-04 零宽字符清洗：部分 App 复制的正文夹带不可见字符（U+200B-U+200D/U+FEFF/U+2060），
+    // 会把 URL 拆断导致正则失配，提取前统一剔除
+    private val ZERO_WIDTH = Regex("[\\u200B-\\u200D\\uFEFF\\u2060]")
+
     private fun findStatusId(text: String?): String? {
         if (text.isNullOrBlank()) return null
-        val bounded = text.take(MAX_INPUT_LENGTH)
+        val bounded = ZERO_WIDTH.replace(text.take(MAX_INPUT_LENGTH), "")
         val matcher = STATUS_URL.matcher(bounded)
         return if (matcher.find()) matcher.group(1) else null
     }

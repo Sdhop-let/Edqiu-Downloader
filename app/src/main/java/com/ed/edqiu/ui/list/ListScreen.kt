@@ -117,6 +117,7 @@ import com.ed.edqiu.ui.components.FeedbackKind
 import com.ed.edqiu.ui.components.FeedbackMessage
 import com.ed.edqiu.ui.navigation.LocalSnackbarController
 import com.ed.edqiu.ui.util.copyToClipboard
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -144,24 +145,25 @@ fun ListScreen(
     var showBatchPreview by remember { mutableStateOf(false) }
     var showPasteDialog by remember { mutableStateOf(false) }
     var pasteText by remember { mutableStateOf("") }
-    // 2026-10-21 粘贴升级（一键读剪贴板）：点按先看剪贴板——含 X 链接直接捕获
-    // （单条走原提示、多条走批量汇总），没有链接才弹手输框并把剪贴板原文预填进去。
-    // Android 12+ 首次读取会由系统弹出「已粘贴」提示，属正常。
+    // 2026-11-04 机型特性适配：X App「分享→复制链接」的多选产物形态因 ROM/App 而异
+    // （多 ClipData 条目 / Intent / URI / HTML / URL 编码正文），全部形态由
+    // ClipContentReader 解出（含 EdqiuClip 诊断日志），批量正则提取；剪贴板里只有
+    // t.co 短链时也算 hasLink（捕获管线内有限时网络兜底展开）。没有链接才弹手输框。
     val pasteFromClipboard: () -> Unit = {
         val clip = (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
             as? android.content.ClipboardManager)?.primaryClip
-        val clipText = if (clip != null && clip.itemCount > 0) {
-            clip.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
-        } else {
-            ""
-        }
-        val hasLink = clipText.isNotBlank() &&
+        val clipTexts = com.ed.edqiu.capture.ClipContentReader.readClipTexts(clip, context)
+        val clipText = clipTexts.joinToString("\n")
+        val hasLink = clipText.isNotBlank() && (
             com.ed.edqiu.domain.BatchTweetUrlExtractor
-                .extractWithOriginals(clipText).isNotEmpty()
+                .extractWithOriginals(clipText).isNotEmpty() ||
+                com.ed.edqiu.capture.TcoLinkResolver.findShortLinks(clipText).isNotEmpty()
+            )
         if (hasLink) {
             vm.captureText(clipText)
         } else {
-            pasteText = if (clipText.length <= 2000) clipText else ""
+            // 手输框预填用第一条原始形态（不做解码/拼接，用户看到的仍是剪贴板原文）
+            pasteText = clipTexts.firstOrNull()?.takeIf { it.length <= 2000 } ?: ""
             showPasteDialog = true
         }
     }
@@ -178,7 +180,10 @@ fun ListScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                vm.refresh()
+                // 2026-11-07 卡顿修复：Tab 切回时 ON_RESUME 在 300ms 转场窗口内即触发，
+                // refresh 的 IO/重查询正好砸进双页同屏渲染峰值——延后到转场落定再跑
+                //（scope 随组合销毁自动取消，无泄漏）
+                scope.launch { delay(350); vm.refresh() }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -274,7 +279,10 @@ fun ListScreen(
     }
 
     // 是否已全选当前列表（全选后批量下载 → 确认即退出批量模式）
-    val allSelected = shown.isNotEmpty() && selectedIds.containsAll(shown.map { it.tweetId })
+    // 2026-11-07 卡顿修复：包 remember——此前每次重组（含转场逐帧）都全列表映射+containsAll
+    val allSelected = remember(shown, selectedIds) {
+        shown.isNotEmpty() && selectedIds.containsAll(shown.map { it.tweetId })
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -605,12 +613,24 @@ private fun InboxHeader(
                     )
                 }
             } else {
+                // 2026-11-07 对称排版：标题居中，按钮两侧对称（粘贴左 / 多选右，
+                // 两侧均为 44dp 圆钮 = 等宽槽位，标题真居中）
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
+                    HeaderIconButton(onClick = onPaste, contentDescription = "粘贴链接") {
+                        Icon(
+                            Icons.Default.ContentPaste,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
                         Text(
                             text = "收件箱",
                             style = MaterialTheme.typography.headlineMedium.copy(
@@ -638,34 +658,24 @@ private fun InboxHeader(
                             )
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        HeaderIconButton(onClick = onPaste, contentDescription = "粘贴链接") {
-                            Icon(
-                                Icons.Default.ContentPaste,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        // 2026-10-24：「下载」按钮退役——全部下载动作并入统计总览卡
-                        //（动作与待处理数据同位，语义更直观）；标题行只留 粘贴/多选
-                        HeaderIconButton(
-                            onClick = onToggleSelection,
-                            contentDescription = "进入批量选择"
-                        ) {
-                            Text(
-                                "多选",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.ExtraBold,
-                                    lineHeightStyle = LineHeightStyle(
-                                        alignment = LineHeightStyle.Alignment.Center,
-                                        trim = LineHeightStyle.Trim.Both
-                                    )
-                                ),
-                                modifier = Modifier.offset(y = (-1).dp)
-                            )
-                        }
+                    // 2026-10-24：「下载」按钮退役——全部下载动作并入统计总览卡
+                    //（动作与待处理数据同位，语义更直观）；标题行只留 粘贴/多选
+                    HeaderIconButton(
+                        onClick = onToggleSelection,
+                        contentDescription = "进入批量选择"
+                    ) {
+                        Text(
+                            "多选",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                lineHeightStyle = LineHeightStyle(
+                                    alignment = LineHeightStyle.Alignment.Center,
+                                    trim = LineHeightStyle.Trim.Both
+                                )
+                            ),
+                            modifier = Modifier.offset(y = (-1).dp)
+                        )
                     }
                 }
             }
@@ -1410,15 +1420,22 @@ private fun BatchDownloadPreviewDialog(
                                         )
                                     }
                                 } else {
-                                    AsyncImage(
-                                        model = link.thumbnailUrl,
-                                        contentDescription = link.caption ?: link.tweetId,
-                                        contentScale = ContentScale.Crop,
+                                    // 隐私模式（2026-11-07）：预览缩略模糊+按住查看
+                                    com.ed.edqiu.ui.privacy.PrivacyGateBox(
+                                        enabled = com.ed.edqiu.ui.privacy.LocalPrivacyBlur.current,
                                         modifier = Modifier
                                             .size(88.dp, 66.dp)
                                             .clip(RoundedCornerShape(10.dp))
-                                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                                    )
+                                    ) {
+                                        AsyncImage(
+                                            model = link.thumbnailUrl,
+                                            contentDescription = link.caption ?: link.tweetId,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        )
+                                    }
                                 }
                                 Text(
                                     text = link.authorName ?: link.authorId ?: link.tweetId,

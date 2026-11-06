@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
@@ -47,12 +49,15 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,20 +67,31 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
 import com.ed.edqiu.BuildConfig
+import com.ed.edqiu.data.media.AvatarStore
 import com.ed.edqiu.navigation.MineNav
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
+import com.ed.edqiu.ui.components.SmoothAlertDialog
+import com.ed.edqiu.ui.navigation.LocalAppContainer
 import com.ed.edqiu.ui.settings.XSection
 import com.ed.edqiu.ui.util.pressableNoRipple
+import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 private enum class SubMenu { LIBRARY, AUTOMATION, NETWORK, LOOK, STORAGE, GENERAL }
 
@@ -103,21 +119,47 @@ fun MineScreen(mineNav: MineNav) {
     val statsVm: MineStatsViewModel = viewModel()
     val stats by statsVm.stats.collectAsStateWithLifecycle()
 
+    // ===== 身份区自定义（2026-11-07 横排档案风）：昵称 / ID / 头像 =====
+    val appContainer = LocalAppContainer.current
+    val settingsRepo = appContainer.settingsRepository
+    val context = LocalContext.current
+    val identityScope = rememberCoroutineScope()
+    val profileName by settingsRepo.profileNameFlow.collectAsStateWithLifecycle(initialValue = "")
+    val profileId by settingsRepo.profileIdFlow.collectAsStateWithLifecycle(initialValue = "")
+    val profileAvatarPath by settingsRepo.profileAvatarPathFlow.collectAsStateWithLifecycle(initialValue = "")
+    val displayName = profileName.ifBlank { "小秋" }
+    val displayId = profileId.ifBlank { "edqiu_local" }
+    var showAvatarDialog by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var identityError by remember { mutableStateOf<String?>(null) }
+    // 相册选图（photo picker，无需存储权限）：保存成功切 DataStore 路径，失败弹窗说明
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            identityScope.launch {
+                val previous = profileAvatarPath
+                val saved = AvatarStore.saveFromUri(context, uri, previous)
+                if (saved != null) {
+                    settingsRepo.setProfileAvatarPath(saved)
+                } else {
+                    identityError = "头像保存失败，请重试或换一张图片"
+                }
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding(),
     ) {
-        // ===== 身份头部（2026-10-24 重设计）：不透明平台色横幅退役 =====
-        // 旧版 220dp #5E5CE6→#007AFF→#0A2540 实底渐变在壁纸舞台上是「贴上去的色块」，
-        // 与底缘玻璃卡片的衔接生硬（用户反馈突兀）。新版 = 「浮在舞台上的身份区」：
-        // primary 光晕衬底（与 GlassBackground 光斑同语言，色彩氛围保留）+
-        // 玻璃环头像（暖色核心保留品牌身份）+ 主题色文字（浅深双主题可读），
-        // 与下方统计卡/领域卡同处一个玻璃世界，无边界线。
+        // ===== 身份区（2026-11-07 横排档案风重设计）：支持自定义头像/昵称/ID =====
+        // 保留「浮在舞台上」的 primary 径向光晕（与 GlassBackground 光斑同语言）；
+        // 布局从居中竖排改为档案风横排——头像左（点击换头像）、名字+@ID+版本行右
+        //（整列可点编辑），信息密度与可定制性双升；玻璃环 + 暖色渐变兜底保留品牌身份
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(170.dp),
+                .height(150.dp),
             contentAlignment = Alignment.Center,
         ) {
             // primary 径向光晕：身份区的色彩来源，边缘透明融进壁纸（默认圆心=区域中心）
@@ -134,51 +176,174 @@ fun MineScreen(mineNav: MineNav) {
                         )
                     )
             )
-            Column(
-                modifier = Modifier.padding(top = 18.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                // 玻璃环 + 暖色核心：外圈 L2 玻璃圆接入材质世界，内核保留品牌暖渐变
+                // 玻璃环头像：自定义图片优先，否则回退品牌暖渐变+首字；点击弹头像设置
                 GlassSurface(
                     tier = GlassTier.L2,
                     shape = CircleShape,
-                    modifier = Modifier.size(84.dp)
+                    modifier = Modifier
+                        .size(76.dp)
+                        .pressableNoRipple { showAvatarDialog = true }
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(8.dp)
-                            .shadow(8.dp, CircleShape)
-                            .clip(CircleShape)
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(Color(0xFFFFD36E), Color(0xFFFF375F))
-                                )
-                            ),
+                            .padding(6.dp)
+                            .shadow(6.dp, CircleShape)
+                            .clip(CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            text = "秋",
-                            color = Color.White,
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                        )
+                        if (profileAvatarPath.isNotBlank()) {
+                            AsyncImage(
+                                model = File(profileAvatarPath),
+                                contentDescription = "头像",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.linearGradient(
+                                            listOf(Color(0xFFFFD36E), Color(0xFFFF375F))
+                                        )
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = displayName.firstOrNull()?.toString() ?: "秋",
+                                    color = Color.White,
+                                    fontSize = 26.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                )
+                            }
+                        }
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    text = "小秋",
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    text = "Edqiu v${BuildConfig.VERSION_NAME} · 本地账户",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 11.5.sp,
-                )
+                Spacer(Modifier.width(16.dp))
+                // 名字 / @ID / 版本行：整列可点 → 编辑昵称与 ID
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .pressableNoRipple { showEditDialog = true },
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = displayName,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = "编辑昵称与 ID",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .padding(start = 6.dp)
+                                .size(14.dp),
+                        )
+                    }
+                    Text(
+                        text = "@$displayId",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    Text(
+                        text = "Edqiu v${BuildConfig.VERSION_NAME} · 本地账户",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.5.sp,
+                        modifier = Modifier.padding(top = 3.dp),
+                    )
+                }
             }
+        }
+
+        // 身份编辑弹窗（2026-11-07）：头像设置 / 昵称与 ID 编辑 / 失败提示
+        if (showAvatarDialog) {
+            SmoothAlertDialog(
+                onDismissRequest = { showAvatarDialog = false },
+                title = { Text("头像设置") },
+                text = {
+                    Column {
+                        TextButton(onClick = {
+                            showAvatarDialog = false
+                            photoPicker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        }) { Text("从相册选择") }
+                        if (profileAvatarPath.isNotBlank()) {
+                            TextButton(onClick = {
+                                showAvatarDialog = false
+                                identityScope.launch {
+                                    AvatarStore.deleteAvatar(profileAvatarPath)
+                                    settingsRepo.setProfileAvatarPath(null)
+                                }
+                            }) { Text("恢复默认头像") }
+                        }
+                        TextButton(onClick = { showAvatarDialog = false }) { Text("取消") }
+                    }
+                },
+                confirmButton = {},
+            )
+        }
+        if (showEditDialog) {
+            var nameInput by remember(showEditDialog) { mutableStateOf(profileName) }
+            var idInput by remember(showEditDialog) { mutableStateOf(profileId) }
+            SmoothAlertDialog(
+                onDismissRequest = { showEditDialog = false },
+                title = { Text("编辑身份") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            value = nameInput,
+                            onValueChange = { nameInput = it.take(24) },
+                            label = { Text("昵称") },
+                            singleLine = true,
+                        )
+                        OutlinedTextField(
+                            value = idInput,
+                            onValueChange = { idInput = it.take(24) },
+                            label = { Text("ID（显示为 @ 后缀）") },
+                            singleLine = true,
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showEditDialog = false
+                        identityScope.launch {
+                            settingsRepo.setProfileName(nameInput)
+                            settingsRepo.setProfileId(idInput)
+                        }
+                    }) { Text("保存") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showEditDialog = false }) { Text("取消") }
+                }
+            )
+        }
+        identityError?.let { message ->
+            SmoothAlertDialog(
+                onDismissRequest = { identityError = null },
+                title = { Text("操作失败") },
+                text = { Text(message) },
+                confirmButton = {
+                    TextButton(onClick = { identityError = null }) { Text("知道了") }
+                }
+            )
         }
 
         // ===== 主体：统计卡 + 六领域卡菜单（2026-10-24 常规流式布局，

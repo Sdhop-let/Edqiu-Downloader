@@ -60,6 +60,13 @@ class WebDavEngine(
         private const val CONNECT_TIMEOUT_MS = 20_000L
         private const val READ_TIMEOUT_MS = 30_000L
         private const val WRITE_TIMEOUT_MS = 30_000L
+
+        /** PUT 专用超时（2026-11-03 城通假失败修复）：城通等网关收完大文件 body 后
+         *  响应延迟实测常超 30s（数据已落盘、只是回话慢/不回），30s 超时会把这类
+         *  「实际成功」判成失败。PUT 的响应等待放宽到 90s、写等待 60s（写 stall
+         *  时给服务器排空内核缓冲的时间），其余方法维持原超时。 */
+        private const val PUT_READ_TIMEOUT_MS = 90_000L
+        private const val PUT_WRITE_TIMEOUT_MS = 60_000L
         private const val USER_AGENT = "Edqiu-WebDAV/1.0"
         private const val BUFFER_SIZE = 64 * 1024
 
@@ -84,8 +91,25 @@ class WebDavEngine(
     /** 自签容忍客户端（仅当 allowInsecureTls() 为 true 时启用，懒加载）。 */
     private val insecureClient: OkHttpClient by lazy { buildClient(trustAll = true) }
 
+    /** PUT 专用客户端（共享连接池，仅放宽超时——见 [PUT_READ_TIMEOUT_MS] 注释）。 */
+    private val putClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(PUT_READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .writeTimeout(PUT_WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .build()
+    }
+    private val insecurePutClient: OkHttpClient by lazy {
+        insecureClient.newBuilder()
+            .readTimeout(PUT_READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .writeTimeout(PUT_WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .build()
+    }
+
     private fun currentClient(): OkHttpClient =
         if (runCatching { allowInsecureTls() }.getOrDefault(false)) insecureClient else client
+
+    private fun currentPutClient(): OkHttpClient =
+        if (runCatching { allowInsecureTls() }.getOrDefault(false)) insecurePutClient else putClient
 
     private fun buildClient(trustAll: Boolean): OkHttpClient {
         val builder = OkHttpClient.Builder()
@@ -356,7 +380,7 @@ class WebDavEngine(
             val body = StreamingFileRequestBody(file, size, progress)
             val request = buildRequest(url, "PUT", credential, body)
             val startedAt = System.currentTimeMillis()
-            executeWithDigestFallback(request, credential).use { response ->
+            executeWithDigestFallback(request, credential, currentPutClient()).use { response ->
                 val code = response.code
                 val elapsed = System.currentTimeMillis() - startedAt
                 if (code !in 200..299) {
@@ -412,7 +436,9 @@ class WebDavEngine(
 
             // MOVE 兼容性已判负：直接整传成品 URL（旧语义，HEAD 尺寸校验兜底）
             if (moveUnsupported.get()) {
-                putWithTransientRetry(url, file, credential, progress, maxAttempts).getOrThrow()
+                putWithTransientRetry(url, file, credential, progress, maxAttempts)
+                    .recoverIfLandedByHead(url, size, credential)
+                    .getOrThrow()
                 return@runCatchingNotCancelled
             }
 
@@ -440,11 +466,14 @@ class WebDavEngine(
                         if (!moveUnsupported.getAndSet(true)) {
                             Log.w(TAG, "服务器不支持 MOVE（${moved.exceptionOrNull()?.message}），降级整传成品 URL")
                         }
-                        putWithTransientRetry(url, file, credential, progress, maxAttempts).getOrThrow()
+                        putWithTransientRetry(url, file, credential, progress, maxAttempts)
+                            .recoverIfLandedByHead(url, size, credential)
+                            .getOrThrow()
                         delete(partUrl, credential) // best-effort 清理暂存
                         return@runCatchingNotCancelled
                     }
                     is StagedResult.Paused -> throw staged.signal
+                    is StagedResult.Aborted -> throw staged.signal
                     is StagedResult.Fatal -> throw staged.error
                     is StagedResult.Retryable -> {
                         lastError = staged.error
@@ -452,8 +481,37 @@ class WebDavEngine(
                     }
                 }
             }
+            // 终局复核（2026-11-03 城通假失败修复）：全部尝试耗尽后最后一次 HEAD 探测——
+            // 城通等网关「收完 body 但响应超时/不回包」时数据往往已完整落盘（本轮实测：
+            // chantal 18.5MB 上轮报失败、下轮 HEAD 命中完整直接 MOVE），命中即落盘，
+            // 把「下一轮才能自愈」提前到本轮，用户不再看到假失败弹窗。
+            if (size > 0L && headLength(partUrl, credential) == size) {
+                val moved = move(partUrl, url, credential, overwrite = true)
+                if (moved.isSuccess) {
+                    Log.i(TAG, "PUT 终局复核自愈：响应超时但暂存已完整落盘（$size B）：${file.name}")
+                    return@runCatchingNotCancelled
+                }
+            }
             throw lastError ?: BackupException("WebDAV 上传失败：${file.name}")
         }.toUserFriendly()
+    }
+
+    /**
+     * 终局复核（2026-11-03 城通假失败修复）：整传成品 URL 失败后 HEAD 成品——
+     * 若尺寸已与本地一致，说明 body 实际落盘只是响应丢失，直接视为成功。
+     */
+    private suspend fun Result<Unit>.recoverIfLandedByHead(
+        url: String,
+        size: Long,
+        credential: WebDavCredential,
+    ): Result<Unit> {
+        if (isSuccess || size <= 0L) return this
+        return if (headLength(url, credential) == size) {
+            Log.i(TAG, "PUT 终局复核自愈：响应超时但成品已完整落盘（$size B）")
+            Result.success(Unit)
+        } else {
+            this
+        }
     }
 
     /**
@@ -514,6 +572,7 @@ class WebDavEngine(
         val error = result.exceptionOrNull() ?: return@withContext StagedResult.Ok
         when {
             WebDavSyncPausedSignal.inChain(error) -> StagedResult.Paused(WebDavSyncPausedSignal())
+            WebDavSyncAbortSignal.inChain(error) -> StagedResult.Aborted(WebDavSyncAbortSignal())
             isRetryableTransferError(error) -> StagedResult.Retryable(BackupException(error.toUserMessage(), error))
             else -> StagedResult.Fatal(BackupException(error.toUserMessage(), error))
         }
@@ -525,6 +584,9 @@ class WebDavEngine(
 
         /** 用户主动暂停（.part 保留）。 */
         data class Paused(val signal: WebDavSyncPausedSignal) : StagedResult
+
+        /** 用户停止整轮（2026-11-03 详情页「停止本轮」）。 */
+        data class Aborted(val signal: WebDavSyncAbortSignal) : StagedResult
 
         /** 瞬态失败（网络/5xx），可退避重试。 */
         data class Retryable(val error: BackupException) : StagedResult
@@ -839,8 +901,11 @@ class WebDavEngine(
      * 旧实现只有 Basic，probe 直接报「认证失败」但账号密码其实正确。
      * 非 Digest 挑战（或挑战参数不全无法构造应答）时维持原语义返回 401 响应。
      */
-    private fun executeWithDigestFallback(request: Request, credential: WebDavCredential): okhttp3.Response {
-        val httpClient = currentClient()
+    private fun executeWithDigestFallback(
+        request: Request,
+        credential: WebDavCredential,
+        httpClient: OkHttpClient = currentClient(),
+    ): okhttp3.Response {
         val response = httpClient.newCall(request).execute()
         if (response.code != 401) return response
         val challengeHeader = response.header("WWW-Authenticate") ?: return response
@@ -1032,6 +1097,22 @@ class WebDavSyncPausedSignal : BackupException("用户已暂停该文件同步")
     companion object {
         fun inChain(error: Throwable?): Boolean =
             generateSequence(error) { it.cause }.any { it is WebDavSyncPausedSignal }
+    }
+}
+
+/**
+ * 用户停止整轮同步的信号（2026-11-03 详情页「停止本轮」新增）。
+ *
+ * 与 [WebDavSyncPausedSignal] 同机制：进度回调抛出 → 传输立即打断（.part 保留，
+ * 已传字节不浪费）→ 调用方按类型识别后终止整轮（不再继续队列下一个文件），
+ * 运行器把本轮收口为「已停止」而非失败。
+ */
+class WebDavSyncAbortSignal : BackupException("用户停止了本轮同步") {
+
+    /** 是否在异常链中携带本信号（OkHttp/okio 可能层层包裹）。 */
+    companion object {
+        fun inChain(error: Throwable?): Boolean =
+            generateSequence(error) { it.cause }.any { it is WebDavSyncAbortSignal }
     }
 }
 

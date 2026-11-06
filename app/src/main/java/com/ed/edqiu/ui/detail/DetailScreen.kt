@@ -296,12 +296,18 @@ private fun MediaPreview(data: SavedLink) {
     ) {
         // 背景：无缩略图时回退到品牌渐变
         if (!data.thumbnailUrl.isNullOrBlank()) {
-            AsyncImage(
-                model = data.thumbnailUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
+            // 隐私模式（2026-11-07）：大图模糊+按住查看；状态徽章保持清晰
+            com.ed.edqiu.ui.privacy.PrivacyGateBox(
+                enabled = com.ed.edqiu.ui.privacy.LocalPrivacyBlur.current,
                 modifier = Modifier.fillMaxSize()
-            )
+            ) {
+                AsyncImage(
+                    model = data.thumbnailUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         } else {
             Box(
                 modifier = Modifier

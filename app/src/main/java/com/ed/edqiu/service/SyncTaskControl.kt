@@ -27,6 +27,18 @@ object SyncTaskControl {
     /** 同步轮运行令牌：防止手动同步与自动备份任务并发双传同一文件。 */
     private val runningFlag = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /** 本轮停止请求（2026-11-03 详情页「停止本轮」）：置位后传输进度回调抛
+     *  WebDavSyncAbortSignal 立即终止整轮，已传部分保留。随轮结束（endRun）复位。 */
+    private val _abortRequested = MutableStateFlow(false)
+
+    /** 用户是否已请求停止当前同步轮。 */
+    val abortRequested: Boolean get() = _abortRequested.value
+
+    /** 请求停止当前同步轮（运行中的轮在下一个进度回调处中断；无轮在跑时置位无副作用）。 */
+    fun requestAbortRound() {
+        _abortRequested.value = true
+    }
+
     /**
      * 本轮已完成的远端文件名集合（实时）——详情页据此把对应条目立即翻成
      * 「已同步」并实时刷新计数，不必等整轮结束再 PROPFIND 重对账。
@@ -44,11 +56,12 @@ object SyncTaskControl {
     /** 尝试领取运行令牌：true = 领取成功（本轮由该调用方执行）；false = 已有同步轮在跑。 */
     fun tryBeginRun(): Boolean = runningFlag.compareAndSet(false, true)
 
-    /** 结束同步轮：释放令牌并清空暂停/优先/完成集合（控制仅对当轮生效，防用户遗忘残留）。 */
+    /** 结束同步轮：释放令牌并清空暂停/优先/完成/停止集合（控制仅对当轮生效，防用户遗忘残留）。 */
     fun endRun() {
         _paused.value = emptySet()
         _prioritized.value = emptySet()
         _completed.value = emptySet()
+        _abortRequested.value = false
         runningFlag.set(false)
     }
 

@@ -23,6 +23,39 @@ class TweetIdExtractorTest {
         assertNull(TweetIdExtractor.canonicalUrlFromText("普通文本 1234567890123456789"))
     }
 
+    // 2026-11-04 裸链容错：无 scheme 的 x.com/twitter.com 链接也要认
+    @Test
+    fun acceptsSchemelessBareLinks() {
+        assertEquals(
+            "https://x.com/i/status/1234567890123456789",
+            TweetIdExtractor.canonicalUrlFromText("x.com/example/status/1234567890123456789")
+        )
+        assertEquals(
+            "https://x.com/i/status/1234567890123456789",
+            TweetIdExtractor.canonicalUrlFromText("WWW.X.COM/example/status/1234567890123456789")
+        )
+    }
+
+    // 边界保护：域名字面含 x.com 的第三方域名不得误命中
+    @Test
+    fun doesNotMatchXComInsideForeignDomains() {
+        assertNull(
+            TweetIdExtractor.canonicalUrlFromText("https://fox.com/example/status/1234567890123456789")
+        )
+        assertNull(
+            TweetIdExtractor.canonicalUrlFromText("https://box.com/example/status/1234567890123456789")
+        )
+    }
+
+    // 2026-11-04 零宽字符清洗：夹带不可见字符的链接不得失配
+    @Test
+    fun toleratesZeroWidthCharactersInsideLink() {
+        assertEquals(
+            "https://x.com/i/status/1234567890123456789",
+            TweetIdExtractor.canonicalUrlFromText("https://x.com/exam\u200Bple/status/1234567890123456789")
+        )
+    }
+
     @Test
     fun extractsIdFromDownloaderFileName() {
         assertEquals(

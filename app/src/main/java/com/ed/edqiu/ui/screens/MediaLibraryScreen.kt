@@ -75,6 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -102,9 +103,12 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.ed.edqiu.data.database.DownloadHistoryEntity
 import com.ed.edqiu.data.model.MediaType
+import com.ed.edqiu.ui.privacy.LocalPrivacyBlur
+import com.ed.edqiu.ui.privacy.PrivacyGateBox
 import com.ed.edqiu.ui.components.ThumbnailWithFallback
 import com.ed.edqiu.viewmodel.HistoryViewModel
 import com.ed.edqiu.ui.components.EdqiuTextField
@@ -170,9 +174,14 @@ fun MediaLibraryScreen(
 ) {
     val context = LocalContext.current
     val allItems by historyViewModel.historyList.collectAsState()
-    val videoCount = allItems.count { it.mediaType == MediaType.VIDEO }
-    val imageCount = allItems.count { it.mediaType == MediaType.IMAGE }
-    val totalBytes = allItems.sumOf { it.fileSize.coerceAtLeast(0L) }
+    // 2026-11-07 卡顿修复：统计值包 remember——此前每次重组（含转场动画逐帧重组）都全量 count/sumOf
+    val (videoCount, imageCount, totalBytes) = remember(allItems) {
+        Triple(
+            allItems.count { it.mediaType == MediaType.VIDEO },
+            allItems.count { it.mediaType == MediaType.IMAGE },
+            allItems.sumOf { it.fileSize.coerceAtLeast(0L) }
+        )
+    }
     val scope = rememberCoroutineScope()
     var syncMessage by remember { mutableStateOf<String?>(null) }
     var syncToken by remember { mutableStateOf(0) }
@@ -225,17 +234,23 @@ fun MediaLibraryScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                // 发布时间补拉（内部 10 分钟节流）：旧记录联网补齐排序键
-                historyViewModel.backfillPublishedTimes()
-                // 画质升级检测（内部档位节流；慢网自动暂停）：换更高码率/分辨率版本
-                historyViewModel.upgradeMediaQuality()
-                // pHash 补算（内部 10 分钟节流，纯 CPU）：重复媒体检测底料（2026-09-15 批次3）
-                historyViewModel.backfillPhashes()
-                val lastScanDate = scanPrefs.getString(KEY_LAST_SCAN_DATE, null)
-                val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-                if (lastScanDate != today) {
-                    scanPrefs.edit().putString(KEY_LAST_SCAN_DATE, today).apply()
-                    latestStartLibraryScan(LibraryScanTrigger.AutoEnter)
+                // 2026-11-07 卡顿修复：Tab 切换的 ON_RESUME 在 300ms 转场窗口内即触发，
+                // 三个 backfill IO + 扫描的数据流/重组风暴正好砸进双页同屏渲染峰值——
+                // 延后到转场落定再跑（scope 随组合销毁自动取消，无泄漏）
+                scope.launch {
+                    delay(350)
+                    // 发布时间补拉（内部 10 分钟节流）：旧记录联网补齐排序键
+                    historyViewModel.backfillPublishedTimes()
+                    // 画质升级检测（内部档位节流；慢网自动暂停）：换更高码率/分辨率版本
+                    historyViewModel.upgradeMediaQuality()
+                    // pHash 补算（内部 10 分钟节流，纯 CPU）：重复媒体检测底料（2026-09-15 批次3）
+                    historyViewModel.backfillPhashes()
+                    val lastScanDate = scanPrefs.getString(KEY_LAST_SCAN_DATE, null)
+                    val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+                    if (lastScanDate != today) {
+                        scanPrefs.edit().putString(KEY_LAST_SCAN_DATE, today).apply()
+                        latestStartLibraryScan(LibraryScanTrigger.AutoEnter)
+                    }
                 }
             }
         }
@@ -298,10 +313,10 @@ fun MediaLibraryScreen(
     }
 
     // P1-4① 重复检测（2026-09-15 批次3）：pHash 汉明距离 ≤4 聚组
-    // 2026-10 整改：O(n²) 计算移出主线程（remember 直算，几百条起掉帧），异步产出+自动重算
-    val duplicateGroupsList by produceState(emptyList(), allItems) {
-        value = withContext(Dispatchers.Default) { duplicateGroups(allItems) }
-    }
+    // 2026-10 整改：O(n²) 计算移出主线程；2026-11-07 卡顿修复：迁入 HistoryViewModel
+    //（Lazily 常驻）——旧 produceState(allItems) 每次切回本页（组合重建）都全量重算
+    val duplicateGroupsList by historyViewModel.duplicateGroupList
+        .collectAsStateWithLifecycle()
 
     // 同作者序号：为每条媒体分配它在作者内的递增序号；作者总数 ≥2 时显示徽章（区分重复视频）
     val authorSeq: Map<String, Int> = remember(items) {
@@ -643,10 +658,11 @@ fun MediaLibraryScreen(
 }
 
 /**
- * 媒体库固定标题条（2026-10-22 方案A v4，对称收件箱）。
+ * 媒体库固定标题条（2026-10-22 方案A v4，对称收件箱；2026-11-07 对称重排）。
  *
- * 主行元素固定不滚：E 徽章 + 「媒体库」标题 + 数据副行（件数·占用，随
- * collapse 折叠收 0）+ 升级 pill + 搜索 + 刷新。搜索条/视图行/筛选数据卡
+ * 主行元素固定不滚：搜索（左）+ 「媒体库」标题 + 数据副行（件数·占用，随
+ * collapse 折叠收 0）+ 刷新（右）——两侧 44dp 圆钮等宽，标题真居中；
+ * E 徽章退役（品牌已在开屏/头像体现）。搜索条/视图行/筛选数据卡
  * 仍在列表内随内容滚走——滚动后顶上只剩一条紧凑标题行。
  */
 @Composable
@@ -670,26 +686,22 @@ private fun MediaLibraryFixedBar(
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // 2026-11-07 对称排版：标题居中，搜索（左）/ 刷新（右）两侧 44dp 圆钮等宽；
+        // E 徽章退役（品牌已在开屏/我的页头像体现，标题行不再挤色块）
         Row(verticalAlignment = Alignment.CenterVertically) {
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f))
-        ) {
-            Box(
-                modifier = Modifier.size(34.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "E",
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Black,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
+        // 搜索入口（2026-09-15 批次5）：文案/作者/文件名模糊搜索
+        LibraryHeaderIconButton(onClick = onSearchToggle, contentDescription = "搜索媒体库") {
+            Icon(
+                if (searchActive) Icons.Outlined.SearchOff else Icons.Outlined.Search,
+                contentDescription = null,
+                tint = if (searchActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
         }
-        Spacer(Modifier.width(11.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        Column(
+            modifier = Modifier.weight(1f),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Text(
                 text = "媒体库",
                 // 2026-10-24 与收件箱折叠语言对齐：标题随滚动 20→17sp 收缩
@@ -714,17 +726,6 @@ private fun MediaLibraryFixedBar(
                 )
             }
         }
-        Spacer(Modifier.width(8.dp))
-        // 搜索入口（2026-09-15 批次5）：文案/作者/文件名模糊搜索
-        LibraryHeaderIconButton(onClick = onSearchToggle, contentDescription = "搜索媒体库") {
-            Icon(
-                if (searchActive) Icons.Outlined.SearchOff else Icons.Outlined.Search,
-                contentDescription = null,
-                tint = if (searchActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-        Spacer(Modifier.width(6.dp))
         LibraryHeaderIconButton(onClick = onScan, contentDescription = "刷新媒体库") {
             Icon(Icons.Outlined.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
         }
@@ -1108,15 +1109,22 @@ private fun GridMediaCard(
                         onCoverBounds?.invoke(it.boundsInWindow())
                     }
             ) {
-                ThumbnailWithFallback(
-                    thumbnailUrl = entity.thumbnail,
-                    videoFilePath = entity.filePath,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                    frameOffsetSeconds = frameOffset,
-                    preferLocalFrame = entity.thumbnail.isBlank()
-                )
-                Box(modifier = Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.08f)))
+                // 隐私模式（2026-11-07）：封面模糊+按住查看；播放钮/时长/菜单保持清晰。
+                // clipToBounds 把模糊外溢裁回封面矩形，不污染下方信息行
+                PrivacyGateBox(
+                    enabled = LocalPrivacyBlur.current,
+                    modifier = Modifier.matchParentSize().clipToBounds()
+                ) {
+                    ThumbnailWithFallback(
+                        thumbnailUrl = entity.thumbnail,
+                        videoFilePath = entity.filePath,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                        frameOffsetSeconds = frameOffset,
+                        preferLocalFrame = entity.thumbnail.isBlank()
+                    )
+                    Box(modifier = Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.08f)))
+                }
                 // 播放指示（视频）：中央半透明圆钮
                 if (entity.mediaType == MediaType.VIDEO) {
                     Surface(
@@ -1235,32 +1243,6 @@ private fun mediaTitle(entity: DownloadHistoryEntity): String = mediaAuthorOf(en
 private fun mediaBadge(entity: DownloadHistoryEntity): String {
     val author = entity.uploader.ifBlank { File(entity.filePath).nameWithoutExtension.substringBefore("_").ifBlank { "unknown" } }
     return author
-}
-
-/** pHash 重复分组（2026-09-15 批次3）：汉明距离 ≤4 判疑似重复，贪心聚组（纯内存）。 */
-private fun duplicateGroups(items: List<DownloadHistoryEntity>): List<List<DownloadHistoryEntity>> {
-    val withHash = items.filter { it.phash != null && it.phash != 0L }
-    val used = mutableSetOf<String>()
-    val groups = mutableListOf<List<DownloadHistoryEntity>>()
-    for (i in withHash.indices) {
-        val a = withHash[i]
-        if (a.id in used) continue
-        val group = mutableListOf(a)
-        for (j in i + 1 until withHash.size) {
-            val b = withHash[j]
-            if (b.id in used) continue
-            if (com.ed.edqiu.service.PhashService.hamming(a.phash!!, b.phash!!) <=
-                com.ed.edqiu.service.PhashService.HAMMING_THRESHOLD
-            ) {
-                group += b
-            }
-        }
-        if (group.size >= 2) {
-            group.forEach { used += it.id }
-            groups += group
-        }
-    }
-    return groups
 }
 
 private fun mediaMeta(entity: DownloadHistoryEntity): String {

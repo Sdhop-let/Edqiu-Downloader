@@ -47,6 +47,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.ed.edqiu.data.model.LinkStatus
+import com.ed.edqiu.ui.privacy.LocalPrivacyBlur
+import com.ed.edqiu.ui.privacy.PrivacyGateBox
 import com.ed.edqiu.data.model.SavedLink
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
@@ -300,12 +302,15 @@ private fun LinkPreviewImage(link: SavedLink, accent: Color) {
         contentAlignment = Alignment.Center
     ) {
         if (!link.thumbnailUrl.isNullOrBlank()) {
-            AsyncImage(
-                model = link.thumbnailUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
+            // 隐私模式（2026-11-07）：预览图模糊+按住查看（头像/状态点/播放钮保持清晰）
+            PrivacyGateBox(enabled = LocalPrivacyBlur.current, modifier = Modifier.fillMaxSize()) {
+                AsyncImage(
+                    model = link.thumbnailUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         } else {
             Text(
                 text = "X",

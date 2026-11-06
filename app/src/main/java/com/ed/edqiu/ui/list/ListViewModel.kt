@@ -89,20 +89,33 @@ class ListViewModel(
     )
 
     fun captureText(input: String) {
-        val text = input.trim()
-        // 2026-10-21 批量粘贴接线（BatchTweetUrlExtractor 此前仅被测试引用）：
-        // 一段文本可含多条 status 链接（含文案/引用推文），逐条严格提取 + 按 tweetId 去重后
-        // 批量捕获；单条走原路径（反馈语义不变），多条出汇总弹窗
-        val pairs = com.ed.edqiu.domain.BatchTweetUrlExtractor.extractWithOriginals(text)
-        if (pairs.isEmpty()) {
-            captureFeedback.value = CaptureFeedback.NotTwitter
-            return
-        }
-        if (pairs.size == 1) {
-            launchCapture(pairs.first().normalizedUrl)
-            return
-        }
+        // 2026-11-04 重构为异步管线：提取空时先做 t.co 短链兜底展开（网络受限时
+        // 限时 2.5s/条、最多 3 条，失败回退原文），再统一走批量提取 + 捕获。
+        // 单条/多条反馈语义与原实现一致（单条走 captureFeedback，多条走汇总弹窗）。
         viewModelScope.launch(Dispatchers.IO) {
+            val text = input.trim()
+            var effective = text
+            if (com.ed.edqiu.domain.BatchTweetUrlExtractor
+                    .extractWithOriginals(effective).isEmpty()
+            ) {
+                effective = runCatching {
+                    com.ed.edqiu.capture.TcoLinkResolver.expand(text)
+                }.getOrDefault(text)
+            }
+            val pairs = com.ed.edqiu.domain.BatchTweetUrlExtractor
+                .extractWithOriginals(effective)
+            if (pairs.isEmpty()) {
+                captureFeedback.value = CaptureFeedback.NotTwitter
+                return@launch
+            }
+            if (pairs.size == 1) {
+                captureFeedback.value = when (captureCoordinator.capture(pairs[0].normalizedUrl)) {
+                    is SavedLinkRepository.CaptureResult.Added -> CaptureFeedback.Added
+                    SavedLinkRepository.CaptureResult.Duplicate -> CaptureFeedback.Duplicate
+                    SavedLinkRepository.CaptureResult.Invalid -> CaptureFeedback.NotTwitter
+                }
+                return@launch
+            }
             var added = 0
             var dup = 0
             pairs.forEach { pair ->

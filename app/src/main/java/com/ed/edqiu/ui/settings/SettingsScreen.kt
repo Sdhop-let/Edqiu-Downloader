@@ -809,6 +809,46 @@ private fun GroupLabel(text: String) {
     )
 }
 
+/** 浏览模式单选行（2026-11-07）：左侧选择圆点 + 标题/副标题，整行可点 */
+@Composable
+private fun PrivacyModeOptionRow(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .pressableNoRipple { onClick() }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(20.dp)
+                .border(
+                    width = 2.dp,
+                    color = if (selected) MaterialTheme.colorScheme.primary else Muted,
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                )
+            }
+        }
+        Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Muted)
+        }
+    }
+}
+
 @Composable
 private fun SwitchRow(
     title: String,
@@ -1007,6 +1047,15 @@ private fun ThemeSettingsSection(
     // 2026-10：「返回手势」假开关已移除（predictiveBackFlow 全工程无消费者，
     // manifest enableOnBackInvokedCallback=false 固定关闭），不再读取该配置。
     val displayScale by settings.displayScaleFlow.collectAsStateWithLifecycle(initialValue = 0.8f)
+    // 浏览模式（2026-11-07 隐私模式）：PrivacyModeStore 为 SharedPreferences 同步读存储
+    //（启动防闪现），设置页只做 StateFlow 转发
+    val privacyContext = LocalContext.current
+    val privacyMode by com.ed.edqiu.data.preferences.PrivacyModeStore
+        .modeFlow(privacyContext)
+        .collectAsStateWithLifecycle(initialValue = com.ed.edqiu.data.preferences.PrivacyMode.PRIVATE)
+    val privacyAskOnStartup by com.ed.edqiu.data.preferences.PrivacyModeStore
+        .askOnStartupFlow(privacyContext)
+        .collectAsStateWithLifecycle(initialValue = true)
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         // 顶部预览卡（2026-10-21 强调色设置项已移除，主题全局固定 iOS 绿，预览色块直接取主题 primary）
@@ -1017,6 +1066,40 @@ private fun ThemeSettingsSection(
             selected = themeMode,
             onSelect = { mode -> scope.launch { settings.setThemeMode(mode) } }
         )
+
+        // ===== 浏览模式（2026-11-07 隐私模式）：隐私模式=媒体全量模糊+按住查看 =====
+        GroupCard(
+            title = "浏览模式",
+            description = "隐私模式将视频/图片模糊防偷看，按住可临时查看；也可在每次启动时选择"
+        ) {
+            PrivacyModeOptionRow(
+                title = "标准模式",
+                subtitle = "媒体正常显示（默认）",
+                selected = privacyMode == com.ed.edqiu.data.preferences.PrivacyMode.PRIVATE,
+                onClick = {
+                    com.ed.edqiu.data.preferences.PrivacyModeStore.setMode(
+                        privacyContext, com.ed.edqiu.data.preferences.PrivacyMode.PRIVATE
+                    )
+                }
+            )
+            PrivacyModeOptionRow(
+                title = "隐私模式",
+                subtitle = "媒体模糊防偷看，按住临时查看",
+                selected = privacyMode == com.ed.edqiu.data.preferences.PrivacyMode.PUBLIC,
+                onClick = {
+                    com.ed.edqiu.data.preferences.PrivacyModeStore.setMode(
+                        privacyContext, com.ed.edqiu.data.preferences.PrivacyMode.PUBLIC
+                    )
+                }
+            )
+            SwitchRow(
+                "每次启动询问浏览模式",
+                "冷启动时先选模式再进入；关闭后始终使用上方所选",
+                privacyAskOnStartup
+            ) {
+                com.ed.edqiu.data.preferences.PrivacyModeStore.setAskOnStartup(privacyContext, it)
+            }
+        }
 
         // 2026-10-21：「颜色」卡组已整组移除——主题全局固定 iOS 绿（FixedScheme.FIXED_ACCENT），
         // 强调色不可配置，取色器相关 UI 与死代码一并清理

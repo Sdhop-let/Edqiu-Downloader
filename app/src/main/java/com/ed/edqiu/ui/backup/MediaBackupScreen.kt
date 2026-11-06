@@ -580,7 +580,9 @@ private fun SyncDetailView(
                         onClick = { vm.setTab(SyncDetailTab.SYNCED) },
                     )
                     Spacer(Modifier.weight(1f))
-                    IconButton(onClick = vm::refresh, enabled = !state.loading && !state.syncRunning) {
+                    // 2026-11-03 解禁：对账是只读 PROPFIND，可与服务中的同步并发——
+                    // 旧实现 syncRunning 时禁用刷新，城通慢轮（3-4 分钟）期间整页「点不动」
+                    IconButton(onClick = vm::refresh, enabled = !state.loading) {
                         if (state.loading) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         } else {
@@ -594,12 +596,13 @@ private fun SyncDetailView(
                 }
             }
 
-            // 同步 Tab 聚合：立即同步按钮 + 运行进度
+            // 同步 Tab 聚合：立即同步按钮 + 运行进度 + 停止本轮
             if (state.tab == SyncDetailTab.SYNCING) {
                 item {
                     SyncActionCard(
                         state = state,
                         onSyncNow = vm::syncNow,
+                        onStopRound = vm::stopRound,
                         onToggleSmallFirst = { vm.setSmallFirst(!state.smallFirst) },
                     )
                 }
@@ -695,6 +698,7 @@ private fun EmptyCard(state: SyncDetailUiState) {
 private fun SyncActionCard(
     state: SyncDetailUiState,
     onSyncNow: () -> Unit,
+    onStopRound: () -> Unit,
     onToggleSmallFirst: () -> Unit,
 ) {
     GlassSurface(
@@ -715,25 +719,40 @@ private fun SyncActionCard(
                 Text(if (state.syncRunning) "同步进行中…" else "立即同步（双向）")
             }
             val progress = state.syncProgress
-            if (state.syncRunning && progress != null && progress.totalFiles > 0) {
-                val overall = ((progress.currentIndex - 1).coerceAtLeast(0) + progress.fileProgress) /
-                    progress.totalFiles
-                LinearProgressIndicator(
-                    progress = { overall.coerceIn(0f, 1f) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(999.dp)),
-                )
-                val phaseLabel = if (progress.phase == WebDavSyncPhase.DOWNLOAD) "正在下载" else "正在上传"
-                Text(
-                    "$phaseLabel ${progress.currentIndex}/${progress.totalFiles} · " +
-                        "${progress.currentFileName} · ${(progress.fileProgress * 100).toInt()}%",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            if (state.syncRunning) {
+                if (progress != null && progress.totalFiles > 0) {
+                    val overall = ((progress.currentIndex - 1).coerceAtLeast(0) + progress.fileProgress) /
+                        progress.totalFiles
+                    LinearProgressIndicator(
+                        progress = { overall.coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(999.dp)),
+                    )
+                    val phaseLabel = if (progress.phase == WebDavSyncPhase.DOWNLOAD) "正在下载" else "正在上传"
+                    Text(
+                        "$phaseLabel ${progress.currentIndex}/${progress.totalFiles} · " +
+                            "${progress.currentFileName} · ${(progress.fileProgress * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // 2026-11-03「停止本轮」：慢服务器（城通单轮 3-4 分钟）期间用户可随时终止，
+                // 已传部分保留（.part 断点），剩余文件下轮自动续传
+                Button(
+                    onClick = onStopRound,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) {
+                    Text("停止本轮（已传部分保留）")
+                }
                 if (state.pausedSet.isNotEmpty()) {
                     Text(
                         "已暂停 ${state.pausedSet.size} 个文件（恢复后从断点续传）",
@@ -741,7 +760,7 @@ private fun SyncActionCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            } else if (!state.syncRunning) {
+            } else {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -783,16 +802,22 @@ private fun SyncingHighlightCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            AsyncImage(
-                model = item.file,
-                contentDescription = null,
-                imageLoader = videoLoader,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-            )
+                            com.ed.edqiu.ui.privacy.PrivacyGateBox(
+                    enabled = com.ed.edqiu.ui.privacy.LocalPrivacyBlur.current,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                ) {
+                    AsyncImage(
+                        model = item.file,
+                        contentDescription = null,
+                        imageLoader = videoLoader,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                    )
+                }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     item.remotePath,
@@ -841,16 +866,22 @@ private fun SyncingQueueRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            AsyncImage(
-                model = item.file,
-                contentDescription = null,
-                imageLoader = videoLoader,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-            )
+                            com.ed.edqiu.ui.privacy.PrivacyGateBox(
+                    enabled = com.ed.edqiu.ui.privacy.LocalPrivacyBlur.current,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                ) {
+                    AsyncImage(
+                        model = item.file,
+                        contentDescription = null,
+                        imageLoader = videoLoader,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                    )
+                }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     item.remotePath,
@@ -913,16 +944,22 @@ private fun DetailItemRow(item: SyncDetailItem, videoLoader: ImageLoader) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            AsyncImage(
-                model = item.file,
-                contentDescription = null,
-                imageLoader = videoLoader,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-            )
+                            com.ed.edqiu.ui.privacy.PrivacyGateBox(
+                    enabled = com.ed.edqiu.ui.privacy.LocalPrivacyBlur.current,
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                ) {
+                    AsyncImage(
+                        model = item.file,
+                        contentDescription = null,
+                        imageLoader = videoLoader,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                    )
+                }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     item.remotePath,
@@ -1042,6 +1079,7 @@ private fun historyStatusLabel(status: String): String = when (status) {
     "success" -> "成功"
     "failed" -> "失败"
     "frozen_healed" -> "冻结自愈恢复"
+    "stopped" -> "已停止"
     else -> status
 }
 
@@ -1049,6 +1087,7 @@ private fun historyStatusColor(status: String): Color = when (status) {
     "success" -> SyncGreen
     "failed" -> Color(0xFFD70015)
     "frozen_healed" -> SyncOrange
+    "stopped" -> Color(0xFF8E8E93)
     else -> Color(0xFF8E8E93)
 }
 

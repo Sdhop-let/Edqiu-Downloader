@@ -75,6 +75,7 @@ class CaptureIntentActivity : ComponentActivity() {
 
     private var phase by mutableStateOf(Phase.LOADING)
     private var failureReason by mutableStateOf("")
+    private var successMessage by mutableStateOf("")
     private var retryUsed = false
     private var savedTweetId: String? = null
 
@@ -93,7 +94,8 @@ class CaptureIntentActivity : ComponentActivity() {
         val coordinator = container.linkCaptureCoordinator
         val repository = container.savedLinkRepository
 
-        fun succeed() {
+        fun succeed(message: String = "已保存到收件箱") {
+            successMessage = message
             phase = Phase.SUCCESS
             lifecycleScope.launch {
                 delay(1_100)
@@ -126,6 +128,7 @@ class CaptureIntentActivity : ComponentActivity() {
                 CaptureFeedbackLayer(
                     phase = phase,
                     failureReason = failureReason,
+                    successMessage = successMessage,
                     canRetry = !retryUsed && savedTweetId != null,
                     onRetry = {
                         val tweetId = savedTweetId ?: return@CaptureFeedbackLayer
@@ -139,17 +142,60 @@ class CaptureIntentActivity : ComponentActivity() {
         }
 
         lifecycleScope.launch(Dispatchers.IO) {
-            val result = runCatching { coordinator.capture(text) }.getOrNull()
-                ?: SavedLinkRepository.CaptureResult.Invalid
-            when (result) {
-                is SavedLinkRepository.CaptureResult.Added -> {
-                    savedTweetId = result.tweetId
-                    fetchMeta(result.tweetId)
+            // 2026-11-04 多链接 + 机型特性适配：分享/处理文本的正文可能携带多条 status
+            // 链接或整体 URL 编码（X App 分享多选推文时常见）——批量提取逐条入库；
+            // 无严格链接但有 t.co 短链时走限时网络兜底展开。
+            // 单条保持原流程（元数据等待 + 失败重试）；多条只入库不等元数据
+            // （收件箱刷新会自动补全），汇总反馈。
+            android.util.Log.d(
+                "EdqiuClip",
+                "share action=${intent.action} len=${text.length} head=${text.take(120)}"
+            )
+            var candidate = text
+            if (com.ed.edqiu.domain.BatchTweetUrlExtractor
+                    .extractWithOriginals(candidate).isEmpty()
+            ) {
+                candidate = runCatching {
+                    com.ed.edqiu.capture.TcoLinkResolver.expand(candidate)
+                }.getOrDefault(candidate)
+            }
+            val pairs = com.ed.edqiu.domain.BatchTweetUrlExtractor
+                .extractWithOriginals(candidate)
+            if (pairs.isEmpty()) {
+                withContext(Dispatchers.Main) { fail("不是有效的 X/Twitter 链接") }
+                return@launch
+            }
+            if (pairs.size == 1) {
+                val result = runCatching { coordinator.capture(pairs[0].normalizedUrl) }
+                    .getOrNull() ?: SavedLinkRepository.CaptureResult.Invalid
+                when (result) {
+                    is SavedLinkRepository.CaptureResult.Added -> {
+                        savedTweetId = result.tweetId
+                        fetchMeta(result.tweetId)
+                    }
+                    SavedLinkRepository.CaptureResult.Duplicate ->
+                        withContext(Dispatchers.Main) { fail("这条链接已经在收件箱里了") }
+                    SavedLinkRepository.CaptureResult.Invalid ->
+                        withContext(Dispatchers.Main) { fail("不是有效的 X/Twitter 链接") }
                 }
-                SavedLinkRepository.CaptureResult.Duplicate ->
-                    withContext(Dispatchers.Main) { fail("这条链接已经在收件箱里了") }
-                SavedLinkRepository.CaptureResult.Invalid ->
-                    withContext(Dispatchers.Main) { fail("不是有效的 X/Twitter 链接") }
+                return@launch
+            }
+            var added = 0
+            var duplicated = 0
+            pairs.forEach { pair ->
+                when (runCatching { coordinator.capture(pair.normalizedUrl) }.getOrNull()) {
+                    is SavedLinkRepository.CaptureResult.Added -> added++
+                    SavedLinkRepository.CaptureResult.Duplicate -> duplicated++
+                    else -> Unit
+                }
+            }
+            withContext(Dispatchers.Main) {
+                if (added > 0) {
+                    val dupSuffix = if (duplicated > 0) "（重复 $duplicated 条）" else ""
+                    succeed("已保存 $added 条$dupSuffix")
+                } else {
+                    fail("链接都已在收件箱里（$duplicated 条）")
+                }
             }
         }
     }
@@ -176,6 +222,7 @@ class CaptureIntentActivity : ComponentActivity() {
 private fun CaptureFeedbackLayer(
     phase: Phase,
     failureReason: String,
+    successMessage: String,
     canRetry: Boolean,
     onRetry: () -> Unit,
     onFinish: () -> Unit
@@ -185,7 +232,10 @@ private fun CaptureFeedbackLayer(
     LaunchedEffect(phase) {
         when (phase) {
             Phase.LOADING -> capsule.show(FeedbackKind.NEUTRAL, "正在保存…", sticky = true)
-            Phase.SUCCESS -> capsule.show(FeedbackKind.SUCCESS, "已保存到收件箱")
+            Phase.SUCCESS -> capsule.show(
+                FeedbackKind.SUCCESS,
+                successMessage.ifBlank { "已保存到收件箱" }
+            )
             Phase.FAILED -> capsule.clear()
         }
     }

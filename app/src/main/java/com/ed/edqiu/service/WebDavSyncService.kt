@@ -9,6 +9,7 @@ import com.ed.edqiu.backup.model.BackupException
 import com.ed.edqiu.backup.provider.WebDavCredential
 import com.ed.edqiu.backup.provider.WebDavEngine
 import com.ed.edqiu.backup.provider.WebDavSyncPausedSignal
+import com.ed.edqiu.backup.provider.WebDavSyncAbortSignal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -61,6 +62,10 @@ data class WebDavSyncResult(
     val bytesTransferred: Long = 0L,
     /** 本轮因「已有同步在执行」被互斥跳过（2026-10-24 审计修复假成功）：没有任何同步发生。 */
     val roundSkipped: Boolean = false,
+    /** 本轮传输失败被跳过的文件数（2026-11-03 per-file 隔离：失败不再中断整轮，下轮自动续传）。 */
+    val failedCount: Int = 0,
+    /** 本轮被用户手动停止（2026-11-03「停止本轮」：已传部分保留）。 */
+    val roundAborted: Boolean = false,
 ) {
     /** 是否有任何实际数据变动（驱动提示文案与计数器更新）。 */
     val hasChanges: Boolean get() = uploaded > 0 || downloaded > 0
@@ -99,6 +104,20 @@ object WebDavSyncService {
 
     private const val TAG = "WebDavSyncService"
 
+    /**
+     * 共享引擎（2026-11-03 低效修复）：此前每轮 syncDownloads 新建 WebDavEngine，
+     * PATCH/MOVE 兼容性结论（patchUnsupported/moveUnsupported 实例记忆）随之丢失，
+     * 城通这类不支持 PATCH 的服务器每轮都要重跑一遍探测（每轮多 1-2 次请求）。
+     * 改为跨轮复用单例；allowInsecureTls 走 prefs 实时读取（各调用方的
+     * CloudSyncPreferences 包的是同一 SharedPreferences 文件）。
+     */
+    @Volatile
+    private var cachedEngine: WebDavEngine? = null
+
+    private fun sharedEngine(prefs: CloudSyncPreferences): WebDavEngine =
+        cachedEngine ?: WebDavEngine(allowInsecureTls = { prefs.allowInsecureTls })
+            .also { cachedEngine = it }
+
     suspend fun syncDownloads(
         context: Context,
         prefs: CloudSyncPreferences,
@@ -123,9 +142,7 @@ object WebDavSyncService {
                     if (!account.isComplete) {
                         throw BackupException("请先填写 WebDAV 地址、账号和密码，并测试连接通过")
                     }
-                    val engine = WebDavEngine(
-                        allowInsecureTls = { prefs.allowInsecureTls }
-                    )
+                    val engine = sharedEngine(prefs)
                     val credential = WebDavCredential(
                         serverUrl = account.serverUrl,
                         username = account.username,
@@ -148,6 +165,8 @@ object WebDavSyncService {
                         downloaded = down.downloaded,
                         pausedCount = up.pausedCount,
                         bytesTransferred = up.bytes + down.bytes,
+                        failedCount = up.failed + down.failed,
+                        roundAborted = up.aborted || down.aborted,
                     )
                 }.onFailure { error ->
                     Log.e(TAG, "WebDAV sync failed", error)
@@ -214,6 +233,7 @@ object WebDavSyncService {
         var skipped = 0
         var conflicts = 0
         var pausedCount = 0
+        var failed = 0
         var bytes = 0L
         // 单次 PROPFIND 得到权威远端清单（存在性 + 尺寸），替代逐文件 HEAD——
         // 部分服务器对不存在的文件 HEAD 返回非 404（403/409/500），旧实现会误报
@@ -243,6 +263,12 @@ object WebDavSyncService {
                 continue
             }
 
+            // 队列级停止（2026-11-03「停止本轮」）：用户请求终止，立即退出队列
+            if (SyncTaskControl.abortRequested) {
+                Log.i(TAG, "队列终止（用户停止本轮）：剩余 ${queue.size} 个文件待下轮续传")
+                return UploadOutcome(uploaded, skipped, conflicts, pausedCount, bytes, failed, aborted = true)
+            }
+
             onProgress(WebDavSyncProgress(WebDavSyncPhase.UPLOAD, total, processed, remoteName, 0f))
             val remoteUrl = engine.buildRemoteUrl(credential, remoteName)
             val remote = lookupRemote(remoteManifest, remoteName, file.name)
@@ -251,19 +277,29 @@ object WebDavSyncService {
                 // 两个名字任一命中且尺寸一致都判「已同步」，杜绝网盘已有却显示未同步
                 remote != null && remote.size == size -> skipped++
                 remote == null -> {
-                    if (uploadLocalFile(engine, credential, remoteUrl, file, remoteName, total, processed, onProgress)) {
-                        uploaded++
-                        bytes += size
-                    } else pausedCount++
+                    when (uploadLocalFile(engine, credential, remoteUrl, file, remoteName, total, processed, onProgress)) {
+                        UploadFileResult.UPLOADED -> { uploaded++; bytes += size }
+                        UploadFileResult.PAUSED -> pausedCount++
+                        // per-file 隔离（2026-11-03）：单文件失败只记账，不再中断整轮——
+                        // 城通实测单文件 3 次假失败会让后面 11 个文件全部陪葬
+                        UploadFileResult.FAILED -> failed++
+                        UploadFileResult.ABORTED -> return UploadOutcome(
+                            uploaded, skipped, conflicts, pausedCount, bytes, failed, aborted = true
+                        )
+                    }
                 }
                 else -> {
                     // 冲突：本地版为用户设备真源；云端旧版本尽力改名保留，保不住则放弃上传
                     val preserved = preserveRemoteCopy(engine, credential, remoteUrl, remoteName)
                     if (preserved) {
-                        if (uploadLocalFile(engine, credential, remoteUrl, file, remoteName, total, processed, onProgress)) {
-                            uploaded++
-                            bytes += size
-                        } else pausedCount++
+                        when (uploadLocalFile(engine, credential, remoteUrl, file, remoteName, total, processed, onProgress)) {
+                            UploadFileResult.UPLOADED -> { uploaded++; bytes += size }
+                            UploadFileResult.PAUSED -> pausedCount++
+                            UploadFileResult.FAILED -> failed++
+                            UploadFileResult.ABORTED -> return UploadOutcome(
+                                uploaded, skipped, conflicts, pausedCount, bytes, failed, aborted = true
+                            )
+                        }
                     } else {
                         Log.w(TAG, "冲突且云端版本无法改名保留，跳过上传（本地保持不变）：$remoteName")
                     }
@@ -271,7 +307,7 @@ object WebDavSyncService {
                 }
             }
         }
-        return UploadOutcome(uploaded, skipped, conflicts, pausedCount, bytes)
+        return UploadOutcome(uploaded, skipped, conflicts, pausedCount, bytes, failed, aborted = false)
     }
 
     /** 上传阶段账面 + 传输字节（2026-10 备份中心历史记录用）。 */
@@ -281,6 +317,10 @@ object WebDavSyncService {
         val conflicts: Int,
         val pausedCount: Int,
         val bytes: Long,
+        /** 传输失败被跳过的文件数（2026-11-03 per-file 隔离，失败文件下轮自动续传）。 */
+        val failed: Int = 0,
+        /** 用户停止本轮（2026-11-03「停止本轮」：队列立即终止，已传部分保留）。 */
+        val aborted: Boolean = false,
     )
 
     /**
@@ -294,10 +334,25 @@ object WebDavSyncService {
     ): com.ed.edqiu.backup.provider.WebDavRemoteFile? =
         remoteManifest[remoteName] ?: remoteManifest[plainName]
 
+    /** 单文件上传结果（2026-11-03 per-file 隔离：失败与暂停/停止分账，不再向上抛异常）。 */
+    private enum class UploadFileResult {
+        /** 成功落盘。 */
+        UPLOADED,
+
+        /** 用户暂停该文件（.part 保留待续传）。 */
+        PAUSED,
+
+        /** 传输失败（跳过该文件继续队列，下轮自动续传）。 */
+        FAILED,
+
+        /** 用户停止整轮（队列终止）。 */
+        ABORTED,
+    }
+
     /**
-     * 上传单个文件。返回 true=成功；false=用户暂停中断（.part 保留待续传）。
-     * 传输中每 tick 检查暂停标志——命中即抛 [WebDavSyncPausedSignal] 打断 PUT。
-     * 成功后写 [SyncTaskControl.markCompleted]：详情页实时把条目翻成「已同步」。
+     * 上传单个文件。传输中每 tick 检查暂停/停止标志——命中即抛对应 Signal 打断 PUT
+     * （.part 保留）。成功后写 [SyncTaskControl.markCompleted]：详情页实时把条目翻成「已同步」。
+     * 2026-11-03：失败不再向上抛（旧实现 throw 会把整轮同步一起带崩）。
      */
     private suspend fun uploadLocalFile(
         engine: WebDavEngine,
@@ -308,24 +363,36 @@ object WebDavSyncService {
         total: Int,
         index: Int,
         onProgress: (WebDavSyncProgress) -> Unit,
-    ): Boolean {
+    ): UploadFileResult {
         val size = file.length()
         engine.putResumable(remoteUrl, file, credential) { bytes ->
+            if (SyncTaskControl.abortRequested) {
+                throw WebDavSyncAbortSignal()
+            }
             if (remoteName in SyncTaskControl.paused.value) {
                 throw WebDavSyncPausedSignal()
             }
             val p = if (size <= 0L) 0f else (bytes.toFloat() / size).coerceIn(0f, 1f)
             onProgress(WebDavSyncProgress(WebDavSyncPhase.UPLOAD, total, index, remoteName, p))
         }.getOrElse { error ->
-            if (WebDavSyncPausedSignal.inChain(error)) {
-                Log.i(TAG, "上传被用户暂停（.part 保留待续传）：$remoteName")
-                return false
+            return when {
+                WebDavSyncAbortSignal.inChain(error) -> {
+                    Log.i(TAG, "上传被用户停止（.part 保留）：$remoteName")
+                    UploadFileResult.ABORTED
+                }
+                WebDavSyncPausedSignal.inChain(error) -> {
+                    Log.i(TAG, "上传被用户暂停（.part 保留待续传）：$remoteName")
+                    UploadFileResult.PAUSED
+                }
+                else -> {
+                    Log.w(TAG, "上传失败（跳过，下轮自动续传）：$remoteName，原因：${error.message}")
+                    UploadFileResult.FAILED
+                }
             }
-            throw error
         }
         SyncTaskControl.clearPriority(remoteName) // 已处理，取消置顶
         SyncTaskControl.markCompleted(remoteName) // 实时账面：详情页立即翻绿
-        return true
+        return UploadFileResult.UPLOADED
     }
 
     /**
@@ -368,8 +435,14 @@ object WebDavSyncService {
         val pending = remoteFiles.filter { it.name !in localFlatNames }
         val total = pending.size
         var downloaded = 0
+        var failed = 0
         var bytes = 0L
         pending.forEachIndexed { index, remote ->
+            // 队列级停止（2026-11-03「停止本轮」）
+            if (SyncTaskControl.abortRequested) {
+                Log.i(TAG, "下载队列终止（用户停止本轮）：剩余 ${total - index} 个待下轮续传")
+                return DownloadOutcome(downloaded, bytes, failed, aborted = true)
+            }
             onProgress(WebDavSyncProgress(WebDavSyncPhase.DOWNLOAD, total, index + 1, remote.name, 0f))
             val local = File(sourceDir, remote.name)
             if (local.exists()) {
@@ -381,12 +454,21 @@ object WebDavSyncService {
             // 本地断点续传：已有 .part 从其尺寸 Range 续传（engine.get 内部处理）；无则从 0
             val expectedTotal = if (remote.size > 0) remote.size else -1L
             engine.get(remoteUrl, credential, partLocal) { bytes ->
+                if (SyncTaskControl.abortRequested) {
+                    throw WebDavSyncAbortSignal()
+                }
                 val p = if (expectedTotal <= 0) 0f else (bytes.toFloat() / expectedTotal).coerceIn(0f, 1f)
                 onProgress(WebDavSyncProgress(WebDavSyncPhase.DOWNLOAD, total, index + 1, remote.name, p))
             }.getOrElse { error ->
-                // 断电续传的关键：中断时保留本地 .part 现场，下次同步从断点继续
-                Log.w(TAG, "下载中断（保留 .part 待续传）：${remote.name}，原因：${error.message}")
-                throw error
+                if (WebDavSyncAbortSignal.inChain(error)) {
+                    Log.i(TAG, "下载被用户停止（保留 .part 待续传）：${remote.name}")
+                    return DownloadOutcome(downloaded, bytes, failed, aborted = true)
+                }
+                // per-file 隔离（2026-11-03）：断电续传的关键是保留本地 .part 现场；
+                // 单文件失败跳过继续，不再让整轮陪葬
+                Log.w(TAG, "下载失败（跳过，下轮自动续传，保留 .part）：${remote.name}，原因：${error.message}")
+                failed++
+                return@forEachIndexed
             }
             // 成品落位：rename 失败（目标被并发创建等）→ 保留 .part 不覆盖
             if (partLocal.renameTo(local)) {
@@ -398,12 +480,16 @@ object WebDavSyncService {
                 Log.w(TAG, "本地落位失败（目标已存在？），保留 .part：${remote.name}")
             }
         }
-        return DownloadOutcome(downloaded, bytes)
+        return DownloadOutcome(downloaded, bytes, failed, aborted = false)
     }
 
     /** 下载阶段账面 + 传输字节（2026-10 备份中心历史记录用）。 */
     private data class DownloadOutcome(
         val downloaded: Int,
         val bytes: Long,
+        /** 下载失败被跳过的文件数（2026-11-03 per-file 隔离）。 */
+        val failed: Int = 0,
+        /** 用户停止本轮。 */
+        val aborted: Boolean = false,
     )
 }

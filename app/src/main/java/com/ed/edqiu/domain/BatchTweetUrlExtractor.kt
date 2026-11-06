@@ -16,7 +16,9 @@ object BatchTweetUrlExtractor {
     private const val MAX_INPUT_LENGTH = 8_192
 
     private val STATUS_URL = Regex(
-        pattern = """(?i)https?://(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/(?:i/(?:web/)?status|[A-Za-z0-9_]+/status)/(\d{11,25})(?!\d)""",
+        // 2026-11-04 与 TweetIdExtractor 同步：scheme 可选 + 前置负向断言防误命中
+        // （fox.com / box.com 等域名字面含 x.com，不能吞进来）
+        pattern = """(?i)(?<![A-Za-z0-9.])(?:https?://)?(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/(?:i/(?:web/)?status|[A-Za-z0-9_]+/status)/(\d{11,25})(?!\d)""",
         options = setOf(RegexOption.IGNORE_CASE),
     )
 
@@ -35,10 +37,14 @@ object BatchTweetUrlExtractor {
     fun extract(text: String?): List<String> =
         extractWithOriginals(text).map { it.normalizedUrl }
 
+    // 2026-11-04 零宽字符清洗（与 TweetIdExtractor 同步）：部分 App 复制的正文夹带
+    // 不可见字符会把 URL 拆断，提取前统一剔除
+    private val ZERO_WIDTH = Regex("[\\u200B-\\u200D\\uFEFF\\u2060]")
+
     /** 批量提取，保留原始链接，按 tweetId 去重。 */
     fun extractWithOriginals(text: String?): List<TweetUrlPair> {
         if (text.isNullOrBlank()) return emptyList()
-        val bounded = text.take(MAX_INPUT_LENGTH)
+        val bounded = ZERO_WIDTH.replace(text.take(MAX_INPUT_LENGTH), "")
         val pairs = mutableListOf<TweetUrlPair>()
         for (match in STATUS_URL.findAll(bounded)) {
             val tweetId = match.groupValues[1]

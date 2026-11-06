@@ -160,11 +160,23 @@ class MediaBackupViewModel(
                         val note = buildString {
                             append("双向同步完成：上传 ${r.uploaded}，下载 ${r.downloaded}，一致跳过 ${r.skippedExisting}，冲突 ${r.conflicts}")
                             if (r.pausedCount > 0) append("，暂停 ${r.pausedCount} 个")
+                            if (r.failedCount > 0) append("，失败 ${r.failedCount} 个（下轮自动续传）")
                         }
                         _state.update {
                             it.copy(
                                 syncProgress = null,
                                 message = FeedbackMessage(note, if (r.conflicts > 0) FeedbackKind.NEUTRAL else FeedbackKind.SUCCESS),
+                            )
+                        }
+                        WebDavManualSync.consumeResult()
+                        reloadHistory()
+                        refresh()
+                    }
+                    is WebDavManualSync.State.Stopped -> {
+                        _state.update {
+                            it.copy(
+                                syncProgress = null,
+                                message = FeedbackMessage(st.message, FeedbackKind.NEUTRAL)
                             )
                         }
                         WebDavManualSync.consumeResult()
@@ -256,6 +268,11 @@ class MediaBackupViewModel(
     fun syncNow() {
         if (_state.value.syncRunning) return
         WebDavManualSync.sync(context)
+    }
+
+    /** 停止当前同步轮（2026-11-03）：传输在下一个进度回调处中断，已传部分保留。 */
+    fun stopRound() {
+        SyncTaskControl.requestAbortRound()
     }
 
     // ================= 逐文件控制（SyncTaskControl 透传） =================

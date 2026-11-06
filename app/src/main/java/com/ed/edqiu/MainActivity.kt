@@ -10,6 +10,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -20,8 +21,11 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.ed.edqiu.data.preferences.FirstLaunchManager
+import com.ed.edqiu.data.preferences.PrivacyModeStore
+import com.ed.edqiu.di.AppContainer
 import com.ed.edqiu.ui.navigation.EdqiuApp
 import com.ed.edqiu.ui.onboarding.OnboardingScreen
+import com.ed.edqiu.ui.privacy.ModeChooserScreen
 import com.ed.edqiu.ui.splash.LaunchSplash
 
 class MainActivity : ComponentActivity() {
@@ -65,6 +69,10 @@ class MainActivity : ComponentActivity() {
         }
 
         val showSplash = FirstLaunchManager.isFirstLaunch(this)
+
+        // 浏览模式同步预热（2026-11-07）：setContent 前同步读 SharedPreferences，
+        // 防止 DataStore 异步首读期间按错误模式闪现媒体（隐私模式用户=泄露事故）
+        PrivacyModeStore.init(this)
 
         setContent {
             // 2026-10 合规补齐：进入主界面时申请通知权限（一次性，拒绝后不再骚扰）
@@ -122,22 +130,20 @@ class MainActivity : ComponentActivity() {
                                 splashDone = true
                                 FirstLaunchManager.markShown(this@MainActivity)
                             }
-                        } else if (showOnboarding) {
-                            OnboardingScreen(
-                                settingsRepository = container.settingsRepository,
-                                onFinished = { onboardingDismissed = true }
-                            )
                         } else {
-                            EdqiuApp(container = container)
+                            PostSplashRoute(
+                                container = container,
+                                showOnboarding = showOnboarding,
+                                onOnboardingFinished = { onboardingDismissed = true }
+                            )
                         }
                     }
-                } else if (showOnboarding) {
-                    OnboardingScreen(
-                        settingsRepository = container.settingsRepository,
-                        onFinished = { onboardingDismissed = true }
-                    )
                 } else {
-                    EdqiuApp(container = container)
+                    PostSplashRoute(
+                        container = container,
+                        showOnboarding = showOnboarding,
+                        onOnboardingFinished = { onboardingDismissed = true }
+                    )
                 }
             }
         }
@@ -178,5 +184,40 @@ class MainActivity : ComponentActivity() {
                 "high refresh rate locked: ${best.refreshRate}Hz (mode ${best.modeId})"
             )
         }
+    }
+}
+
+/**
+ * 开屏后的路由（2026-11-07）：引导（首装一次）→ 浏览模式选择（每次启动，
+ * ask_on_startup=false 时跳过）→ 主界面。全部分支在 EdqiuTheme 内调用
+ *（v1.9.12 教训：主题外分支会显示 Material 默认紫）。
+ */
+@Composable
+private fun PostSplashRoute(
+    container: AppContainer,
+    showOnboarding: Boolean,
+    onOnboardingFinished: () -> Unit,
+) {
+    if (showOnboarding) {
+        OnboardingScreen(
+            settingsRepository = container.settingsRepository,
+            onFinished = onOnboardingFinished
+        )
+        return
+    }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // 勾选过「不再每次询问」→ 直接进主界面，沿用记住的模式
+    var modeChosen by remember { mutableStateOf(!PrivacyModeStore.currentAskOnStartup(context)) }
+    if (!modeChosen) {
+        ModeChooserScreen(
+            lastMode = PrivacyModeStore.currentMode(context),
+            onChoose = { mode, rememberChoice ->
+                PrivacyModeStore.setMode(context, mode)
+                PrivacyModeStore.setAskOnStartup(context, !rememberChoice)
+                modeChosen = true
+            }
+        )
+    } else {
+        EdqiuApp(container = container)
     }
 }

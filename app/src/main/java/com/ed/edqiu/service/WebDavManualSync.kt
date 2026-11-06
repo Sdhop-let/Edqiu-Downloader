@@ -40,6 +40,10 @@ object WebDavManualSync {
 
         /** 互斥跳过（2026-10-24 审计修复）：恰逢自动同步在跑，本轮未发生任何同步，不记历史。 */
         data class Skipped(val message: String) : State
+
+        /** 用户停止本轮（2026-11-03 详情页「停止本轮」）：已传部分保留，非失败。 */
+        data class Stopped(val message: String) : State
+
         data class Failed(val message: String) : State
     }
 
@@ -77,6 +81,21 @@ object WebDavManualSync {
                     // 旧实现把空结果当完成，用户看到「双向同步完成：上传 0，下载 0」假成功
                     if (syncResult.roundSkipped) {
                         _state.value = State.Skipped("已有同步正在进行中，本轮已跳过（未产生任何传输）")
+                        return@fold
+                    }
+                    // 用户停止本轮（2026-11-03 详情页「停止本轮」）：已传部分保留，
+                    // 记 stopped 历史（非失败），实时账面已由 SyncTaskControl 驱动
+                    if (syncResult.roundAborted) {
+                        prefs.addSyncHistory(
+                            SyncHistoryRecord(
+                                timestamp = System.currentTimeMillis(),
+                                mode = if (firstEver) "full" else "incremental",
+                                files = syncResult.uploaded + syncResult.downloaded,
+                                bytes = syncResult.bytesTransferred,
+                                status = "stopped",
+                            )
+                        )
+                        _state.value = State.Stopped("本轮同步已停止：已上传 ${syncResult.uploaded}、下载 ${syncResult.downloaded}，其余下轮自动续传")
                         return@fold
                     }
                     if (syncResult.hasChanges) {

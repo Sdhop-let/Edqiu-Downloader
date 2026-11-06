@@ -306,13 +306,19 @@ private fun DownloadTaskCard(
                         .aspectRatio(16f / 10f)
                         .clip(RoundedCornerShape(16.dp))
                 ) {
-                    ThumbnailWithFallback(
-                        thumbnailUrl = task.thumbnail,
-                        videoFilePath = task.outputPath.ifBlank { null },
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                        preferLocalFrame = task.outputPath.isNotBlank()
-                    )
+                    // 隐私模式（2026-11-07）：缩略图模糊+按住查看；播放钮保持清晰
+                    com.ed.edqiu.ui.privacy.PrivacyGateBox(
+                        enabled = com.ed.edqiu.ui.privacy.LocalPrivacyBlur.current,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        ThumbnailWithFallback(
+                            thumbnailUrl = task.thumbnail,
+                            videoFilePath = task.outputPath.ifBlank { null },
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                            preferLocalFrame = task.outputPath.isNotBlank()
+                        )
+                    }
                     Surface(
                         color = Color.Black.copy(alpha = 0.44f),
                         shape = CircleShape,

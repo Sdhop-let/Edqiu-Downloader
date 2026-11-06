@@ -478,14 +478,20 @@ private fun AuthorWorkThumbnail(work: SavedLink) {
     Column(
         modifier = Modifier.width(96.dp)
     ) {
-        ThumbnailWithFallback(
-            thumbnailUrl = work.thumbnailUrl.orEmpty(),
-            videoFilePath = work.filePath,
+        // 隐私模式（2026-11-07）：作品缩略模糊+按住查看（clip 收进圆角防外溢）
+        com.ed.edqiu.ui.privacy.PrivacyGateBox(
+            enabled = com.ed.edqiu.ui.privacy.LocalPrivacyBlur.current,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(64.dp)
                 .clip(RoundedCornerShape(10.dp))
-        )
+        ) {
+            ThumbnailWithFallback(
+                thumbnailUrl = work.thumbnailUrl.orEmpty(),
+                videoFilePath = work.filePath,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
         Spacer(Modifier.height(4.dp))
         Text(
             text = work.caption?.takeIf { it.isNotBlank() }

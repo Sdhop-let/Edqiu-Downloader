@@ -103,4 +103,35 @@ class BatchTweetUrlExtractorTest {
         assertEquals(0, BatchTweetUrlExtractor.extractWithOriginals("   ").size)
         assertEquals(0, BatchTweetUrlExtractor.extractWithOriginals("no urls here").size)
     }
+
+    // 2026-11-04 裸链容错：无 scheme 的链接（备忘录/部分 App 分享产物）也要认
+    @Test
+    fun extractWithOriginals_acceptsSchemelessBareLinks() {
+        val text = """
+            x.com/alice/status/1234567890123
+            www.twitter.com/bob/status/2234567890123
+        """.trimIndent()
+
+        val pairs = BatchTweetUrlExtractor.extractWithOriginals(text)
+        assertEquals(2, pairs.size)
+        assertEquals("1234567890123", pairs[0].tweetId)
+        assertEquals("2234567890123", pairs[1].tweetId)
+    }
+
+    // 边界保护：fox.com / box.com 等域名字面含 x.com，不得误命中
+    @Test
+    fun extractWithOriginals_ignoresXComInsideForeignDomains() {
+        val text = "https://fox.com/alice/status/1234567890123 box.com/bob/status/2234567890123"
+        assertEquals(0, BatchTweetUrlExtractor.extractWithOriginals(text).size)
+    }
+
+    // 2026-11-04 零宽字符清洗：夹带不可见字符的链接不得失配
+    @Test
+    fun extractWithOriginals_stripsZeroWidthCharacters() {
+        val text = "https://x.com/ali\u200Bce/status/1234567890123\u200B"
+        val pairs = BatchTweetUrlExtractor.extractWithOriginals(text)
+
+        assertEquals(1, pairs.size)
+        assertEquals("1234567890123", pairs[0].tweetId)
+    }
 }

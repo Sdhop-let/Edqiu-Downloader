@@ -12,6 +12,7 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -27,6 +28,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+    // 2026-11-07 卡顿修复：O(n²) pHash 重复聚组从 MediaLibraryScreen 的 produceState 迁入 VM——
+    // 旧实现 keyed allItems 且组合重建（每次切回媒体库 Tab）都全量重算，正好砸进转场窗口；
+    // Lazily 常驻 = 首次订阅后跨 Tab 存活，仅随 allItems 变化在 Default 线程重算一次
+    val duplicateGroupList: StateFlow<List<List<DownloadHistoryEntity>>> =
+        historyList
+            .map { items ->
+                if (items.isEmpty()) emptyList()
+                else withContext(Dispatchers.Default) { duplicateGroups(items) }
+            }
+            .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val historyCount: StateFlow<Int> =
         repository.historyCount.stateIn(
@@ -145,4 +157,31 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             mediaDeleted
         }.getOrDefault(false)
     }
+}
+
+/** pHash 重复分组（2026-09-15 批次3）：汉明距离 ≤4 判疑似重复，贪心聚组（纯内存）。
+ *  2026-11-07 从 MediaLibraryScreen 迁入：计算移到 HistoryViewModel.duplicateGroupList。 */
+internal fun duplicateGroups(items: List<DownloadHistoryEntity>): List<List<DownloadHistoryEntity>> {
+    val withHash = items.filter { it.phash != null && it.phash != 0L }
+    val used = mutableSetOf<String>()
+    val groups = mutableListOf<List<DownloadHistoryEntity>>()
+    for (i in withHash.indices) {
+        val a = withHash[i]
+        if (a.id in used) continue
+        val group = mutableListOf(a)
+        for (j in i + 1 until withHash.size) {
+            val b = withHash[j]
+            if (b.id in used) continue
+            if (com.ed.edqiu.service.PhashService.hamming(a.phash!!, b.phash!!) <=
+                com.ed.edqiu.service.PhashService.HAMMING_THRESHOLD
+            ) {
+                group += b
+            }
+        }
+        if (group.size >= 2) {
+            group.forEach { used += it.id }
+            groups += group
+        }
+    }
+    return groups
 }

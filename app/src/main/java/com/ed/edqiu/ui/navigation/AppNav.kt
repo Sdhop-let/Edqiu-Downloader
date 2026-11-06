@@ -123,6 +123,13 @@ fun EdqiuApp(container: AppContainer) {
     // 玻璃三参数（2026-09-28 拆分独立滑块）：透明度 / 磨砂 / 折射各自独立调节
     val frostStrength = blurIntensity
 
+    // 隐私模式（2026-11-07）：浏览模式全局下发——媒体展示面按此模糊。
+    // PrivacyModeStore 是 SharedPreferences 同步读（启动防闪现），这里只做 UI 态转发
+    val privacyMode by com.ed.edqiu.data.preferences.PrivacyModeStore
+        .modeFlow(LocalContext.current)
+        .collectAsStateWithLifecycle(initialValue = com.ed.edqiu.data.preferences.PrivacyMode.PRIVATE)
+    val privacyBlurActive = privacyMode == com.ed.edqiu.data.preferences.PrivacyMode.PUBLIC
+
     // 界面缩放（2026-09-28 真全局缩放）：displayScale 乘入 density（dp 基准），
     // fontScale 保持系统设置。sp 字号 px = sp × fontScale × density，dp 卡片/间距/排版
     // 与字号同比缩放
@@ -145,7 +152,8 @@ fun EdqiuApp(container: AppContainer) {
         ThemeEffects.GlassLightIntensity provides glassLightIntensity,
         ThemeEffects.GlassDispersion provides glassDispersion,
         ThemeEffects.GlassDimAmount provides glassDimAmount,
-        com.ed.edqiu.ui.util.LocalHapticStrength provides hapticStrength
+        com.ed.edqiu.ui.util.LocalHapticStrength provides hapticStrength,
+        com.ed.edqiu.ui.privacy.LocalPrivacyBlur provides privacyBlurActive
     ) {
         EdqiuTheme(
             themeMode = themeMode
@@ -172,6 +180,16 @@ fun EdqiuApp(container: AppContainer) {
 
                 LaunchedEffect(Unit) {
                     snackbarController.observe(scope, snackbarHostState, capsuleController)
+                }
+
+                // 隐私模式进入提示（2026-11-07）：一次性状态胶囊，告知模糊+按住查看语义
+                LaunchedEffect(privacyBlurActive) {
+                    if (privacyBlurActive) {
+                        capsuleController.show(
+                            FeedbackKind.NEUTRAL,
+                            "隐私模式：媒体已模糊，按住可临时查看"
+                        )
+                    }
                 }
 
                 // 2026-10-21：进软件提示——上次离开后订阅线捕获的新作品（胶囊轻提示，非强提醒）。

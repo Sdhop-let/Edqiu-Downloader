@@ -138,6 +138,37 @@ class SettingsRepository(context: Context) {
     val onboardingCompletedFlow: Flow<Boolean> =
         safeData.map { it[ONBOARDING_COMPLETED] ?: false }
 
+    // ===== 我的页身份区（2026-11-07 横排档案风）：自定义昵称 / ID / 头像 =====
+
+    /** 自定义昵称（默认空 = 显示内置默认「小秋」） */
+    val profileNameFlow: Flow<String> =
+        safeData.map { it[PROFILE_NAME].orEmpty() }
+
+    /** 自定义 ID（默认空 = 显示内置默认 @edqiu_local；存储值不含 @ 前缀，显示层统一补） */
+    val profileIdFlow: Flow<String> =
+        safeData.map { it[PROFILE_ID].orEmpty() }
+
+    /** 自定义头像文件绝对路径（默认空 = 内置暖色渐变+首字头像） */
+    val profileAvatarPathFlow: Flow<String> =
+        safeData.map { it[PROFILE_AVATAR].orEmpty() }
+
+    suspend fun setProfileName(name: String) {
+        editSafe { it[PROFILE_NAME] = name.trim().take(24) }
+    }
+
+    suspend fun setProfileId(id: String) {
+        // 去掉误输入的 @ 前缀（显示层统一补 @），限制长度防排版撑爆
+        editSafe { it[PROFILE_ID] = id.trim().trimStart('@').take(24) }
+    }
+
+    /** 头像路径为空 = 恢复内置默认头像（AvatarStore 换图时负责清理旧文件） */
+    suspend fun setProfileAvatarPath(path: String?) {
+        editSafe { prefs ->
+            if (path.isNullOrBlank()) prefs.remove(PROFILE_AVATAR)
+            else prefs[PROFILE_AVATAR] = path
+        }
+    }
+
     suspend fun setMonitorDirUri(uri: String?) {
         editSafe { prefs ->
             if (uri == null) prefs.remove(MONITOR_URI)
@@ -331,6 +362,10 @@ class SettingsRepository(context: Context) {
         private val LIQUID_GLASS_ENABLED = booleanPreferencesKey("liquid_glass_enabled")
         private val DISPLAY_SCALE = floatPreferencesKey("display_scale")
         private val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
+        // 我的页身份区（2026-11-07）：昵称 / ID / 头像
+        private val PROFILE_NAME = stringPreferencesKey("profile_name")
+        private val PROFILE_ID = stringPreferencesKey("profile_id")
+        private val PROFILE_AVATAR = stringPreferencesKey("profile_avatar")
     }
 }
 

@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import com.ed.edqiu.data.model.MediaFileTypes
+import com.ed.edqiu.ui.privacy.privacyBlur
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -59,12 +60,17 @@ fun ThumbnailWithFallback(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
     frameOffsetSeconds: Float = 1f,
-    preferLocalFrame: Boolean = videoFilePath != null
+    preferLocalFrame: Boolean = videoFilePath != null,
+    // 隐私模式（2026-11-07）：true 时内容真高斯模糊（API 31+，低版本由调用方蒙层兜底）。
+    // 组件内部不读 LocalPrivacyBlur，由调用面显式传入，保持组件纯净
+    blurred: Boolean = false
 ) {
     val remoteLoadFailed = remember(thumbnailUrl) { mutableStateOf(thumbnailUrl.isBlank()) }
     val localFile = remember(videoFilePath) { videoFilePath?.let(::File) }
-    val hasLocalFile = localFile?.exists() == true
+    // exists() 是磁盘 stat：包 remember 避免每次重组都在主线程做 IO（切 Tab 首帧风暴的一部分）
+    val hasLocalFile = remember(localFile) { localFile?.exists() == true }
     val isLocalImage = hasLocalFile && MediaFileTypes.isImageFile(localFile!!.absolutePath)
+    val renderModifier = modifier.privacyBlur(blurred)
     val shouldUseLocalFrame = preferLocalFrame && hasLocalFile && !isLocalImage
     val cacheKey = remember(videoFilePath, frameOffsetSeconds) {
         if (videoFilePath == null) "" else "$videoFilePath#${frameOffsetSeconds}"
@@ -109,7 +115,7 @@ fun ThumbnailWithFallback(
             AsyncImage(
                 model = localFile,
                 contentDescription = null,
-                modifier = modifier,
+                modifier = renderModifier,
                 contentScale = contentScale,
                 onState = { state ->
                     if (state is AsyncImagePainter.State.Error) {
@@ -122,18 +128,18 @@ fun ThumbnailWithFallback(
             Image(
                 bitmap = cachedLocalFrame.asImageBitmap(),
                 contentDescription = null,
-                modifier = modifier,
+                modifier = renderModifier,
                 contentScale = contentScale
             )
         }
         shouldUseLocalFrame && !failedLocalFrameKeys.contains(cacheKey) -> {
-            PlaceholderThumbnail(modifier = modifier)
+            PlaceholderThumbnail(modifier = renderModifier)
         }
         !remoteLoadFailed.value -> {
             AsyncImage(
                 model = thumbnailUrl,
                 contentDescription = null,
-                modifier = modifier,
+                modifier = renderModifier,
                 contentScale = contentScale,
                 onState = { state ->
                     if (state is AsyncImagePainter.State.Error) {
@@ -143,7 +149,7 @@ fun ThumbnailWithFallback(
             )
         }
         else -> PlaceholderThumbnail(
-            modifier = modifier,
+            modifier = renderModifier,
             icon = if (isLocalImage || MediaFileTypes.isImageFile(thumbnailUrl)) Icons.Outlined.Image else Icons.Outlined.PlayCircle
         )
     }
