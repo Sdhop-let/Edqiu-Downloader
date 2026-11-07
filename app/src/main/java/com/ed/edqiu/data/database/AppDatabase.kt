@@ -17,7 +17,7 @@ import com.ed.edqiu.data.model.MediaType
         SubscriptionEntity::class,
         SubscriptionMessageEntity::class,
     ],
-    version = 15,
+    version = 16,
     exportSchema = false
 )
 @TypeConverters(AppDatabase.Converters::class)
@@ -284,6 +284,42 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 2026-11-07（v16）：subscriptions 主键 screenName → (screenName, platform) 复合——
+         * 旧单列主键下跨平台同 handle 订阅互相整行 REPLACE 覆盖（订阅配置丢失）。
+         * SQLite 不能改主键，重建表迁移；数据全量平移，无破坏。
+         */
+        private val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `subscriptions_new` (
+                        `screenName` TEXT NOT NULL,
+                        `platform` TEXT NOT NULL,
+                        `enabled` INTEGER NOT NULL,
+                        `lastCheckedAt` INTEGER,
+                        `lastVideoAt` INTEGER,
+                        `lastError` TEXT,
+                        `lastErrorAt` INTEGER,
+                        `startFromAt` INTEGER,
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`screenName`, `platform`)
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    INSERT INTO subscriptions_new
+                        (screenName, platform, enabled, lastCheckedAt, lastVideoAt, lastError, lastErrorAt, startFromAt, createdAt)
+                    SELECT screenName, platform, enabled, lastCheckedAt, lastVideoAt, lastError, lastErrorAt, startFromAt, createdAt
+                    FROM subscriptions
+                    """.trimIndent()
+                )
+                database.execSQL("DROP TABLE subscriptions")
+                database.execSQL("ALTER TABLE subscriptions_new RENAME TO subscriptions")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -295,7 +331,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                     MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
-                    MIGRATION_13_14, MIGRATION_14_15
+                    MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16
                 )
                 // 2026-10 安全整改：移除 fallbackToDestructiveMigration()——
                 // 升级路径 schema 漂移时它会把整库（下载历史/任务/订阅）静默删除重建。

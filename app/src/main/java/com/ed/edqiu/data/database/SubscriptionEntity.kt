@@ -15,9 +15,11 @@ import androidx.room.PrimaryKey
  * 轮询：SubscriptionManager 每 25 分钟取 lastCheckedAt 最旧的 ≤3 个 enabled 订阅，
  * 新作品走订阅线 capture（不进收件箱）+ 用户点按下载。
  */
-@Entity(tableName = "subscriptions")
+@Entity(tableName = "subscriptions", primaryKeys = ["screenName", "platform"])
 data class SubscriptionEntity(
-    @PrimaryKey
+    // 2026-11-07 审计修复：主键从单列 screenName 改为 (screenName, platform) 复合——
+    // 旧实现跨平台同 handle（如 twitter 与 bluesky 同名）订阅时 REPLACE 整行覆盖，
+    // twitter 订阅静默丢失（DAO 的 get/delete 一直按复合过滤，与主键定义不一致）
     val screenName: String,
     /** 作品来源平台：twitter（默认，存量）/ bluesky / instagram。 */
     val platform: String = "twitter",

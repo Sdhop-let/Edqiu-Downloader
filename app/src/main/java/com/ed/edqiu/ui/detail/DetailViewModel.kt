@@ -55,11 +55,17 @@ class DetailViewModel(
     val monitorUri: StateFlow<String?> = settings.monitorDirUriFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    /** 当前详情页的 Room 订阅（2026-11-07 审计修复：load() 每次叠加一个永不取消的
+     *  收集器——先看 A 再开 B 后，后台对 A 的更新会把 B 页面翻成 A；现 load 前
+     *  取消上一个，VM 内任意时刻至多一个订阅存活）。 */
+    private var observeJob: kotlinx.coroutines.Job? = null
+
     fun load(tweetId: String) {
         // 2026-10-24 审计修复：改为 Room Flow 实时订阅——此前是一次性快照，后台自动重试
         // 或另一入口下载完成后，已打开的详情页停留旧状态（显示未下载、按钮可再点）。
         // 首发即覆盖初始加载；后续 DB 变化（下载完成/状态自愈）实时刷新。
-        viewModelScope.launch {
+        observeJob?.cancel()
+        observeJob = viewModelScope.launch {
             repo.observeAll()
                 .map { list -> list.firstOrNull { it.tweetId == tweetId } }
                 .distinctUntilChanged()

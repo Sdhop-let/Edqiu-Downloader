@@ -147,27 +147,41 @@ class CaptureIntentActivity : ComponentActivity() {
             // 无严格链接但有 t.co 短链时走限时网络兜底展开。
             // 单条保持原流程（元数据等待 + 失败重试）；多条只入库不等元数据
             // （收件箱刷新会自动补全），汇总反馈。
-            android.util.Log.d(
-                "EdqiuClip",
-                "share action=${intent.action} len=${text.length} head=${text.take(120)}"
-            )
-            var candidate = text
+            // 2026-11-07 审计修复：分享正文可能含用户敏感内容，release 包（不混淆、
+            // Log 未剥离）不再落 logcat
+            if (com.ed.edqiu.BuildConfig.DEBUG) {
+                android.util.Log.d(
+                    "EdqiuClip",
+                    "share action=${intent.action} len=${text.length} head=${text.take(120)}"
+                )
+            }
+            val safeText = text ?: return@launch // 双保险（上方 isNullOrBlank 已挡）
+            var candidate: String = safeText
             if (com.ed.edqiu.domain.BatchTweetUrlExtractor
                     .extractWithOriginals(candidate).isEmpty()
             ) {
+                // 2026-11-07 审计修复：t.co 展开加总超时——3 条短链串行每条 5s，
+                // 最坏 ~15s 无上限等待（与 fetchMetadata 的 8s 口径对齐）
                 candidate = runCatching {
-                    com.ed.edqiu.capture.TcoLinkResolver.expand(candidate)
+                    withTimeoutOrNull(8_000L) {
+                        com.ed.edqiu.capture.TcoLinkResolver.expand(candidate)
+                    } ?: candidate
                 }.getOrDefault(candidate)
             }
+            val resolvedCandidate = candidate
             val pairs = com.ed.edqiu.domain.BatchTweetUrlExtractor
-                .extractWithOriginals(candidate)
+                .extractWithOriginals(resolvedCandidate)
             if (pairs.isEmpty()) {
                 withContext(Dispatchers.Main) { fail("不是有效的 X/Twitter 链接") }
                 return@launch
             }
             if (pairs.size == 1) {
-                val result = runCatching { coordinator.capture(pairs[0].normalizedUrl) }
-                    .getOrNull() ?: SavedLinkRepository.CaptureResult.Invalid
+                // 2026-11-07 审计修复：入库段包 NonCancellable——本页 noHistory+excludeFromRecents，
+                // 用户 loading 中按 Back/切走即 destroy → lifecycleScope 取消，旧实现链接
+                // 静默丢失（没入库也无任何反馈）。元数据/UI 更新仍随生命周期可取消
+                val result = withContext(kotlinx.coroutines.NonCancellable) {
+                    runCatching { coordinator.capture(pairs[0].normalizedUrl) }.getOrNull()
+                } ?: SavedLinkRepository.CaptureResult.Invalid
                 when (result) {
                     is SavedLinkRepository.CaptureResult.Added -> {
                         savedTweetId = result.tweetId
@@ -183,7 +197,11 @@ class CaptureIntentActivity : ComponentActivity() {
             var added = 0
             var duplicated = 0
             pairs.forEach { pair ->
-                when (runCatching { coordinator.capture(pair.normalizedUrl) }.getOrNull()) {
+                when (
+                    withContext(kotlinx.coroutines.NonCancellable) {
+                        runCatching { coordinator.capture(pair.normalizedUrl) }.getOrNull()
+                    }
+                ) {
                     is SavedLinkRepository.CaptureResult.Added -> added++
                     SavedLinkRepository.CaptureResult.Duplicate -> duplicated++
                     else -> Unit

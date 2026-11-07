@@ -67,7 +67,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val _playerPlaylist = MutableStateFlow<List<DownloadHistoryEntity>>(emptyList())
     val playerPlaylist: StateFlow<List<DownloadHistoryEntity>> = _playerPlaylist.asStateFlow()
 
-    // 监听器与预载配置提取为可复用构建块：releaseIfIdle 释放实例后再次进入播放页时
+    // 监听器与预载配置提取为可复用构建块：release 兜底后再次进入播放页时
     // obtainPlayer() 据此重建，避免任何公开入口撞上已 release 的 ExoPlayer（use-after-release 崩溃）
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -116,11 +116,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     private var playerReleased = false
 
-    // ExoPlayer instance（releaseIfIdle 后由 obtainPlayer 按需重建）
+    // ExoPlayer instance（release 兜底后由 obtainPlayer 按需重建）
     var exoPlayer: ExoPlayer = buildPlayer()
         private set
 
-    /** 取可用播放器；曾被 releaseIfIdle 释放则重建（返回后再次进入播放页的兜底）。 */
+    /** 取可用播放器；曾被 release 兜底释放则重建（返回后再次进入播放页的兜底）。 */
     private fun obtainPlayer(): ExoPlayer {
         if (playerReleased) {
             playerReleased = false
@@ -153,7 +153,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun syncPlaybackPosition() {
-        // releaseIfIdle 释放期间静默跳过；读已释放实例会抛 IllegalStateException
+        // release 期间静默跳过；读已释放实例会抛 IllegalStateException
         if (playerReleased) return
         val duration = exoPlayer.duration.takeIf { it > 0 } ?: 0L
         _playerState.update {
@@ -586,18 +586,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         VideoFirstFrameCache.evictExcept(emptySet())
     }
 
-    /**
-     * 仅在闲置（未起播且无已准备媒体）时释放实例，归还解码器资源。
-     * 在播续播场景（已 prepare/在播）调用为 no-op，不会打断后台播放；
-     * 释放后再次进入播放页由 obtainPlayer() 按需重建。
-     */
-    fun releaseIfIdle() {
-        if (playerReleased) return
-        if (!exoPlayer.playWhenReady && exoPlayer.playbackState == Player.STATE_IDLE) {
-            playerReleased = true
-            exoPlayer.release()
-        }
-    }
+    // 2026-11-07 审计清理：releaseIfIdle 全工程 0 引用（注释声称的兜底链路不存在），
+    // 删除——主实例生命周期=Activity 级 VM（App 全程），释放仅发生在 onCleared
 
     override fun onCleared() {
         super.onCleared()

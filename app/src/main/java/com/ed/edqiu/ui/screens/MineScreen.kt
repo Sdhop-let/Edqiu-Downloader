@@ -302,6 +302,11 @@ fun MineScreen(mineNav: MineNav) {
         if (showEditDialog) {
             var nameInput by remember(showEditDialog) { mutableStateOf(profileName) }
             var idInput by remember(showEditDialog) { mutableStateOf(profileId) }
+            // 2026-11-07 审计修复：ID 输入校验——旧实现 take(24) 截断了事，空格/@/中文
+            // 全放行（显示成 @@x），空白 ID 静默回退 edqiu_local。限定合法字符集，
+            // 非法即禁用保存并提示
+            val idValid = idInput.isNotBlank() && idInput.all { it.isLetterOrDigit() || it == '_' || it == '.' }
+            val nameTooLong = nameInput.length > 24
             SmoothAlertDialog(
                 onDismissRequest = { showEditDialog = false },
                 title = { Text("编辑身份") },
@@ -309,26 +314,40 @@ fun MineScreen(mineNav: MineNav) {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedTextField(
                             value = nameInput,
-                            onValueChange = { nameInput = it.take(24) },
+                            onValueChange = { input -> nameInput = input.replace("\n", "").take(24) },
                             label = { Text("昵称") },
+                            supportingText = { if (nameTooLong) Text("最多 24 个字符", color = MaterialTheme.colorScheme.error) },
+                            isError = nameTooLong,
                             singleLine = true,
                         )
                         OutlinedTextField(
                             value = idInput,
-                            onValueChange = { idInput = it.take(24) },
+                            onValueChange = { input ->
+                                // 输入即清洗：去空白与 @（显示时自动加 @ 前缀）
+                                idInput = input.filterNot { it.isWhitespace() || it == '@' }.take(24)
+                            },
                             label = { Text("ID（显示为 @ 后缀）") },
+                            supportingText = {
+                                if (idInput.isNotBlank() && !idValid) {
+                                    Text("仅支持字母、数字、下划线和点", color = MaterialTheme.colorScheme.error)
+                                }
+                            },
+                            isError = !idValid,
                             singleLine = true,
                         )
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = {
-                        showEditDialog = false
-                        identityScope.launch {
-                            settingsRepo.setProfileName(nameInput)
-                            settingsRepo.setProfileId(idInput)
+                    TextButton(
+                        enabled = idValid && !nameTooLong,
+                        onClick = {
+                            showEditDialog = false
+                            identityScope.launch {
+                                settingsRepo.setProfileName(nameInput.trim())
+                                settingsRepo.setProfileId(idInput)
+                            }
                         }
-                    }) { Text("保存") }
+                    ) { Text("保存") }
                 },
                 dismissButton = {
                     TextButton(onClick = { showEditDialog = false }) { Text("取消") }

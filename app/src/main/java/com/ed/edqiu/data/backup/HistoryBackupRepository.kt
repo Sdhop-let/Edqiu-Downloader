@@ -73,11 +73,20 @@ class HistoryBackupRepository(
                 .map(BackupHistoryEntry::toHistory)
             val activeResults = savedLinkDao.insertAllIgnoringConflicts(active)
             val historyResults = historyDao.insertAllIgnoringConflicts(history)
+            // 订阅恢复（INSERT OR IGNORE：不覆盖设备已有订阅状态；属另一库，独立事务语义）
+            // 2026-11-07 审计修复：旧实现订阅完全不在备份范围内
+            val subResults = runCatching {
+                val subs = backup.envelope.payload.subscriptions.map(BackupSubscription::toEntity)
+                if (subs.isEmpty()) emptyList()
+                else com.ed.edqiu.data.database.AppDatabase.getInstance(context)
+                    .subscriptionDao().insertAllIgnoringConflicts(subs)
+            }.getOrDefault(emptyList())
             RestoreResult(
                 activeImported = activeResults.count { it != -1L },
                 activeSkipped = activeResults.count { it == -1L },
                 historyImported = historyResults.count { it != -1L },
-                historySkipped = historyResults.count { it == -1L }
+                historySkipped = historyResults.count { it == -1L },
+                subscriptionsImported = subResults.count { it != -1L }
             )
         }
     }
@@ -171,7 +180,19 @@ class HistoryBackupRepository(
         check(directory.exists() || directory.mkdirs()) { "无法创建自动备份目录" }
         check(directory.isDirectory && directory.canWrite()) { "自动备份目录不可写" }
         val target = File(directory, backupFileName(System.currentTimeMillis()))
-        target.writeText(text, Charsets.UTF_8)
+        // 2026-11-07 审计修复：tmp+rename 原子写（与 writeCookieFile 同策略）——
+        // 旧实现直接 writeText，进程中途被杀会留下匹配文件名模式的截断文件，
+        // 并被 lastModified 排序当成「最新备份」参与内容比对与自动恢复
+        val tmp = File(directory, target.name + ".part")
+        try {
+            tmp.writeText(text, Charsets.UTF_8)
+            if (!tmp.renameTo(target)) {
+                tmp.delete()
+                error("自动备份文件落盘失败（rename）")
+            }
+        } finally {
+            if (tmp.exists()) tmp.delete()
+        }
         val cutoff = System.currentTimeMillis() - DEFAULT_MAX_AGE_MILLIS
         val kept = directory.listFiles()
             .orEmpty()
@@ -204,7 +225,11 @@ class HistoryBackupRepository(
     private suspend fun createBackupPayload(): BackupPayload = database.withTransaction {
         BackupPayload(
             activeLinks = savedLinkDao.getAllSnapshot().map(BackupLink::from),
-            deletedHistory = historyDao.getAllSnapshot().map(BackupHistoryEntry::from)
+            deletedHistory = historyDao.getAllSnapshot().map(BackupHistoryEntry::from),
+            // 2026-11-07 审计修复：订阅配置随备份走（旧实现重装/换机全部丢失）
+            subscriptions = com.ed.edqiu.data.database.AppDatabase
+                .getInstance(context).subscriptionDao().getAllSnapshot()
+                .map(BackupSubscription::from)
         )
     }
 

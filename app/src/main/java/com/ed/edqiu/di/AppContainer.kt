@@ -32,7 +32,7 @@ class AppContainer(context: Context) {
 
     private val database: EdqiuDatabase = EdqiuDatabase.getDatabase(context)
 
-    private val metadataFetcher: MetadataFetcher = MetadataFetcher()
+    private val metadataFetcher: MetadataFetcher = MetadataFetcher(context.applicationContext)
 
     private val downloadMonitor: DownloadMonitor = DownloadMonitor(context)
 

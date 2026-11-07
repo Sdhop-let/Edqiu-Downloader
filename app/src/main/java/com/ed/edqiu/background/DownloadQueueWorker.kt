@@ -52,7 +52,39 @@ class DownloadQueueWorker(
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
 
+    companion object {
+        private const val CHANNEL_ID = "webdav_sync_progress"
+        private const val NOTIFICATION_ID = 20262
+
+        /**
+         * 前台服务信息（2026-11-07 审计修复）：大视频下载在 Android 14+ 后台无 FGS
+         * 保护会被冻结（进度卡住）；复用网盘同步渠道（同属长传输），失败降级后台。
+         */
+        private fun downloadForegroundInfo(context: android.content.Context): androidx.work.ForegroundInfo {
+            val nm = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            if (android.os.Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CHANNEL_ID) == null) {
+                nm.createNotificationChannel(
+                    android.app.NotificationChannel(
+                        CHANNEL_ID, "网盘同步", android.app.NotificationManager.IMPORTANCE_LOW
+                    ).apply { description = "媒体下载与网盘同步进行中" }
+                )
+            }
+            val notification = androidx.core.app.NotificationCompat.Builder(context, CHANNEL_ID)
+                .setContentTitle("正在下载媒体")
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setOngoing(true)
+                .build()
+            return androidx.work.ForegroundInfo(
+                NOTIFICATION_ID,
+                notification,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        }
+    }
+
     override suspend fun doWork(): Result {
+        // 2026-11-07 审计修复：挂前台服务防后台冻结；失败（权限/系统限制）降级普通后台
+        runCatching { setForeground(downloadForegroundInfo(applicationContext)) }
         val tweetId = inputData.getString(DownloadQueue.KEY_TWEET_ID)
             ?: return Result.success()
         val container = (applicationContext as? EdqiuApplication)?.container
@@ -69,7 +101,10 @@ class DownloadQueueWorker(
             Result.success()
         }.getOrElse {
             // 网络类失败交给 WorkManager 退避重试（指数/线性 backoff）
-            Result.retry()
+            // 2026-11-07 审计修复：重试封顶——旧实现无限 retry（30s 线性退避永不放弃，
+            // DB 损坏等永久性异常也会空转）；5 次后放弃，状态已由引擎链记 FAILED
+            android.util.Log.w("DownloadQueueWorker", "队列下载异常 attempt=$runAttemptCount：${it.message}")
+            if (runAttemptCount < 5) Result.retry() else Result.failure()
         }
     }
 }

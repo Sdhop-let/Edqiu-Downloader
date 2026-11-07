@@ -67,6 +67,8 @@ class InternalMediaDownloader(private val context: Context) {
         // 2026-10-25：false = 禁用 HLS 路由（DownloaderClient 回退直下 mp4 时用，
         // 防止「yt-dlp 拉流失败 → 重试内部 → 又被路由回 yt-dlp」死循环）
         allowHlsRouting: Boolean = true,
+        // 2026-11-07 审计修复：true = 只下图片（混合推文视频被 yt-dlp 拿走后补图专用）
+        skipVideos: Boolean = false,
     ): Result<List<DownloadedFile>> = withContext(Dispatchers.IO) {
         runCatching {
             val tweetId = TweetIdExtractor.fromUrl(rawUrl)
@@ -87,7 +89,8 @@ class InternalMediaDownloader(private val context: Context) {
             val uploader = authorId?.removePrefix("@") ?: "unknown"
             val caption = tweet.optString("text").takeIf { it.isNotBlank() }
             val publishedAt = parsePublishedAt(tweet)
-            val media = extractMedia(tweet)
+            val allMedia = extractMedia(tweet)
+            val media = if (skipVideos) allMedia.filter { it.kind == "image" } else allMedia
             if (media.isEmpty()) error("推文中没有可下载的视频或图片")
 
             // 2026-09-15 源头画质优化 → 2026-10-25 放宽（对齐 MediaQualityUpgrader 语义）：
@@ -103,8 +106,13 @@ class InternalMediaDownloader(private val context: Context) {
             }.getOrDefault(false)
             val is16kPage = (context.applicationContext as? com.ed.edqiu.TwitterDownloaderApp)
                 ?.is16kPageDevice == true
+            // 2026-11-07 审计修复：码率解析不到（=0）≠ 低码率——旧实现 0 < 2M 恒真 +
+            // cookieBoost 使配 Cookie 用户的所有视频（包括本已高码率的）都绕道 yt-dlp
+            // 白跑一遍。码率已知且低才走 cookieBoost 路由；纯 HLS（解析不到任何 mp4 变体）仍路由
+            val bitrateKnownAndLow = maxMp4Bitrate in 1..1_999_999
+            val hlsOnly = hasHls && maxMp4Bitrate == 0
             if (allowHlsRouting && hasVideoMedia && !is16kPage &&
-                maxMp4Bitrate < 2_000_000 && (hasHls || cookieBoost)
+                (bitrateKnownAndLow || hlsOnly) && (hasHls || cookieBoost)
             ) {
                 throw HlsBetterSourceException(maxMp4Bitrate, uploader)
             }
@@ -114,6 +122,7 @@ class InternalMediaDownloader(private val context: Context) {
             outputDir.mkdirs()
 
             val downloaded = mutableListOf<DownloadedFile>()
+            var cancelledAny = false
             // 2026-09-30 v1.6.8 预览图同步落盘：sidecar/收件箱记录的 thumbnail 优先用
             // 本地封面路径（分享时已落盘），媒体库扫描后免联网同步预览图；
             // 本地没有则借本次下载的网络窗口顺手补存一份（4s 超时，失败不影响下载）
@@ -181,6 +190,7 @@ class InternalMediaDownloader(private val context: Context) {
                     }
                 }.onFailure { error ->
                     val cancelled = error is DownloadCancelledException || DownloadCancellation.isCancelled(task.id)
+                    if (cancelled) cancelledAny = true
                     DownloadTaskBus.updateTask(task.id) {
                         it.copy(
                             status = if (cancelled) DownloadStatus.CANCELLED else DownloadStatus.FAILED,
@@ -190,7 +200,16 @@ class InternalMediaDownloader(private val context: Context) {
                     Log.w(TAG, "Failed to download ${target.name}", error)
                 }
             }
+            // 2026-11-07 审计修复：取消语义上抛（旧实现部分取消会被下面的「部分成功」
+            // 判定吞成整体成功/失败，触发无谓自动重试）
+            if (cancelledAny) throw DownloadCancelledException()
             if (downloaded.isEmpty()) error("没有媒体下载成功")
+            // 2026-11-07 审计修复：部分成功不再算整体成功——旧实现只要 ≥1 个文件成功
+            // 就返回、状态置 DOWNLOADED，失败索引永不重试。改为抛错走既有 FAILED→重试
+            // 链路补齐（重试会重下已成功的文件，量小可接受；换取状态与实际文件一致）
+            if (downloaded.size < media.size) {
+                error("部分媒体下载失败（${downloaded.size}/${media.size} 成功），将自动重试补齐")
+            }
             downloaded
         }
     }
@@ -291,6 +310,12 @@ class InternalMediaDownloader(private val context: Context) {
     internal fun downloadFile(url: String, target: File, proxy: ProxySettings?, taskId: String? = null) {
         val part = File(target.parentFile, target.name + ".part")
         val maxAttempts = 2
+        // 2026-11-07 审计修复：磁盘满预检——旧实现零处理，ENOSPC 表现为晦涩 IOException
+        // 且 .part 残留继续占空间、每次重试先写两次注定失败的 IO
+        val dir = target.parentFile
+        if (dir != null && dir.usableSpace in 1 until MIN_FREE_SPACE_BYTES) {
+            error("存储空间不足（剩余不足 64MB），请清理存储后重试")
+        }
         var lastError: Throwable? = null
         for (attempt in 1..maxAttempts) {
             try {
@@ -313,6 +338,14 @@ class InternalMediaDownloader(private val context: Context) {
                 connection.instanceFollowRedirects = true
                 try {
                     val code = connection.responseCode
+                    // 2026-11-07 审计修复：.part ≥ 远端文件（远端被较小版本替换/上轮落位
+                    // 失败残留）→ Range 起点越界 416，旧实现两次重试全 416 永久失败且
+                    // .part 永不修复。清零重下（耗一次重试额度，第二次从 0 全量下载）
+                    if (code == 416 && resumedBytes > 0L) {
+                        Log.w(TAG, "HTTP 416（.part=$resumedBytes ≥ 远端），清零重下：$url")
+                        part.delete()
+                        error("HTTP 416 断点越界，已清零重下")
+                    }
                     val appending = resumedBytes > 0L && code == HttpURLConnection.HTTP_PARTIAL
                     if (code != HttpURLConnection.HTTP_OK && code != HttpURLConnection.HTTP_PARTIAL) {
                         error("HTTP $code 下载失败")
@@ -360,7 +393,14 @@ class InternalMediaDownloader(private val context: Context) {
                 // 取消不重试、不覆盖 lastError 语义，直接上抛
                 throw e
             } catch (e: Exception) {
-                lastError = e
+                // 2026-11-07 审计修复：ENOSPC 翻译为用户可读文案（原文晦涩且每次重试无意义）
+                lastError = if (e.message?.contains("ENOSPC", ignoreCase = true) == true ||
+                    e.message?.contains("No space left", ignoreCase = true) == true
+                ) {
+                    IllegalStateException("存储空间不足，写入失败，请清理存储后重试", e)
+                } else {
+                    e
+                }
                 Log.w(TAG, "下载中断（第 $attempt 次尝试）url=$url 已有 ${part.length()} 字节，将尝试续传", e)
             }
         }
@@ -485,6 +525,9 @@ class InternalMediaDownloader(private val context: Context) {
         private const val TAG = "InternalMediaDownloader"
         private const val API_BASE = "https://api.fxtwitter.com/Twitter/status/"
         private const val META_SUFFIX = ".meta.json"
+
+        /** 下载前磁盘最低水位（2026-11-07 审计修复：磁盘满预检）。 */
+        private const val MIN_FREE_SPACE_BYTES = 64L * 1024L * 1024L
         private val VIDEO_TYPES = setOf("video", "gif", "animated_gif")
         private val IMAGE_TYPES = setOf("photo", "image")
         private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif")

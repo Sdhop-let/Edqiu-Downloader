@@ -47,6 +47,9 @@ object PublishedAtBackfiller {
     private const val KEY_TIER = "last_tier"
     private const val PARALLELISM = 8
 
+    /** 失败集合上限（2026-11-07 审计：防 StringSet 无界增长）。 */
+    private const val MAX_FAILED_IDS = 5000
+
     /** 网络档位：批量大小与轮间隔随网络好差同步调整（间隔上限 3 分钟）。 */
     enum class Tier(val batchSize: Int, val intervalMs: Long, val label: String) {
         EXCELLENT(300, 60_000L, "网络极好"),
@@ -125,7 +128,7 @@ object PublishedAtBackfiller {
 
     private suspend fun backfillSession(context: Context): Int = withContext(Dispatchers.IO) {
         val dao = AppDatabase.getInstance(context).downloadHistoryDao()
-        val fetcher = MetadataFetcher()
+        val fetcher = MetadataFetcher(context.applicationContext)
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val failedIds = prefs.getStringSet(KEY_FAILED_IDS, emptySet())?.toMutableSet() ?: mutableSetOf()
 
@@ -141,7 +144,14 @@ object PublishedAtBackfiller {
             round++
             if (round < 5) delay(1_500L)
         }
-        prefs.edit().putStringSet(KEY_FAILED_IDS, failedIds).apply()
+        prefs.edit().putStringSet(KEY_FAILED_IDS, failedIds).apply {
+            // 2026-11-07 审计修复：失败集合无上限增长（StringSet 随存量线性膨胀，
+            // 每轮全量序列化回写）——超限整体清空，代价只是这些推文下次再试一次
+            if (failedIds.size > MAX_FAILED_IDS) {
+                failedIds.clear()
+                putStringSet(KEY_FAILED_IDS, failedIds)
+            }
+        }
         // 2026-09-16 收尾必清 running：此前遗留 running=true，pill 永远卡在「补齐 done/total」
         val last = _uiState.value
         if (last.running) _uiState.value = last.copy(running = false)

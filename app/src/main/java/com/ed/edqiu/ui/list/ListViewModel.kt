@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class ListViewModel(
     application: Application,
@@ -53,7 +54,11 @@ class ListViewModel(
         searchQueryMutable,
         sortOrderMutable
     ) { links, query, sortOrder ->
-        LinkListOrganizer.organize(links, query, sortOrder)
+        // 2026-11-07 审计修复：切 Default 调度——combine 默认跑在收集器上下文
+        // （stateIn(viewModelScope) = 主线程），收件箱大时每条 DB 变更在主线程过滤排序
+        withContext(Dispatchers.Default) {
+            LinkListOrganizer.organize(links, query, sortOrder)
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /**

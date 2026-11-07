@@ -15,7 +15,12 @@ import kotlinx.coroutines.flow.StateFlow
  * 读偏好用同步通道、读 UI 状态用 StateFlow 转发，两全。FirstLaunchManager 同款先例。
  */
 enum class PrivacyMode(val storageValue: String) {
+    /** 标准模式：媒体正常显示。注意枚举名以「使用场景」命名——PRIVATE=私人环境放心看。 */
     PRIVATE("private"),
+
+    /** 隐私模式：媒体全量模糊防偷看（按住临时查看）。PUBLIC=公共场合防偷看——
+     *  反直觉点：PUBLIC 才是模糊模式，全链路映射 `privacyBlurActive = mode == PUBLIC`，
+     *  后续维护者勿按字面猜反（2026-11-07 定案命名，历史沿用勿改）。 */
     PUBLIC("public");
 
     companion object {

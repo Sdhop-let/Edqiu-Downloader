@@ -15,6 +15,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
@@ -206,8 +207,14 @@ private fun PostSplashRoute(
         return
     }
     val context = androidx.compose.ui.platform.LocalContext.current
-    // 勾选过「不再每次询问」→ 直接进主界面，沿用记住的模式
-    var modeChosen by remember { mutableStateOf(!PrivacyModeStore.currentAskOnStartup(context)) }
+    // 勾选过「不再每次询问」→ 直接进主界面，沿用记住的模式。
+    // 2026-11-07 审计修复：rememberSaveable——任何 Activity 重建（FreezeProbe 自愈
+    // recreate、系统内存回收恢复）都会让 remember 归零，勾选过「不再询问」的用户
+    // 会看到本应只出现在冷启动的模式选择页突然插到主界面之前
+    var modeChosen by rememberSaveable {
+        // 注意用 runtime.mutableStateOf（saveable 包无该函数名；autoSaver 直接存 Boolean）
+        mutableStateOf(!PrivacyModeStore.currentAskOnStartup(context))
+    }
     if (!modeChosen) {
         ModeChooserScreen(
             lastMode = PrivacyModeStore.currentMode(context),

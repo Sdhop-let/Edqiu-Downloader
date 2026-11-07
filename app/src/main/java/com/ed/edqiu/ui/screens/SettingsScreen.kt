@@ -1297,28 +1297,7 @@ fun DownloaderSettingsPage(
     }
 }
 
-@Composable
-private fun StatusChip(
-    label: String,
-    active: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(999.dp),
-        color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surfaceContainerHighest
-    ) {
-        Text(
-            text = label,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = if (active) MaterialTheme.colorScheme.primary else Muted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
+// 2026-11-07 审计清理：私有组件 StatusChip 全文件 0 引用（死代码），删除
 
 @Composable
 private fun SettingRow(

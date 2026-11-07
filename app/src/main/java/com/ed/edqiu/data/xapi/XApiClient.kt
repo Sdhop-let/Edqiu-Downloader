@@ -208,11 +208,9 @@ object XApiClient {
 
     /** 统一 execute + 错误归类。 */
     private fun execute(request: Request, proxyUrl: String?): JSONObject {
-        val client = OkHttpClient.Builder()
-            .connectTimeout(if (proxyUrl != null) 12L else 8L, TimeUnit.SECONDS)
-            .readTimeout(20L, TimeUnit.SECONDS)
-            .apply { proxyUrl?.let { u -> proxy(toJavaProxy(u)) } }
-            .build()
+        // 2026-11-07 审计修复：共享连接池——旧实现每请求新建 OkHttpClient，
+        // TLS 握手/连接池全部不复用（WebDavEngine 已示范 newBuilder 模式）
+        val client = clientFor(proxyUrl)
         try {
             client.newCall(request).execute().use { response ->
                 val bodyText = runCatching { response.body?.string() }.getOrNull().orEmpty()
@@ -290,8 +288,10 @@ object XApiClient {
                 val result = item.optJSONObject("tweet_results")?.optJSONObject("result") ?: continue
                 val tweet = result.optJSONObject("tweet") ?: result // TweetWithVisibilityResults 包装
                 if (tweet.optString("__typename") != "Tweet") continue
-                val id = tweet.optString("rest_id")
-                if (id.isBlank()) continue
+                // 2026-11-07 审计修复：rest_id 可能是 Base64("User:44196397") 编码形态
+                // （本文件 UserByScreenName 已做解码、注释明确两种编码）——旧实现取原文，
+                // 编码形态下去重键 takeWhile{isDigit} 得空串被静默 continue，订阅整体失效
+                val id = decodeRestId(tweet.optString("rest_id"))?.toString() ?: continue
                 // 2026-10-24 订阅污染修复：提取推文作者 handle——UserTweets 时间线含转推/引推，
                 // 其作者是别人（原创者）；订阅语义=只收订阅作者本人的作品，调用方据此过滤。
                 // 结构缺失（字段裁剪的响应）时置 null，调用方保守放行不误杀
@@ -320,6 +320,26 @@ object XApiClient {
         }.getOrNull()
     }
 
+    /**
+     * 共享基础客户端 + 按请求派生（连接池/线程池复用，代理参数动态下传即时生效）。
+     */
+    private val baseClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(8L, TimeUnit.SECONDS)
+            .readTimeout(20L, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private fun clientFor(proxyUrl: String?): OkHttpClient =
+        if (proxyUrl == null) {
+            baseClient
+        } else {
+            baseClient.newBuilder()
+                .connectTimeout(12L, TimeUnit.SECONDS)
+                .proxy(toJavaProxy(proxyUrl))
+                .build()
+        }
+
     // ==================== manifest 静默轮换 ====================
 
     /**
@@ -331,7 +351,7 @@ object XApiClient {
             .url(MANIFEST_URL)
             .header("User-Agent", UA)
             .build()
-        val client = OkHttpClient.Builder()
+        val client = baseClient.newBuilder()
             .connectTimeout(10L, TimeUnit.SECONDS)
             .readTimeout(15L, TimeUnit.SECONDS)
             .apply { proxyUrl?.let { u -> proxy(toJavaProxy(u)) } }
@@ -342,8 +362,20 @@ object XApiClient {
             val ids = json.optJSONObject("queryIds") ?: return false
             val userByScreenName = ids.optString("userByScreenName").ifBlank { return false }
             val userTweets = ids.optString("userTweets").ifBlank { return false }
+            // 2026-11-07 审计修复：格式白名单校验——旧实现只查非空，垃圾值会覆盖内置
+            // 可用默认值且刷新 7 天 TTL（公开仓库被篡改时全体客户端静默失效最长 7 天）
+            val qidShape = Regex("^[A-Za-z0-9_-]{10,}$")
+            if (!qidShape.matches(userByScreenName) || !qidShape.matches(userTweets)) {
+                Log.w(TAG, "manifest 校验失败（queryId 形状异常），放弃写入：$userByScreenName / $userTweets")
+                return false
+            }
+            val bearer = json.optString("bearer").ifBlank { DEFAULT_BEARER }
+            if (bearer != DEFAULT_BEARER && !Regex("^[A-Za-z0-9%_-]{30,}$").matches(bearer)) {
+                Log.w(TAG, "manifest 校验失败（bearer 形状异常），放弃写入")
+                return false
+            }
             prefs().edit()
-                .putString("bearer", json.optString("bearer").ifBlank { DEFAULT_BEARER })
+                .putString("bearer", bearer)
                 .putString("qid_userByScreenName", userByScreenName)
                 .putString("qid_userTweets", userTweets)
                 .putLong("manifestAt", System.currentTimeMillis())

@@ -26,6 +26,25 @@ class EdqiuApplication : TwitterDownloaderApp() {
 
     override fun onCreate() {
         super.onCreate()
+        // 2026-11-07 审计修复：debug 构建启用 StrictMode——启动链主线程 SharedPreferences
+        // 同步读等违规此前完全不可见（全工程无任何 StrictMode 配置）。仅日志不崩，
+        // release 不启用零开销
+        if (BuildConfig.DEBUG) {
+            android.os.StrictMode.setThreadPolicy(
+                android.os.StrictMode.ThreadPolicy.Builder()
+                    .detectDiskReads()
+                    .detectDiskWrites()
+                    .detectNetwork()
+                    .penaltyLog()
+                    .build()
+            )
+            android.os.StrictMode.setVmPolicy(
+                android.os.StrictMode.VmPolicy.Builder()
+                    .detectLeakedClosableObjects()
+                    .penaltyLog()
+                    .build()
+            )
+        }
         // 临时诊断探针（2026-10）：生命周期事件日志，配合 FreezeProbe 定位窗口 mStopped 卡死。
         // 2026-10-24：日志输出门控 debug（正式包不再刷 Log.d）；探针注册本身开销为零保留，
         // 渲染冻结 WIP 关闭后再整体移除
@@ -75,6 +94,20 @@ class EdqiuApplication : TwitterDownloaderApp() {
         // 2026-10 整改：清理上次会话残留的明文 cookie 文件（每次需要时都会重新写入）
         applicationScope.launch(Dispatchers.IO) {
             runCatching { com.ed.edqiu.service.YoutubeDLService.cleanupCookieFiles(this@EdqiuApplication) }
+        }
+        // 2026-11-07 审计修复：孤儿 .part 清理——下载成功/失败终态后 .part 残留从不回收
+        //（保留供断点续传是设计意图，但重试耗尽/推文已删后即成孤儿）。启动时清理
+        // 7 天以上的残留（正在下载的 .part mtime 持续更新不会被误删）
+        applicationScope.launch(Dispatchers.IO) {
+            runCatching {
+                val threshold = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+                val downloadDir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS) ?: return@runCatching
+                var cleaned = 0
+                downloadDir.walkTopDown()
+                    .filter { it.isFile && it.name.endsWith(".part") && it.lastModified() < threshold }
+                    .forEach { if (it.delete()) cleaned++ }
+                if (cleaned > 0) android.util.Log.i("EdqiuApp", "孤儿 .part 清理：删除 $cleaned 个 7 天以上残留")
+            }
         }
         // 回收站 30 天保留期清理（2026-10-24 审计落地）：过期归档行删除——
         // 30 天粒度无需 WorkManager 精度，启动跑一次即可；媒体文件归媒体库管不动

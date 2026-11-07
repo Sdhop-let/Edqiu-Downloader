@@ -29,7 +29,9 @@ android {
 
     defaultConfig {
         applicationId = "com.ed.Edqiu"
-        minSdk = 24
+        // 2026-11-07 定案：仅支持 Android 13+（API 33）——隐私模糊/现代存储路径全量可用，
+        // API<31 的 PrivacyGateBox 蒙层兜底成为死分支（保留不删，注释已标注）
+        minSdk = 33
         // 2026-09-28 深度适配 Android 17（API 37）：targetSdk 与 compileSdk 对齐。
         // 15~17 强制行为变更已逐项核查满足：
         // - edge-to-edge 强制（API 35+）：XML 透明系统栏 + enableEdgeToEdge + setDecorFitsSystemWindows(false)，无 opt-out 属性；
@@ -39,9 +41,9 @@ android {
         //   ffmpeg zip 载荷内 libwebp* 等 5 个库仍是 4KB 对齐（libavcodec DT_NEEDED 直接依赖），
         //   16KB 页设备上 ffmpeg 功能不可用——需升级上游依赖或等待重打包后复测。
         targetSdk = 37
-        // 2026-11-07 v1.9.16：浏览模式定案（隐私模式=媒体模糊防偷看+按住临时查看）+ 我的页身份区自定义 + WebDAV 整传治理 + 捕获链路增强
-        versionCode = 65
-        versionName = "1.9.16"
+        // 2026-11-07 v1.9.17：全库工程审计修复（11 P1 + ~45 P2/P3）+ 支持范围定案仅 Android 13+（minSdk 33，见 defaultConfig 顶部注释）
+        versionCode = 66
+        versionName = "1.9.17"
 
         // 2026-09-15：只保留 arm64-v8a（Android 16/17 手机端均为 arm64），APK 从 225.9MB 降至约 80MB；
         // ffmpeg/yt-dlp 功能完整保留，x86 系模拟器不再支持

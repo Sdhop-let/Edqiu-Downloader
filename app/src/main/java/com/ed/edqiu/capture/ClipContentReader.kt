@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 剪贴板多形态读取器（2026-11-04 小米 12 Pro / HyperOS 机型特性适配）。
@@ -25,8 +27,15 @@ object ClipContentReader {
 
     private const val TAG = "EdqiuClip"
 
-    /** 读取剪贴板全部可用文本形态：原样条目 + Intent 解包 + URL 解码兜底，按序去重。 */
-    fun readClipTexts(clip: ClipData?, context: Context): List<String> {
+    /** 读取剪贴板全部可用文本形态：原样条目 + Intent 解包 + URL 解码兜底，按序去重。
+     *  2026-11-07 审计修复：改为挂起函数切 IO——URI 条目的 coerceToText 内部可能
+     *  触发跨进程 ContentResolver 查询，旧实现在主线程（组合回调）执行有卡顿风险。 */
+    suspend fun readClipTexts(clip: ClipData?, context: Context): List<String> =
+        withContext(Dispatchers.IO) {
+            readClipTextsInternal(clip, context)
+        }
+
+    private fun readClipTextsInternal(clip: ClipData?, context: Context): List<String> {
         if (clip == null || clip.itemCount <= 0) {
             Log.d(TAG, "clip empty (null=${clip == null})")
             return emptyList()
@@ -69,11 +78,15 @@ object ClipContentReader {
         variants += decodedOnce
         variants += decodedTwice
 
-        Log.d(
-            TAG,
-            "clip items=${clip.itemCount} mimeCount=${clip.description?.mimeTypeCount} " +
-                "shapes=$shapes first=${variants.firstOrNull()?.take(120)?.replace('\n', ' ')}"
-        )
+        // 2026-11-07 审计修复：剪贴板内容（可能是密码/验证码/其他 App 内容）不再进
+        // release 包 logcat（isMinifyEnabled=false 且无 Log 剥离）
+        if (com.ed.edqiu.BuildConfig.DEBUG) {
+            Log.d(
+                TAG,
+                "clip items=${clip.itemCount} mimeCount=${clip.description?.mimeTypeCount} " +
+                    "shapes=$shapes first=${variants.firstOrNull()?.take(120)?.replace('\n', ' ')}"
+            )
+        }
         return variants.toList()
     }
 }

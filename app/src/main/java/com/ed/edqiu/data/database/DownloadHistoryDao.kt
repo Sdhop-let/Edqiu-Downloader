@@ -53,7 +53,8 @@ interface DownloadHistoryDao {
     )
     suspend fun backfillAuthorInfo(filePath: String, avatarUrl: String?, authorName: String?)
 
-    /** 画质升级：本地文件被更高画质版本替换（路径/大小/画质标注同步更新）。 */
+    /** 画质升级：本地文件被更高画质版本替换（路径/大小/画质标注同步更新）。
+     *  @return 实际更新的行数——0 行 = 记录已被删除/路径已变，调用方绝不能再删旧文件。 */
     @Query(
         """
         UPDATE download_history
@@ -61,7 +62,7 @@ interface DownloadHistoryDao {
         WHERE filePath = :oldPath
         """
     )
-    suspend fun updateMediaFile(oldPath: String, newPath: String, fileSize: Long, quality: String)
+    suspend fun updateMediaFile(oldPath: String, newPath: String, fileSize: Long, quality: String): Int
 
     /** 画质升级候选（视频+图片，url 可提取 tweetId 的记录）。 */
     @Query(

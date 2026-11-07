@@ -71,11 +71,12 @@ object WebDavManualSync {
         val firstEver = prefsForSnapshot.lastSyncTime == 0L
         val recovering = prefsForSnapshot.syncInProgress
         scope.launch {
-            val prefs = CloudSyncPreferences(appContext)
-            val result = WebDavSyncService.syncDownloads(appContext, prefs) { progress ->
-                _state.value = State.Syncing(progress)
-            }
-            result.fold(
+            try {
+                val prefs = CloudSyncPreferences(appContext)
+                val result = WebDavSyncService.syncDownloads(appContext, prefs) { progress ->
+                    _state.value = State.Syncing(progress)
+                }
+                result.fold(
                 onSuccess = { syncResult ->
                     // 互斥跳过（2026-10-24）：不记 success 历史、不动计数器——
                     // 旧实现把空结果当完成，用户看到「双向同步完成：上传 0，下载 0」假成功
@@ -126,7 +127,12 @@ object WebDavManualSync {
                     _state.value = State.Failed(error.message ?: "未知错误")
                 },
             )
-            inFlight.set(false)
+            } finally {
+                // 2026-11-07 审计修复：复位放 finally——旧实现放协程体末尾，
+                // addSyncHistory/prefs 抛异常或 scope 被取消时 inFlight 永不复位，
+                // 手动同步在进程存活期内被永久禁用（按钮点了没反应）
+                inFlight.set(false)
+            }
         }
     }
 

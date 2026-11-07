@@ -394,8 +394,18 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(autoPlayFilePath) {
-        // autoStart=false：只定位/预载不起播，真正起播在封面到位后（见进入动画）
-        autoPlayFilePath?.let { playerViewModel.playVideo(it, autoStart = false) }
+        // autoStart=false：只定位/预载不起播，真正起播在封面到位后（见进入动画）。
+        // 2026-11-07 审计修复：进程死亡恢复路径——playerVisible/playerFilePath 是
+        // rememberSaveable 可恢复，但会话列表（内存态）不会重建：旧实现只 playVideo，
+        // playlist 为空 → Pager 无页可渲染 = 黑屏空壳。playlist 为空（=openPlayer 尚未
+        // 跑过，即恢复场景）时补建会话列表；正常进入路径会话已建好，仅定位
+        autoPlayFilePath?.let { path ->
+            if (playerViewModel.playerPlaylist.value.isEmpty()) {
+                playerViewModel.openPlayer(path)
+            } else {
+                playerViewModel.playVideo(path, autoStart = false)
+            }
+        }
     }
     LaunchedEffect(state.isFullscreen) {
         activity?.setPlayerFullscreen(state.isFullscreen)
@@ -457,7 +467,11 @@ fun PlayerScreen(
                 val currentPath = pair.second
                 val entity = playlist.getOrNull(page) ?: return@collect
                 if (entity.filePath != currentPath) {
-                    playerViewModel.playVideo(entity)
+                    // 2026-11-07 审计修复：隐私模式翻页落定不自动起播（与进场链 ~332 行同源）——
+                    // 旧实现默认 autoStart=true，用户没按住画面新视频就出声，防偷看被声音击穿。
+                    // 按住查看中翻页则继续起播（与 LaunchedEffect(privacyHold) 语义一致）。
+                    // 隐私状态在组合时捕获即可：浏览模式只在冷启动选择器变更，播放器存续期内不变
+                    playerViewModel.playVideo(entity, autoStart = !privacyBlur || privacyHold)
                 }
             }
     }
@@ -796,22 +810,43 @@ fun PlayerScreen(
                             )
                             // 隐私模式按住查看（2026-11-07）：纯观察手势不消费事件——
                             // 按住 ≥200ms 临时解除模糊（视频同时起播，松手暂停恢复）；
-                            // 快速点按（唤控制层）与图片缩放手势完全不受影响
+                            // 快速点按（唤控制层）与图片缩放手势完全不受影响。
+                            // 2026-11-07 审计修复：加位移意图判定——旧实现只看按压时长，
+                            // 拖拽退出/翻页（按下不动超 200ms 后开始拖）会先解除模糊并起播，
+                            // 未模糊画面被整层拖走，防偷看被任何长按击穿
                             .pointerInput(privacyBlur) {
                                 if (!privacyBlur) return@pointerInput
+                                val touchSlop = viewConfiguration.touchSlop
                                 awaitEachGesture {
                                     awaitFirstDown(requireUnconsumed = false)
+                                    val downPos = currentEvent.changes.firstOrNull()?.position
+                                    var moved = false
                                     val held = withTimeoutOrNull(200) {
                                         do {
                                             val event = awaitPointerEvent()
+                                            val pos = event.changes.firstOrNull()?.position
+                                            if (downPos != null && pos != null &&
+                                                (pos - downPos).getDistance() > touchSlop
+                                            ) {
+                                                moved = true // 拖拽/翻页手势：不是按住查看
+                                                break
+                                            }
                                         } while (event.changes.any { it.pressed })
                                         false
-                                    } ?: true
+                                    } ?: !moved
                                     if (held) {
                                         privacyHold = true
                                         try {
+                                            val holdStart = currentEvent.changes.firstOrNull()?.position
                                             do {
                                                 val event = awaitPointerEvent()
+                                                val pos = event.changes.firstOrNull()?.position
+                                                // 按住后开始明显拖拽：立即恢复模糊（防拖出未模糊画面）
+                                                if (holdStart != null && pos != null &&
+                                                    (pos - holdStart).getDistance() > touchSlop * 3
+                                                ) {
+                                                    break
+                                                }
                                             } while (event.changes.any { it.pressed })
                                         } finally {
                                             privacyHold = false

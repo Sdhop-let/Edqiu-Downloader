@@ -89,7 +89,16 @@ class SavedLinkRepository(
     // 用户手动下载另一条推文不再排队数分钟；同一推文的并发请求仍串行（attemptCount 一致性）
     private val downloadMutexes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
 
-    private fun mutexFor(tweetId: String): Mutex = downloadMutexes.getOrPut(tweetId) { Mutex() }
+    private fun mutexFor(tweetId: String): Mutex = downloadMutexes.getOrPut(tweetId) {
+        // 2026-11-07 审计修复：防无界增长（每条下载过的推文一个 Mutex 永不回收）——
+        // 超限时清理未被持有的 mutex（tryLock 成功 = 无并发持有，移除安全）
+        if (downloadMutexes.size > 512) {
+            downloadMutexes.entries.removeIf { entry ->
+                entry.value.tryLock().also { locked -> if (locked) entry.value.unlock() }
+            }
+        }
+        Mutex()
+    }
 
     /**
      * 下载请求登记回调（2026-09-15 P0-4 持久队列挂载点）：

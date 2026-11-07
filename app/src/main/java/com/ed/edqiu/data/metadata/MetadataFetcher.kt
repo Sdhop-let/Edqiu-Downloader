@@ -1,5 +1,6 @@
 package com.ed.edqiu.data.metadata
 
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -21,7 +22,7 @@ import java.net.URL
  *
  * 两路获取均「尽力而为」：任何失败返回 null，绝不阻塞捕获流程。
  */
-class MetadataFetcher {
+class MetadataFetcher(private val appContext: Context? = null) {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -29,12 +30,18 @@ class MetadataFetcher {
     suspend fun fetchFromTwitter(tweetId: String): TweetMeta? = withContext(Dispatchers.IO) {
         // 2026-10 整改：连接 finally disconnect + 非 200 分支关闭 errorStream
         //（旧实现连接不释放，补拉批量 300 条 × 8 并发时 socket 压力被放大）
-        val conn = (URL("https://api.fxtwitter.com/status/$tweetId").openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 10_000
-            readTimeout = 10_000
-            setRequestProperty("User-Agent", "Edqiu/1.0")
+        // 2026-11-07 审计修复：接入用户代理——api.fxtwitter.com 与 X 同域（设置页代理
+        // 探针恰用它），仅应用代理场景下旧实现元数据必挂（订阅能检出作品但缺作者/封面）
+        val proxyObj = appContext?.let { ctx ->
+            com.ed.edqiu.data.preferences.ProxyPreferences(ctx.applicationContext)
+                .getProxySettings().takeIf { it.enabled }?.toJavaProxy()
         }
+        val url = URL("https://api.fxtwitter.com/status/$tweetId")
+        val conn = (if (proxyObj != null) url.openConnection(proxyObj) else url.openConnection()) as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.connectTimeout = 10_000
+        conn.readTimeout = 10_000
+        conn.setRequestProperty("User-Agent", "Edqiu/1.0")
         try {
             if (conn.responseCode == 200) {
                 val body = conn.inputStream.bufferedReader().use { it.readText() }

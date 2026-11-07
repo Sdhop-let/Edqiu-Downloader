@@ -11,6 +11,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -30,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,6 +72,8 @@ fun LiquidTabBar(
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
     badgeCount: Int = 0,
+    /** 红点归属的 Tab 序号（2026-11-07 审计修复：旧实现钉在整条栏右上角，视觉上挂在最后一个 Tab 头顶）。 */
+    badgeTabIndex: Int = -1,
     liquidGlassEnabled: Boolean = true
 ) {
     val primaryContainer = MaterialTheme.colorScheme.primaryContainer
@@ -192,13 +196,20 @@ fun LiquidTabBar(
                 // - 图形全部换新：轮廓版（未选）/ 实底版（选中）成对切换，
                 //   实底图形是「已进入」的强语义，替代旧版的颜色+缩放微调。
                 // 尺寸不变：外壳胶囊 50dp、三等分、点击区全宽。
+                val tabInteractions = remember { MutableInteractionSource() }
+                val tabPressed by tabInteractions.collectIsPressedAsState()
+                // 2026-11-07 审计修复：接通死代码——旧实现 pressedIndex 只读不写，
+                // 「按压 tween(50ms) 跟手」分支永不命中，胶囊永远走 spring 路径
+                LaunchedEffect(tabPressed) {
+                    pressedIndex = if (tabPressed) index else -1
+                }
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxSize()
                         .semantics { role = Role.Tab }
                         .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
+                            interactionSource = tabInteractions,
                             indication = null,
                             onClick = { onSelect(index) }
                         ),
@@ -235,26 +246,27 @@ fun LiquidTabBar(
                             modifier = Modifier.size(24.dp)
                         )
                     }
+                    // 红点归属到具体 Tab 的右上角（2026-11-07 审计修复）
+                    if (index == badgeTabIndex && badgeCount > 0) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 2.dp, end = 6.dp)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(Color(0xFFFF3B30))
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                // 99+ 封顶：旧实现 18dp 定宽角标在三位数时溢出
+                                text = if (badgeCount > 99) "99+" else badgeCount.toString(),
+                                color = Color.White,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
-            }
-        }
-
-        if (badgeCount > 0) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 2.dp, end = 2.dp)
-                    .size(18.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(Color(0xFFFF3B30)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = badgeCount.toString(),
-                    color = Color.White,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold
-                )
             }
         }
     }

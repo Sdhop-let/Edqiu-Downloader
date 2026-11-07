@@ -27,7 +27,19 @@ object XTimelineDetector {
     /** guest 时间线新鲜度阈值：最新推文早于 N 天视为降级数据。 */
     private const val FRESHNESS_DAYS = 30L
 
-    private val CREATED_AT_FORMAT = SimpleDateFormat("EEE MMM dd HH:mm:ss Z yyyy", Locale.US)
+    /**
+     * 停更确认记忆（2026-11-07 审计修复）：真停更 >30 天的作者每轮固定 guest+cookie
+     * 双通道重复请求（6 请求/轮）。记忆「cookie 通道确认 guest 最新推文一致」的结论，
+     * 6 小时窗口内直接采用 guest 数据不再双通道；cookie 结果不同即失效。
+     * handle → (确认时的最新推文时间戳, 确认时刻)。
+     */
+    private val staleConfirmed = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Long>>()
+    private const val STALE_CONFIRM_WINDOW_MS = 6 * 3600_000L
+
+    // 2026-11-07 审计修复：SimpleDateFormat 非线程安全——共享单例在 pollOne/pollNow/
+    // 后台轮询并发 parse 时会产生**错误的 publishedAt**（不抛异常，直接破坏时间边界
+    // 过滤与去重），改为每次调用新建
+    private fun newCreatedAtFormat() = SimpleDateFormat("EEE MMM dd HH:mm:ss Z yyyy", Locale.US)
 
     data class DetectedTweet(val id: String, val publishedAt: Long?, val authorHandle: String? = null)
 
@@ -73,14 +85,34 @@ object XTimelineDetector {
         val newest = success.tweets.mapNotNull { it.publishedAt }.maxOrNull()
         val stale = newest != null &&
             System.currentTimeMillis() - newest > FRESHNESS_DAYS * 24 * 3600 * 1000
-        if (!stale) return@withContext success
+        if (!stale) {
+            staleConfirmed.remove(screenName)
+            return@withContext success
+        }
 
         // ---------- guest 数据陈旧：cookie 兜底 ----------
+        // 2026-11-07 审计修复：6 小时内 cookie 已确认过「guest 最新推文一致」的停更
+        // 作者不再双通道重复请求（Cookie 用户每作者每轮省 2 次请求，降低 429 概率）
+        staleConfirmed[screenName]?.let { (confirmedNewest, at) ->
+            if (newest == confirmedNewest && System.currentTimeMillis() - at < STALE_CONFIRM_WINDOW_MS) {
+                return@withContext success
+            }
+        }
         if (!hasCookie) {
             return@withContext success.copy(degraded = true)
         }
         return@withContext when (val cookieOutcome = runCookie(screenName, proxyUrl, authToken, ct0)) {
-            is Outcome.Success -> cookieOutcome
+            is Outcome.Success -> {
+                val cookieNewest = cookieOutcome.tweets.mapNotNull { it.publishedAt }.maxOrNull()
+                if (cookieNewest != null && newest != null && cookieNewest == newest) {
+                    staleConfirmed[screenName] = newest to System.currentTimeMillis()
+                } else {
+                    staleConfirmed.remove(screenName)
+                }
+                // 记忆表防无界增长（超限整体清空，代价只是下轮重新确认一次）
+                if (staleConfirmed.size > 500) staleConfirmed.clear()
+                cookieOutcome
+            }
             is Outcome.Failure -> {
                 // cookie 也拿不到（如登录已失效）：仍用 guest 数据但标注降级，不静默丢失
                 success.copy(degraded = true)
@@ -94,7 +126,7 @@ object XTimelineDetector {
         proxyUrl: String?,
     ): Outcome {
         val token = XApiClient.activateGuest(proxyUrl).getOrElse { e ->
-            return Outcome.Failure(mapError(e), describe(e))
+            return guestFailure(e)
         }
         var channel = XApiClient.Channel.Guest(token)
 
@@ -102,19 +134,19 @@ object XTimelineDetector {
         if (isAuthExpired(restId)) {
             // guest token 短时效：重新激活一次再试
             val fresh = XApiClient.activateGuest(proxyUrl).getOrElse { e ->
-                return Outcome.Failure(mapError(e), describe(e))
+                return guestFailure(e)
             }
             channel = XApiClient.Channel.Guest(fresh)
             restId = XApiClient.userByScreenName(screenName, channel, proxyUrl)
         }
         val id = restId.getOrElse { e ->
-            return Outcome.Failure(mapError(e), describe(e))
+            return guestFailure(e)
         }
 
         var tweets = XApiClient.userTweets(id, TIMELINE_SCAN, channel, proxyUrl)
         if (isAuthExpired(tweets)) {
             val fresh = XApiClient.activateGuest(proxyUrl).getOrElse { e ->
-                return Outcome.Failure(mapError(e), describe(e))
+                return guestFailure(e)
             }
             tweets = XApiClient.userTweets(id, TIMELINE_SCAN, XApiClient.Channel.Guest(fresh), proxyUrl)
         }
@@ -126,8 +158,19 @@ object XTimelineDetector {
                     viaCookie = false,
                 )
             },
-            onFailure = { e -> Outcome.Failure(mapError(e), describe(e)) },
+            onFailure = { e -> guestFailure(e) },
         )
+    }
+
+    /** guest 通道失败文案（2026-11-07 审计修复：401 是 IP 风控常见场景，不再误报「Cookie 已失效」）。 */
+    private fun guestFailure(e: Throwable): Outcome.Failure {
+        val err = mapError(e)
+        val message = if (err == XApiClient.XApiError.AUTH_EXPIRED) {
+            "X 游客通道被限制（IP 风控常见）——配置 X Cookie 可改善识别率；若已配置请到「设置 → 通用」更新 Cookie"
+        } else {
+            describe(e)
+        }
+        return Outcome.Failure(err, message)
     }
 
     /** cookie 兜底全流程。 */
@@ -139,6 +182,7 @@ object XTimelineDetector {
     ): Outcome {
         val channel = XApiClient.Channel.Cookie(authToken, ct0)
         val restId = XApiClient.userByScreenName(screenName, channel, proxyUrl).getOrElse { e ->
+            // cookie 通道 401 → 「Cookie 已失效」文案是正确的（与 guest 区分）
             return Outcome.Failure(mapError(e), describe(e))
         }
         return XApiClient.userTweets(restId, TIMELINE_SCAN, channel, proxyUrl).fold(
@@ -186,6 +230,6 @@ object XTimelineDetector {
     /** 解析 X created_at（"Thu Apr 28 00:56:58 +0000 2022"）；失败返 null（按未知处理）。 */
     private fun parseCreatedAt(raw: String?): Long? {
         if (raw.isNullOrBlank()) return null
-        return runCatching { CREATED_AT_FORMAT.parse(raw)?.time }.getOrNull()
+        return runCatching { newCreatedAtFormat().parse(raw)?.time }.getOrNull()
     }
 }

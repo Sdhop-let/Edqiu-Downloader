@@ -35,9 +35,12 @@ object AvatarStore {
                     val resolver = context.contentResolver
                     val dir = avatarsDir(context).apply { mkdirs() }
 
-                    // 先只读尺寸算 inSampleSize（大图直接整张解码会推高内存）
+                    // 先只读尺寸算 inSampleSize（大图直接整张解码会推高内存）。
+                    // 2026-11-07 审计修复：inJustDecodeBounds=true 时 decodeStream 恒返回
+                    // null（只写 bounds）——旧实现把"use 返回 null"当"流打不开"，任何有效
+                    // 图片都会走 `?: return null`，头像保存 100% 失效；成败只看 bounds 尺寸
                     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    resolver.openInputStream(uri)?.use {
+                    runCatching { resolver.openInputStream(uri) }.getOrNull()?.use {
                         BitmapFactory.decodeStream(it, null, bounds)
                     } ?: return@runCatching null
                     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null

@@ -18,8 +18,53 @@ data class BackupEnvelope(
 @Serializable
 data class BackupPayload(
     val activeLinks: List<BackupLink>,
-    val deletedHistory: List<BackupHistoryEntry>
+    val deletedHistory: List<BackupHistoryEntry>,
+    /** 2026-11-07 审计修复：订阅配置随备份走——旧实现重装/换机订阅列表、起始水位、
+     *  消息箱全部丢失（订阅表属于另一库 twitter_downloader.db，此前不在任何备份路径）。
+     *  默认空列表保持旧备份文件可解码。 */
+    val subscriptions: List<BackupSubscription> = emptyList()
 )
+
+@Serializable
+data class BackupSubscription(
+    val screenName: String,
+    val platform: String = "twitter",
+    val enabled: Boolean = true,
+    val lastCheckedAt: Long? = null,
+    val lastVideoAt: Long? = null,
+    val lastError: String? = null,
+    val lastErrorAt: Long? = null,
+    val startFromAt: Long? = null,
+    val createdAt: Long
+) {
+    fun toEntity(): com.ed.edqiu.data.database.SubscriptionEntity =
+        com.ed.edqiu.data.database.SubscriptionEntity(
+            screenName = screenName,
+            platform = platform,
+            enabled = enabled,
+            lastCheckedAt = lastCheckedAt,
+            lastVideoAt = lastVideoAt,
+            lastError = lastError,
+            lastErrorAt = lastErrorAt,
+            startFromAt = startFromAt,
+            createdAt = createdAt
+        )
+
+    companion object {
+        fun from(entity: com.ed.edqiu.data.database.SubscriptionEntity): BackupSubscription =
+            BackupSubscription(
+                screenName = entity.screenName,
+                platform = entity.platform,
+                enabled = entity.enabled,
+                lastCheckedAt = entity.lastCheckedAt,
+                lastVideoAt = entity.lastVideoAt,
+                lastError = entity.lastError,
+                lastErrorAt = entity.lastErrorAt,
+                startFromAt = entity.startFromAt,
+                createdAt = entity.createdAt
+            )
+    }
+}
 
 @Serializable
 data class BackupLink(
@@ -169,5 +214,7 @@ data class RestoreResult(
     val activeImported: Int,
     val activeSkipped: Int,
     val historyImported: Int,
-    val historySkipped: Int
+    val historySkipped: Int,
+    /** 订阅恢复数（2026-11-07 新增；默认 0 兼容旧调用方）。 */
+    val subscriptionsImported: Int = 0
 )

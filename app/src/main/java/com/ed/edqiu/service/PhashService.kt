@@ -59,7 +59,19 @@ object PhashService {
     fun computePhash(file: File): Long {
         val bitmap = if (MediaFileTypes.isImageFile(file.absolutePath)) {
             runCatching {
-                BitmapFactory.decodeFile(file.absolutePath)
+                // 2026-11-07 审计修复：采样解码——48MP 图片整张解码峰值 ~180MB，
+                // 批量 10 张/轮低端机有 OOM 风险；pHash 只需低频信息，512px 足够
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(file.absolutePath, bounds)
+                var sample = 1
+                var w = bounds.outWidth
+                var h = bounds.outHeight
+                while (w / 2 >= 512 && h / 2 >= 512) {
+                    sample *= 2
+                    w /= 2
+                    h /= 2
+                }
+                BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample })
             }.getOrNull()
         } else {
             runCatching {

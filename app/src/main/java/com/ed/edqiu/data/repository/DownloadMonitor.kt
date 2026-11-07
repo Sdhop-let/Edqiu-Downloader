@@ -19,7 +19,7 @@ import java.io.File
  */
 class DownloadMonitor(private val context: Context) {
 
-    private val metadataFetcher = MetadataFetcher()
+    private val metadataFetcher = MetadataFetcher(context.applicationContext)
 
     data class DownloadedItem(
         val tweetId: String,

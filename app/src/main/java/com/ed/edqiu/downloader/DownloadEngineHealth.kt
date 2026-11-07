@@ -103,8 +103,11 @@ object DownloadEngineHealth {
      */
     fun shouldAttemptSelfHeal(): Boolean = selfHealAttempted.compareAndSet(false, true)
 
-    /** 热修成功：清空全部引擎熔断状态（下次下载从最快引擎重新开始）。 */
+    /** 热修成功：清空全部引擎熔断状态与推文亲和（下次下载从最快引擎重新开始）。
+     *  2026-11-07 审计修复：旧实现只清 engines、不清 tweetFailures——对触发热修的
+     *  那条推文，三层引擎仍命中「近期失败过已跳过」，热修要等 24h 才对它生效。 */
     fun clearAll() {
         engines.clear()
+        tweetFailures.clear()
     }
 }

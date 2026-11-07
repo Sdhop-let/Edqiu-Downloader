@@ -32,6 +32,13 @@ interface SubscriptionDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: SubscriptionEntity)
 
+    /** 批量插入（忽略冲突，2026-11-07 备份恢复用：不覆盖设备已有订阅状态）。 */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAllIgnoringConflicts(entities: List<SubscriptionEntity>): List<Long>
+
+    @Query("SELECT * FROM subscriptions")
+    suspend fun getAllSnapshot(): List<SubscriptionEntity>
+
     @Update
     suspend fun update(entity: SubscriptionEntity)
 

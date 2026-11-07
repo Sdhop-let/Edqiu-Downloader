@@ -5,6 +5,8 @@ import android.util.Log
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
@@ -12,6 +14,15 @@ import java.util.UUID
 object YoutubeDLService {
 
     private const val TAG = "YoutubeDLService"
+
+    /**
+     * 进度停滞判定（2026-11-07 审计修复）：yt-dlp 的 execute 是阻塞调用，协程取消无法
+     * 中断它——慢速/半开连接下可数小时无进展，任务永久卡 DOWNLOADING（retryDueDownloads
+     * 只捞 FAILED 捞不到）、订阅看门狗的 withTimeoutOrNull 也等不到阻塞返回。
+     * 看门狗按「距上次进度回调的间隔」强杀进程，阻塞的 execute 随进程死亡立即返回。
+     */
+    private const val STALL_TIMEOUT_MS = 15 * 60_000L
+    private const val STALL_CHECK_INTERVAL_MS = 60_000L
 
     /**
      * Extract video metadata without downloading.
@@ -49,6 +60,7 @@ object YoutubeDLService {
                 addOption("-f", formatId)
                 addOption("-o", outputPath)
                 addOption("--newline")
+                addOption("--socket-timeout", "30") // 单个 socket 操作 30s 失败，防半开连接永久挂起
                 if (playlistIndex != null) {
                     addOption("--playlist-items", playlistIndex.toString())
                 } else {
@@ -62,13 +74,32 @@ object YoutubeDLService {
                 }
             }
 
-            val result = YoutubeDL.getInstance().execute(
-                request,
-                pid,
-                { progress, eta, _ ->
-                    onProgress?.invoke(progress, eta)
+            val lastProgressAt = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+            // 看门狗：进度停滞超阈值强杀进程（阻塞的 execute 随之返回，任务可进 FAILED 被
+            // retryDueDownloads 捞回；协程取消杀不死阻塞调用，必须杀进程）
+            val watchdog = launch {
+                while (true) {
+                    delay(STALL_CHECK_INTERVAL_MS)
+                    val idleMs = System.currentTimeMillis() - lastProgressAt.get()
+                    if (idleMs > STALL_TIMEOUT_MS) {
+                        Log.w(TAG, "yt-dlp 进度停滞 ${idleMs / 60000}min，强杀进程防永久挂起（pid=$pid）")
+                        runCatching { YoutubeDL.getInstance().destroyProcessById(pid) }
+                        return@launch
+                    }
                 }
-            )
+            }
+            val result = try {
+                YoutubeDL.getInstance().execute(
+                    request,
+                    pid,
+                    { progress, eta, _ ->
+                        lastProgressAt.set(System.currentTimeMillis())
+                        onProgress?.invoke(progress, eta)
+                    }
+                )
+            } finally {
+                watchdog.cancel()
+            }
 
             // Check for errors
             if (result.err.isNotBlank() && result.out.isBlank()) {
@@ -77,6 +108,9 @@ object YoutubeDLService {
 
             // Extract the actual file path from yt-dlp output
             val filePath = extractFilePath(result.out, outputDir)
+                ?: return@withContext Result.failure(
+                    Exception("下载完成但无法从 yt-dlp 输出确认产物路径，请重试或反馈日志")
+                )
             Result.success(filePath)
         } catch (e: Exception) {
             Log.e(TAG, "downloadVideo error", e)
@@ -134,10 +168,32 @@ object YoutubeDLService {
                 addOption("--dump-single-json")
                 addOption("--playlist-items", "1:$limit")
                 addOption("--no-warnings")
+                addOption("--socket-timeout", "30")
                 if (proxyUrl != null) addOption("--proxy", proxyUrl)
                 if (cookieFilePath != null) addOption("--cookies", cookieFilePath)
             }
-            val result = YoutubeDL.getInstance().execute(request, null)
+            // 2026-11-07 审计修复：execute 传自动 pid（此前 null → 不可被 cancelDownload）
+            // + 停滞看门狗——SubscriptionManager 的 15min 超时对阻塞 execute 无效，
+            // 挂死时 pollInFlight 永不复位、订阅轮询整个会话停摆；现在进程强杀后
+            // execute 立即抛错返回，finally 得以执行
+            val pid = UUID.randomUUID().toString()
+            val startedAt = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+            val watchdog = launch {
+                while (true) {
+                    delay(STALL_CHECK_INTERVAL_MS)
+                    val idleMs = System.currentTimeMillis() - startedAt.get()
+                    if (idleMs > STALL_TIMEOUT_MS) {
+                        Log.w(TAG, "yt-dlp flat-playlist 停滞 ${idleMs / 60000}min，强杀进程（pid=$pid）")
+                        runCatching { YoutubeDL.getInstance().destroyProcessById(pid) }
+                        return@launch
+                    }
+                }
+            }
+            val result = try {
+                YoutubeDL.getInstance().execute(request, pid)
+            } finally {
+                watchdog.cancel()
+            }
             val json = parseDumpJson(result.out)
             val entries = json.optJSONArray("entries")
             val ids = mutableListOf<String>()
@@ -194,7 +250,7 @@ object YoutubeDLService {
      * 注意合并下载时首个 Destination 是视频单流中间文件（合并后即被 yt-dlp 删除），
      * 旧实现先命中它导致返回已删除路径、下载误判失败（2026-10 修复）。
      */
-    private fun extractFilePath(output: String, baseDir: String): String {
+    private fun extractFilePath(output: String, baseDir: String): String? {
         val lines = output.lines()
         for (line in lines) {
             val trimmed = line.trim()
@@ -215,7 +271,10 @@ object YoutubeDLService {
                 return trimmed.removePrefix("[download] Destination:").trim()
             }
         }
-        return "$baseDir/downloaded_video.mp4"
+        // 2026-11-07 审计修复：三段解析都不命中时返回 null（调用方按失败处理）——
+        // 旧实现兜底返回必然不存在的 "$baseDir/downloaded_video.mp4"，下游照样写
+        // sidecar、置 COMPLETED，随后状态机把它降回 PENDING，反复横跳
+        return null
     }
 
     /**
@@ -247,7 +306,11 @@ object YoutubeDLService {
         val tmp = File(cookieDir, cookieFile.name + "." + System.currentTimeMillis() + ".tmp")
         tmp.writeText(content)
         if (!tmp.renameTo(cookieFile)) {
-            cookieFile.outputStream().use { output -> tmp.inputStream().use { it.copyTo(output) } }
+            // 2026-11-07 审计修复：并发写方可能恰好把同一个 tmp rename 走，copy 会抛
+            // FileNotFoundException 直接打挂下载——兜底失败按重试处理而非崩溃
+            runCatching {
+                cookieFile.outputStream().use { output -> tmp.inputStream().use { it.copyTo(output) } }
+            }.onFailure { Log.w(TAG, "cookie 文件兜底复制失败（并发写入方接管），由其原子 rename 保证完整性") }
             tmp.delete()
         }
         // 2026-10-24 审计：cookie 文件路径属敏感信息，仅 debug 构建记录

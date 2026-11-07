@@ -105,6 +105,11 @@ class WebDavEngine(
             .build()
     }
 
+    /** MKCOL 专用客户端（禁重定向，见 [mkcolInternal] 注释）。 */
+    private val noRedirectClient: OkHttpClient by lazy {
+        currentClient().newBuilder().followRedirects(false).build()
+    }
+
     private fun currentClient(): OkHttpClient =
         if (runCatching { allowInsecureTls() }.getOrDefault(false)) insecureClient else client
 
@@ -216,7 +221,9 @@ class WebDavEngine(
 
     private fun mkcolInternal(url: String, credential: WebDavCredential) {
         val request = buildRequest(url, "MKCOL", credential)
-        executeWithDigestFallback(request, credential).use { response ->
+        // 2026-11-07 审计修复：MKCOL 用禁重定向客户端——OkHttp 对 301/302 会改写成 GET，
+        // 回来的 200 落进 MKCOL_OK_CODES 被误判「目录已存在」，目录实际没建（后续 PUT 才暴露）
+        executeWithDigestFallback(request, credential, httpClient = noRedirectClient).use { response ->
             val code = response.code
             if (code in MKCOL_OK_CODES) {
                 if (code == 405) {
@@ -310,7 +317,10 @@ class WebDavEngine(
                         code == 404 -> RemoteFileState.MISSING
                         else -> {
                             Log.w(TAG, "HEAD non-2xx HTTP $code for ${safeUrlForLog(url)}（状态未知，拒绝写入以防覆盖）")
-                            throw BackupException("无法确认远程文件状态（HTTP $code），已暂停上传以防覆盖远端文件")
+                            // 2026-11-07 审计修复：瞬态码必须包装成 WebDavTransferException，
+                            // 否则下方退避重试分支永不命中（isRetryableTransferError 只认该类型）
+                            // ——旧实现承诺的「408/429/5xx 退避重试」从未生效
+                            throw WebDavTransferException(code, "无法确认远程文件状态（HTTP $code），已暂停上传以防覆盖远端文件")
                         }
                     }
                 }
@@ -452,9 +462,25 @@ class WebDavEngine(
                 }
                 when (val staged = stagePart(partUrl, file, size, credential, progress)) {
                     is StagedResult.Ok -> {
-                        // 落盘前终检：暂存尺寸 ≠ 本地尺寸（续传/整传任何环节的意外）→ 拒绝固化
-                        if (headLength(partUrl, credential) != size) {
-                            throw BackupException("上传校验失败：远端暂存尺寸与本地不一致，已放弃落盘以防脏数据（${file.name}）")
+                        // 落盘前终检：暂存尺寸复核。2026-11-07 审计修复：HEAD 被限流/异常
+                        // （Unknown）不再被折叠成 0 误判为「尺寸不符」而 fatal——PATCH/整传
+                        // 成功路径各有尺寸验证，无法复核时放行落盘；确认不符/丢失才拒绝固化
+                        when (val probe = headProbe(partUrl, credential)) {
+                            is HeadProbe.Found -> if (probe.length != size) {
+                                Log.w(TAG, "上传校验失败：远端暂存尺寸不符（${probe.length} ≠ $size），弃用重传：${file.name}")
+                                delete(partUrl, credential)
+                                lastError = BackupException("上传校验失败：远端暂存尺寸与本地不一致，已放弃落盘以防脏数据（${file.name}）")
+                                attempt++
+                                continue
+                            }
+                            HeadProbe.Absent -> {
+                                Log.w(TAG, "上传校验失败：远端暂存丢失，重新上传：${file.name}")
+                                lastError = BackupException("上传校验失败：远端暂存丢失，将重新上传（${file.name}）")
+                                attempt++
+                                continue
+                            }
+                            HeadProbe.Unknown ->
+                                Log.w(TAG, "暂存终检 HEAD 不可用（限流/异常），放行落盘：${file.name}")
                         }
                         // 原子落盘：MOVE 暂存 → 成品
                         val moved = move(partUrl, url, credential, overwrite = true)
@@ -485,12 +511,17 @@ class WebDavEngine(
             // 城通等网关「收完 body 但响应超时/不回包」时数据往往已完整落盘（本轮实测：
             // chantal 18.5MB 上轮报失败、下轮 HEAD 命中完整直接 MOVE），命中即落盘，
             // 把「下一轮才能自愈」提前到本轮，用户不再看到假失败弹窗。
-            if (size > 0L && headLength(partUrl, credential) == size) {
-                val moved = move(partUrl, url, credential, overwrite = true)
-                if (moved.isSuccess) {
-                    Log.i(TAG, "PUT 终局复核自愈：响应超时但暂存已完整落盘（$size B）：${file.name}")
-                    return@runCatchingNotCancelled
+            // 2026-11-07 审计修复：改用三态探测——HEAD 限流（Unknown）不再被折叠成 0
+            // 而错过自愈窗口。
+            when (val probe = headProbe(partUrl, credential)) {
+                is HeadProbe.Found -> if (probe.length == size) {
+                    val moved = move(partUrl, url, credential, overwrite = true)
+                    if (moved.isSuccess) {
+                        Log.i(TAG, "PUT 终局复核自愈：响应超时但暂存已完整落盘（$size B）：${file.name}")
+                        return@runCatchingNotCancelled
+                    }
                 }
+                else -> Unit
             }
             throw lastError ?: BackupException("WebDAV 上传失败：${file.name}")
         }.toUserFriendly()
@@ -499,18 +530,36 @@ class WebDavEngine(
     /**
      * 终局复核（2026-11-03 城通假失败修复）：整传成品 URL 失败后 HEAD 成品——
      * 若尺寸已与本地一致，说明 body 实际落盘只是响应丢失，直接视为成功。
+     * 2026-11-07 审计修复：**成功结果也复核**（仅限本降级路径）——城通类网关配额超限
+     * 会返回 200 + 错误 body 且不落盘，旧实现 isSuccess 短路导致假成功记 UPLOADED、
+     * 每轮全量重传死循环。HEAD 确认不存在=假成功转失败；HEAD 自身失败（限流）保持
+     * 原结果，不因限流误伤真成功。
      */
     private suspend fun Result<Unit>.recoverIfLandedByHead(
         url: String,
         size: Long,
         credential: WebDavCredential,
     ): Result<Unit> {
-        if (isSuccess || size <= 0L) return this
-        return if (headLength(url, credential) == size) {
-            Log.i(TAG, "PUT 终局复核自愈：响应超时但成品已完整落盘（$size B）")
-            Result.success(Unit)
-        } else {
-            this
+        if (size <= 0L) return this
+        return when (val probe = headProbe(url, credential)) {
+            is HeadProbe.Found ->
+                if (probe.length == size) {
+                    if (!isSuccess) Log.i(TAG, "PUT 终局复核自愈：响应超时但成品已完整落盘（$size B）")
+                    Result.success(Unit)
+                } else if (isSuccess) {
+                    Log.w(TAG, "PUT 响应 2xx 但成品 HEAD 尺寸不符（${probe.length} ≠ $size），判为假失败待下轮重传：${safeUrlForLog(url)}")
+                    Result.failure(BackupException("上传响应成功但远端尺寸复核不符，疑似服务器假成功（${safeUrlForLog(url)}）"))
+                } else {
+                    this
+                }
+            HeadProbe.Absent ->
+                if (isSuccess) {
+                    Log.w(TAG, "PUT 响应 2xx 但成品确认不存在，判为假失败待下轮重传：${safeUrlForLog(url)}")
+                    Result.failure(BackupException("上传响应成功但远端未落盘，疑似服务器假成功（${safeUrlForLog(url)}）"))
+                } else {
+                    this
+                }
+            HeadProbe.Unknown -> this
         }
     }
 
@@ -599,6 +648,10 @@ class WebDavEngine(
     private val patchUnsupported = java.util.concurrent.atomic.AtomicBoolean(false)
     private val moveUnsupported = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /** 服务器不支持 MOVE（引擎实例级记忆）——同步服务冲突分支据此跳过改名保护、
+     *  直接走「整传成品 URL + HEAD 复核」降级路径，避免每轮重试注定失败的 MOVE。 */
+    val isMoveUnsupported: Boolean get() = moveUnsupported.get()
+
     /** PUT + 瞬态退避重试（rclone low-level-retry 同款；供 [putResumable] 内部使用）。 */
     private suspend fun putWithTransientRetry(
         url: String,
@@ -637,6 +690,36 @@ class WebDavEngine(
         }.getOrDefault(0L)
     }
 
+    /** HEAD 三态探测结果（2026-11-07 审计修复）：Unknown = HEAD 自身失败（限流/5xx/网络
+     *  异常）或 2xx 但无 Content-Length 无法复核——**绝不能与「确认不存在」混同**，
+     *  否则限流会被误判成尺寸不符/假成功，反向会把真成功误判成失败。 */
+    private sealed interface HeadProbe {
+        /** 确认存在（Content-Length 可解析）。 */
+        data class Found(val length: Long) : HeadProbe
+
+        /** 确认不存在（404）。 */
+        data object Absent : HeadProbe
+
+        /** 状态未知：保持调用方原结果，不做任何改判。 */
+        data object Unknown : HeadProbe
+    }
+
+    private suspend fun headProbe(url: String, credential: WebDavCredential): HeadProbe =
+        withContext(Dispatchers.IO) {
+            runCatchingNotCancelled {
+                val request = buildRequest(url, "HEAD", credential)
+                executeWithDigestFallback(request, credential).use { response ->
+                    when {
+                        response.code in 200..299 ->
+                            response.header("Content-Length")?.toLongOrNull()?.let { HeadProbe.Found(it) }
+                                ?: HeadProbe.Unknown
+                        response.code == 404 -> HeadProbe.Absent
+                        else -> HeadProbe.Unknown
+                    }
+                }
+            }.getOrElse { HeadProbe.Unknown }
+        }
+
     /**
      * PATCH 追加续传：把 file 的 [fromOffset..末尾] 字节追加到远端 part 资源。
      *
@@ -659,11 +742,13 @@ class WebDavEngine(
             arrayOf("X-Update-Range" to "append"),
         )
         for ((index, headers) in variants.withIndex()) {
-            val offsetBase = if (index == 0) fromOffset else 0L // 第二种变体语义未验证，进度从 0 计
+            // 2026-11-07 审计修复：进度回调统一报「本段内已写字节」（相对 fromOffset），
+            // 偏移由外层 stagePart 统一加 partLen——旧实现变体 1 内层又加了一次 fromOffset，
+            // 双重偏移使续传进度冲到 >100% 再跳回
             val request = Request.Builder()
                 .url(url)
                 .method("PATCH", RangeFileRequestBody(file, fromOffset, remaining) { done ->
-                    progress(offsetBase + done)
+                    progress(done)
                 })
                 .header("Content-Type", "application/offset+octet-stream")
                 .apply { headers.forEach { (k, v) -> header(k, v) } }
@@ -682,6 +767,10 @@ class WebDavEngine(
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
+                // 2026-11-07 审计修复：暂停/停止信号是 BackupException 而非 CancellationException，
+                // 必须放行——旧实现把它们吞成「PATCH 网络失败」进 3 轮退避重试，停止延迟生效
+                if (WebDavSyncPausedSignal.inChain(error)) throw WebDavSyncPausedSignal()
+                if (WebDavSyncAbortSignal.inChain(error)) throw WebDavSyncAbortSignal()
                 return@withContext PatchOutcome.Failed(BackupException(error.toUserMessage(), error))
             }
         }
@@ -714,37 +803,53 @@ class WebDavEngine(
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatchingNotCancelled {
             targetFile.parentFile?.mkdirs()
-            val resumeFrom = if (targetFile.exists() && targetFile.isFile) targetFile.length() else 0L
-            val builder = Request.Builder()
-                .url(url)
-                .header("Authorization", basicAuth(credential.username, credential.password))
-                .header("User-Agent", USER_AGENT)
-            if (resumeFrom > 0) builder.header("Range", "bytes=$resumeFrom-")
-            executeWithDigestFallback(builder.build(), credential).use { response ->
-                val appendFrom = when {
-                    response.code == 206 -> resumeFrom
-                    response.code in 200..299 -> 0L
-                    response.code == 401 || response.code == 403 ->
-                        throw BackupException("WebDAV 认证失败（HTTP ${response.code}），请检查账号与密码")
-                    response.code == 404 -> throw BackupException("远程文件不存在：${targetFile.name}")
-                    else -> throw BackupException("WebDAV 下载失败（HTTP ${response.code}）")
+            var resumeFrom = if (targetFile.exists() && targetFile.isFile) targetFile.length() else 0L
+            // 2026-11-07 审计修复：416 = Range 起点越界（.part ≥ 远端文件：远端被较小版本
+            // 替换、或上轮落位失败后 part 完整残留）——旧实现每轮 416 永久失败且 .part
+            // 永不清理。清零重下一次；再次 416（远端真异常）按失败抛出
+            var resetDone = false
+            while (true) {
+                val builder = Request.Builder()
+                    .url(url)
+                    .header("Authorization", basicAuth(credential.username, credential.password))
+                    .header("User-Agent", USER_AGENT)
+                if (resumeFrom > 0) builder.header("Range", "bytes=$resumeFrom-")
+                val response = executeWithDigestFallback(builder.build(), credential)
+                if (response.code == 416 && resumeFrom > 0 && !resetDone) {
+                    Log.w(TAG, "GET 416（Range 起点越界 part=$resumeFrom ≥ 远端），清零重下：${safeUrlForLog(url)}")
+                    runCatchingNotCancelled { response.body?.close() }
+                    response.close()
+                    resetDone = true
+                    resumeFrom = 0L
+                    continue
                 }
-                var written = appendFrom
-                response.body?.byteStream()?.use { input ->
-                    java.io.RandomAccessFile(targetFile, "rw").use { raf ->
-                        if (appendFrom == 0L) raf.setLength(0)
-                        raf.seek(appendFrom)
-                        val buffer = ByteArray(BUFFER_SIZE)
-                        while (true) {
-                            val n = input.read(buffer)
-                            if (n < 0) break
-                            raf.write(buffer, 0, n)
-                            written += n
-                            progress(written)
-                        }
+                response.use { r ->
+                    val appendFrom = when {
+                        r.code == 206 -> resumeFrom
+                        r.code in 200..299 -> 0L
+                        r.code == 401 || r.code == 403 ->
+                            throw BackupException("WebDAV 认证失败（HTTP ${r.code}），请检查账号与密码")
+                        r.code == 404 -> throw BackupException("远程文件不存在：${targetFile.name}")
+                        else -> throw BackupException("WebDAV 下载失败（HTTP ${r.code}）")
                     }
-                } ?: throw BackupException("WebDAV 下载失败：响应体为空")
-                Log.i(TAG, "GET OK (from=$appendFrom, total=$written B) for ${safeUrlForLog(url)}")
+                    var written = appendFrom
+                    r.body?.byteStream()?.use { input ->
+                        java.io.RandomAccessFile(targetFile, "rw").use { raf ->
+                            if (appendFrom == 0L) raf.setLength(0)
+                            raf.seek(appendFrom)
+                            val buffer = ByteArray(BUFFER_SIZE)
+                            while (true) {
+                                val n = input.read(buffer)
+                                if (n < 0) break
+                                raf.write(buffer, 0, n)
+                                written += n
+                                progress(written)
+                            }
+                        }
+                    } ?: throw BackupException("WebDAV 下载失败：响应体为空")
+                    Log.i(TAG, "GET OK (from=$appendFrom, total=$written B) for ${safeUrlForLog(url)}")
+                }
+                break
             }
             Unit
         }.toUserFriendly()
@@ -863,7 +968,10 @@ class WebDavEngine(
                 event = parser.next()
             }
         }.onFailure { error ->
-            Log.w(TAG, "PROPFIND XML 解析失败（按空目录处理）：${error.message}")
+            // 2026-11-07 审计修复：解析失败绝不能按空目录处理——空清单会让上传阶段把
+            // 远端同名文件当「不存在」无保护 PUT 覆盖（违反云端数据不静默丢失铁律）。
+            // 抛错中止本轮同步（城通等非标准 207 命名空间可触发），下轮重试
+            throw BackupException("远端清单解析失败（服务器 207 响应非标准），本轮同步中止以防误覆盖远端文件：${error.message}")
         }
         return result
     }

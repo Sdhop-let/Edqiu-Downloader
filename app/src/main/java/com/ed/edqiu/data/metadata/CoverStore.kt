@@ -78,12 +78,16 @@ object CoverStore {
                 val target = File(dir, "$tweetId.$ext")
                 val part = File(dir, "$tweetId.$ext.part")
                 runCatching {
+                    // 2026-11-07 审计修复：接入用户代理——封面 URL 是 pbs.twimg.com（X 同域），
+                    // 仅应用代理场景下旧实现封面必挂（条目长期无图）
+                    val proxyObj = com.ed.edqiu.data.preferences.ProxyPreferences(appContext)
+                        .getProxySettings().takeIf { it.enabled }?.toJavaProxy()
                     val connection =
-                        (URL(remoteUrl).openConnection() as HttpURLConnection).apply {
-                            connectTimeout = 4_000
-                            readTimeout = 4_000
-                            setRequestProperty("User-Agent", "Edqiu/1.0")
-                        }
+                        (if (proxyObj != null) URL(remoteUrl).openConnection(proxyObj)
+                        else URL(remoteUrl).openConnection()) as HttpURLConnection
+                    connection.connectTimeout = 4_000
+                    connection.readTimeout = 4_000
+                    connection.setRequestProperty("User-Agent", "Edqiu/1.0")
                     try {
                         if (connection.responseCode != 200) {
                             error("HTTP ${connection.responseCode}")

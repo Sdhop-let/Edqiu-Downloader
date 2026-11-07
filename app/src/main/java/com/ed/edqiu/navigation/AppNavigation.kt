@@ -37,6 +37,8 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -263,6 +265,14 @@ fun AppNavigation(
     val selectedTabIndex = tabScreens.indexOfFirst { currentDestination?.hierarchy?.any { h -> h.route == it.route } == true }
         .coerceAtLeast(0)
 
+    // 收件箱用户线待处理数（2026-10-24 死功能救活 + 2026-11-07 上提作用域）：
+    // 悬浮栏与回退标准栏都要用（回退栏旧实现没有红点，两形态功能不对等）
+    val badgeContext = androidx.compose.ui.platform.LocalContext.current
+    val inboxPendingBadge by remember {
+        com.ed.edqiu.data.db.EdqiuDatabase.getDatabase(badgeContext)
+            .savedLinkDao().observeUserPendingCount()
+    }.collectAsStateWithLifecycle(initialValue = 0)
+
     // ---- 液态玻璃（Backdrop 库）：内层 shell 捕获层 ----
     // shellBackdrop 只记录页面内容（NavHost）；底栏位于捕获链外，
     // 真折射采样「正下方的列表内容」。此处覆盖外层 LocalAppBackdrop 值。
@@ -307,7 +317,19 @@ fun AppNavigation(
                             NavigationBarItem(
                                 selected = index == selectedTabIndex,
                                 onClick = { selectTab(index) },
-                                icon = { Icon(screen.icon, contentDescription = screen.label) },
+                                // 2026-11-07 审计修复：回退底栏补齐红点（旧实现只有悬浮
+                                // 栏有 badge，两形态功能不对等）
+                                icon = {
+                                    if (index == 0 && inboxPendingBadge > 0) {
+                                        BadgedBox(badge = {
+                                            Badge { Text(if (inboxPendingBadge > 99) "99+" else inboxPendingBadge.toString()) }
+                                        }) {
+                                            Icon(screen.icon, contentDescription = screen.label)
+                                        }
+                                    } else {
+                                        Icon(screen.icon, contentDescription = screen.label)
+                                    }
+                                },
                                 label = { Text(screen.label) }
                             )
                         }
@@ -505,11 +527,7 @@ fun AppNavigation(
         if (showBottomBar && floatingTabBarEnabled) {
             // 2026-10-24 死功能救活：badgeCount 参数此前从未被喂值——接入收件箱用户线
             // 待处理数（Room Flow，捕获/下载完成/删除实时刷新），Tab 栏红点=下载队列积压
-            val badgeContext = androidx.compose.ui.platform.LocalContext.current
-            val inboxPendingBadge by remember {
-                com.ed.edqiu.data.db.EdqiuDatabase.getDatabase(badgeContext)
-                    .savedLinkDao().observeUserPendingCount()
-            }.collectAsStateWithLifecycle(initialValue = 0)
+            //（2026-11-07：状态上提到 Scaffold 外层，供回退底栏共用）
             // 2026-10-25 Tab 图形换新：轮廓版（未选中）/ 实底版（选中）成对切换——
             // 配合动态胶囊布局（选中=胶囊内图标+文字，未选中=纯图标）
             LiquidTabBar(
@@ -531,6 +549,8 @@ fun AppNavigation(
                 selectedIndex = selectedTabIndex,
                 onSelect = selectTab,
                 badgeCount = inboxPendingBadge,
+                // 红点归属收件箱 Tab（2026-11-07 审计修复：旧实现钉在整条栏右上角）
+                badgeTabIndex = 0,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()

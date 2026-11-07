@@ -256,11 +256,19 @@ object DirectoryScanner {
                 .joinToString("_")
                 .ifBlank { if (fileMediaType == MediaType.IMAGE) "图片" else parts.lastOrNull().orEmpty().ifBlank { "unknown" } }
             url = "https://x.com/i/status/$tweetId"
-        } else if (parts.size >= 3) {
+        } else if (parts.size >= 3 && parts[parts.size - 2].length > 10 && parts[parts.size - 2].all(Char::isDigit)) {
             quality = parts.last()
             tweetId = parts[parts.size - 2]
             uploader = parts.dropLast(2).joinToString("_").ifBlank { "unknown" }
             url = "https://x.com/i/status/$tweetId"
+        } else if (parts.size >= 3) {
+            // 2026-11-07 审计修复：tweetId 段无数字校验——用户改过名的任意文件
+            // （如 abc_def_ghi.mp4）会被拼出垃圾 URL（x.com/i/status/def）入库，
+            // 详情页跳转/重下指向不存在的推文。降级为合成 id（与 2 段分支同策略）
+            quality = parts.last()
+            uploader = parts.dropLast(1).joinToString("_").ifBlank { "unknown" }
+            tweetId = syntheticFileId(file)
+            url = ""
         } else if (parts.size == 2) {
             uploader = parts[0]
             quality = parts[1]

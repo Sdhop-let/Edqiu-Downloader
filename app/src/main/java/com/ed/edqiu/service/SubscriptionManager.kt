@@ -66,6 +66,14 @@ object SubscriptionManager {
     @Volatile
     private var started = false
 
+    /** Bluesky 公共 AppView 共享客户端（2026-11-07 审计修复：连接池复用，派生时带代理）。 */
+    private val bskyBaseClient: okhttp3.OkHttpClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
+    }
+
     private fun normalize(screenName: String): String =
         screenName.trim().removePrefix("@").trim()
 
@@ -91,6 +99,10 @@ object SubscriptionManager {
                     screenName = name,
                     platform = platform,
                     enabled = true,
+                    // 2026-11-07 审计修复：新订阅设时间水位（留 5 分钟时钟偏移余量）——
+                    // 旧实现 startFromAt=null，首轮把时间线最近 8 条旧帖（可能几年前的）
+                    // 全部灌进订阅线
+                    startFromAt = System.currentTimeMillis() - 5 * 60_000L,
                     createdAt = System.currentTimeMillis()
                 )
             )
@@ -174,7 +186,20 @@ object SubscriptionManager {
     /** 检测单个订阅（订阅页逐作者「立即检测」）。@return 新作品数 + 失败/降级说明。 */
     suspend fun pollOne(context: Context, sub: SubscriptionEntity): DetectOutcome =
         withContext(Dispatchers.IO) {
-            detectAndCapture(context, sub)
+            // 2026-11-07 审计修复：纳入 pollInFlight 互斥——旧实现绕过锁，与后台轮询/
+            // 整轮手动检测三路并发时整行覆写互相回退状态，且共享 SimpleDateFormat
+            // 并发 parse 产生错误 publishedAt（不抛异常，直接破坏时间边界过滤）
+            if (!pollInFlight.compareAndSet(false, true)) {
+                return@withContext DetectOutcome(newCount = 0, failure = "已有检测在进行中，请稍候")
+            }
+            try {
+                runCatching { detectAndCapture(context, sub) }.getOrElse { e ->
+                    android.util.Log.w("SubscriptionManager", "单订阅检测异常：@${sub.screenName}", e)
+                    DetectOutcome(0, failure = e.message ?: "检测异常")
+                }
+            } finally {
+                pollInFlight.set(false)
+            }
         }
 
     private suspend fun poll(context: Context, ignoreThrottle: Boolean = false): DetectOutcome {
@@ -199,9 +224,18 @@ object SubscriptionManager {
         var newCount = 0
         val failures = mutableListOf<String>()
         for (sub in subs) {
-            val outcome = detectAndCapture(appContext, sub)
+            val outcome = runCatching { detectAndCapture(appContext, sub) }.getOrElse { e ->
+                android.util.Log.w("SubscriptionManager", "检测异常：@${sub.screenName}", e)
+                DetectOutcome(0, failure = e.message ?: "检测异常")
+            }
             newCount += outcome.newCount
             outcome.failure?.let { failures += "@${sub.screenName}：$it" }
+            // 2026-11-07 审计修复：429 限流轮级熔断——旧实现第一个作者被限流后
+            // 后续作者照常请求（无退避、不解析 Retry-After），持续撞击限流桶
+            if (outcome.failure?.contains("限流") == true || outcome.failure?.contains("429") == true) {
+                android.util.Log.w("SubscriptionManager", "X 限流，本轮剩余 ${subs.size - subs.indexOf(sub) - 1} 个作者跳过，下轮自动重试")
+                break
+            }
         }
         // 批量轮询最多带 2 条原因回 UI（弹窗不刷屏）
         return DetectOutcome(newCount, failure = failures.take(2).joinToString("；").ifBlank { null })
@@ -216,20 +250,40 @@ object SubscriptionManager {
         val proxyUrl = ProxyPreferences(appContext).getProxySettings().toProxyUrl()
         val cookiePrefs = CookiePreferences(appContext)
         val cookieReady = cookiePrefs.hasCookies()
-        val cookieFile = if (cookieReady) {
+        // 2026-11-07 审计修复：明文 cookie 文件只在 IG 通道（唯一消费方）按需写——
+        // 旧实现在判断平台之前无条件写，twitter/bluesky 订阅每作者每 25 分钟都白写
+        // 一次明文 auth_token 落盘且当轮不清理；IG 用完即删
+        val cookieFile = if (cookieReady && sub.platform == SubscriptionEntity.PLATFORM_INSTAGRAM) {
             YoutubeDLService.writeCookieFile(appContext, cookiePrefs.getAuthToken(), cookiePrefs.getCt0())
         } else null
 
         val now = System.currentTimeMillis()
         var softNote: String? = null
+        // bluesky/IG 拉取失败（null）与「通道成功但无新作品」（空列表）必须可区分——
+        // 2026-11-07 审计修复：旧实现 ?: emptyList() 把失败伪装成成功，清空真实
+        // lastError 并伪造「检测恢复正常」事件
+        var fetchError: String? = null
         // (id, publishedAt)——twitter 走检测器带发布时间；bluesky/IG 无日期（null 直接放行）
         val candidates: List<Pair<String, Long?>> = when (sub.platform) {
-            SubscriptionEntity.PLATFORM_BLUESKY ->
-                (fetchBlueskyPostIds(appContext, sub.screenName, proxyUrl, TIMELINE_SCAN) ?: emptyList())
-                    .map { it to null }
-            SubscriptionEntity.PLATFORM_INSTAGRAM ->
-                (fetchInstagramPostIds(sub.screenName, TIMELINE_SCAN, proxyUrl, cookieFile) ?: emptyList())
-                    .map { it to null }
+            SubscriptionEntity.PLATFORM_BLUESKY -> {
+                val fetched = fetchBlueskyPostIds(appContext, sub.screenName, proxyUrl, TIMELINE_SCAN)
+                if (fetched == null) {
+                    fetchError = "Bluesky 拉取失败（网络/代理未通），本轮未检测"
+                    emptyList()
+                } else {
+                    fetched.map { it to null }
+                }
+            }
+            SubscriptionEntity.PLATFORM_INSTAGRAM -> {
+                val fetched = fetchInstagramPostIds(sub.screenName, TIMELINE_SCAN, proxyUrl, cookieFile)
+                cookieFile?.let { runCatching { java.io.File(it).delete() } } // 明文 cookie 用完即删
+                if (fetched == null) {
+                    fetchError = "Instagram 拉取失败（网络/风控），本轮未检测"
+                    emptyList()
+                } else {
+                    fetched.map { it to null }
+                }
+            }
             else -> when (val outcome = XTimelineDetector.detect(
                 screenName = sub.screenName,
                 proxyUrl = proxyUrl,
@@ -266,8 +320,18 @@ object SubscriptionManager {
             startFrom == null || publishedAt == null || publishedAt >= startFrom
         }
 
+        if (fetchError != null) {
+            // 2026-11-07 审计修复：bluesky/IG 拉取失败显式落库透出（与 twitter 通道
+            // 「失败必须显式」口径一致）——不再清空 lastError、不再伪造「检测恢复正常」
+            logFailure(appContext, sub, fetchError)
+            dao.update(
+                sub.copy(lastCheckedAt = now, lastError = fetchError, lastErrorAt = now)
+            )
+            return DetectOutcome(0, failure = fetchError)
+        }
+
         if (ids.isEmpty()) {
-            // 通道成功但无内容（/bluesky/IG 拉取失败维持旧语义：仅推进检查时间）
+            // 通道成功但无内容
             logSuccessEvents(appContext, sub, taken = 0, softNote)
             dao.update(
                 sub.copy(
@@ -289,18 +353,24 @@ object SubscriptionManager {
         }.getOrDefault(emptySet())
         for ((id, _) in ids) {
             if (taken >= NEW_PER_AUTHOR) break
-            val cleanId = id.takeWhile { it.isDigit() || it == '-' || it.isLetterOrDigit() }
-            if (cleanId.isBlank()) continue
+            // 2026-11-07 审计修复：ID 清洗按平台区分——twitter 只留数字；IG shortcode
+            // 含 _ 与 -（如 C9_abCD-ef），旧实现 takeWhile 遇 _ 截断 → 回收站去重永远
+            // 匹配不上，用户删过的作品每轮复活
+            val dedupeId = when (sub.platform) {
+                SubscriptionEntity.PLATFORM_TWITTER -> id.takeWhile { it.isDigit() }
+                else -> id.trim().takeIf { raw ->
+                    raw.isNotBlank() && raw.all { it.isLetterOrDigit() || it == '_' || it == '-' }
+                }
+            }
+            if (dedupeId.isNullOrBlank()) continue
             val statusUrl = when (sub.platform) {
                 SubscriptionEntity.PLATFORM_BLUESKY ->
                     "https://bsky.app/profile/${sub.screenName}/post/$id"
                 SubscriptionEntity.PLATFORM_INSTAGRAM ->
-                    "https://www.instagram.com/p/$id/"
+                    "https://www.instagram.com/p/$dedupeId/"
                 else ->
-                    "https://x.com/i/status/$cleanId"
+                    "https://x.com/i/status/$dedupeId"
             }
-            val dedupeId = if (sub.platform == SubscriptionEntity.PLATFORM_TWITTER) cleanId.takeWhile { it.isDigit() } else cleanId
-            if (dedupeId.isBlank()) continue
             if (container.savedLinkRepository.getByTweetId(dedupeId) != null) continue
             if (dedupeId in deletedIds) continue
 
@@ -413,9 +483,8 @@ object SubscriptionManager {
         runCatching {
             val url = "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed" +
                 "?actor=${java.net.URLEncoder.encode(handle, "UTF-8")}&limit=$limit&filter=posts_with_media"
-            val clientBuilder = okhttp3.OkHttpClient.Builder()
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(20, TimeUnit.SECONDS)
+            // 2026-11-07 审计修复：共享基础客户端派生（连接池复用），代理参数动态下传
+            val clientBuilder = bskyBaseClient.newBuilder()
             proxyUrl?.let { p ->
                 val proxy = toJavaProxy(p)
                 if (proxy != null) clientBuilder.proxy(proxy)

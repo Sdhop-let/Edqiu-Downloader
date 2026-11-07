@@ -23,7 +23,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -253,6 +252,7 @@ fun EdqiuApp(container: AppContainer) {
                 }
                 // 同一进程 30s 内只自愈一次，防连环重建
                 val lastRecreateMs = remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+                val probeLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
                 LaunchedEffect(Unit) {
                     var lastApply = -1
                     var lastDraw = -1
@@ -261,7 +261,13 @@ fun EdqiuApp(container: AppContainer) {
                         kotlinx.coroutines.delay(1200)
                         val a = probeApplies.get()
                         val d = probeDraws.get()
-                        if (a != lastApply && d == lastDraw) stallRounds++ else stallRounds = 0
+                        // 2026-11-07 审计修复：仅前台累计冻结轮次——apply 观察器统计的是
+                        // 全进程快照写（后台下载时 DownloadTaskBus 300ms 一写都在推进），
+                        // 后台窗口停止状态下恒命中「apply 走/draw 不走」签名，Activity
+                        // 会被反复 recreate；回到前台即见模式选择页（叠加 modeChosen 丢态）
+                        val foreground = probeLifecycleOwner.lifecycle.currentState
+                            .isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+                        if (foreground && a != lastApply && d == lastDraw) stallRounds++ else stallRounds = 0
                         if (lastApply >= 0 && stallRounds >= 2 &&
                             System.currentTimeMillis() - lastRecreateMs.longValue > 30_000
                         ) {
@@ -281,8 +287,17 @@ fun EdqiuApp(container: AppContainer) {
                         lastDraw = d
                     }
                 }
+                // 关闭动画在途任务（2026-11-07 审计修复）：closeOverlay 播完 400ms 动画才置
+                // overlayRoute=null，期间 openOverlay 因「已有浮层」被静默吞掉——现记录
+                // 在途任务，openOverlay 检测到关闭动画即取消结算、立即开新浮层
+                val closeAnimJob = remember {
+                    java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.Job?>(null)
+                }
+
                 fun openOverlay(route: String, tweetId: String = "") {
-                    if (overlayRoute != null) return
+                    val closing = closeAnimJob.get()
+                    if (overlayRoute != null && closing == null) return
+                    closing?.cancel()
                     overlayTweetId = tweetId
                     overlayRoute = route
                     closeProgress = 1f
@@ -307,14 +322,14 @@ fun EdqiuApp(container: AppContainer) {
                         overlayRoute = null
                         return
                     }
-                    scope.launch {
+                    closeAnimJob.set(scope.launch {
                         animate(
                             initialValue = closeProgress,
                             targetValue = 1f,
                             animationSpec = tween(400, easing = EaseOutCubic)
                         ) { v, _ -> closeProgress = v }
                         overlayRoute = null
-                    }
+                    })
                 }
 
                 // BACK 键（浮层）：见下方浮层内容内的注册点——2026-10 移入浮层内容，

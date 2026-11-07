@@ -274,7 +274,9 @@ object MediaQualityUpgrader {
             _uiState.value = UpgradeUiState(
                 running = true, tier = tier, total = total,
                 done = doneCounter.get(), upgraded = upgradedCounter.get(),
-                phase = if (round > 0) "第 ${round + 1} 轮 · 画质检测与升级" else "画质检测与升级"
+                phase = if (round > 0) "第 ${round + 1} 轮 · 画质检测与升级" else "画质检测与升级",
+                // 透传粘性提示（如 16KB 内存页提示），否则会被下一帧 report() 立即冲掉
+                message = _uiState.value.message
             )
         }
         report()
@@ -315,27 +317,30 @@ object MediaQualityUpgrader {
                                         com.ed.edqiu.data.preferences.CookiePreferences(context).hasCookies()
                                     }.getOrDefault(false))
                             )
-                        val ok = if (needsHls) {
+                        val outcome = if (needsHls) {
                             if (hlsBudget.getAndDecrement() <= 0) {
                                 doneCounter.incrementAndGet(); report(); return@withPermit // 预算用尽：下轮再升
                             }
                             runCatching { performHlsUpgrade(context, dao, entity, tweetId) }
                                 .getOrElse { error ->
                                     Log.w(TAG, "HLS upgrade failed for ${entity.filePath}", error)
-                                    false
+                                    UpgradeResult.FAILED
                                 }
                         } else {
                             runCatching { performUpgrade(dao, entity, remote) }
                                 .getOrElse { error ->
                                     Log.w(TAG, "Upgrade failed for ${entity.filePath}", error)
-                                    false
+                                    UpgradeResult.FAILED
                                 }
                         }
-                        if (ok) {
-                            upgradedCounter.incrementAndGet()
-                            successBatch += tweetId
-                        } else {
-                            failedBatch += tweetId
+                        when (outcome) {
+                            UpgradeResult.UPGRADED -> {
+                                upgradedCounter.incrementAndGet()
+                                successBatch += tweetId
+                            }
+                            // 已确认无需升级（图片已是原图等）：计入 checked，不再重试也不进黑名单
+                            UpgradeResult.NO_GAIN -> checkedBatch += tweetId
+                            UpgradeResult.FAILED -> failedBatch += tweetId
                         }
                         doneCounter.incrementAndGet()
                         report()
@@ -463,18 +468,22 @@ object MediaQualityUpgrader {
      * HLS 高画质升级（yt-dlp 引擎）：拉 X 的 HLS 自适应流最高档（1080p+），
      * ffmpeg 合并 mp4 后替换本地低码率文件。单条 30-90s，预算制串行调用。
      */
+    /** 升级结果三态（2026-11-07 审计修复）：NO_GAIN = 已确认无需升级（计入 checked 不进
+     *  retry 黑名单——旧实现把"下载后对比无增益"当失败，每张已达原图的图片浪费 2 次全量下载）。 */
+    private enum class UpgradeResult { UPGRADED, NO_GAIN, FAILED }
+
     private suspend fun performHlsUpgrade(
         context: Context,
         dao: com.ed.edqiu.data.database.DownloadHistoryDao,
         entity: DownloadHistoryEntity,
         tweetId: String
-    ): Boolean {
+    ): UpgradeResult {
         // 2026-10：16KB 内存页设备 ffmpeg 不可用（libwebp* 未适配），HLS 升级整体跳过
         val app = context.applicationContext as? com.ed.edqiu.TwitterDownloaderApp
         if (app?.is16kPageDevice == true) {
             _uiState.value = _uiState.value.copy(running = false, message = "16KB 内存页机型暂不支持 HLS 高画质升级（ffmpeg 依赖未适配）")
             Log.w(TAG, "skip HLS upgrade on 16KB-page device")
-            return false
+            return UpgradeResult.FAILED
         }
         val proxyUrl = com.ed.edqiu.data.preferences.ProxyPreferences(context)
             .getProxySettings().toProxyUrl()
@@ -490,25 +499,32 @@ object MediaQualityUpgrader {
 
         val newPath = com.ed.edqiu.service.YoutubeDLService.downloadVideo(
             url = "https://x.com/i/status/$tweetId",
-            formatId = "best",
+            // 2026-11-07 审计修复：同 DownloaderClient——`best` 选不到 video-only HLS，
+            // 只有 video+audio 合并选择才能真正拉到 1080p+
+            formatId = "bestvideo+bestaudio/best",
             outputDir = outputDir.absolutePath,
             onProgress = { _, _ -> },
             proxyUrl = proxyUrl,
             cookieFilePath = cookieFile,
             playlistIndex = null
-        ).getOrElse { error ->
+        ).also {
+            // 2026-11-07 审计修复：明文 cookie 用完即删，不再会话期常驻磁盘
+            cookieFile?.let { f -> runCatching { File(f).delete() } }
+        }.getOrElse { error ->
             Log.w(TAG, "yt-dlp HLS download failed for tweet=$tweetId: ${error.message}")
-            return false
+            return UpgradeResult.FAILED
         }
 
         val newFile = File(newPath)
         // 同路径防护：再次升级 HLS 时 yt-dlp 会按同一输出模板覆盖同路径文件，
         // 此时绝不能删除 entity.filePath（删的就是刚下载的新文件本身）
         val samePath = newFile.absolutePath == entity.filePath
-        if (!newFile.exists() || newFile.length() <= File(entity.filePath).length()) {
+        // 2026-11-07 审计修复：samePath 时产物已原地覆盖旧文件，长度对比恒等——
+        // 旧实现使 quality=best 的 HLS 重升级永远失败进黑名单；同路径只判存在性
+        if (!newFile.exists() || (!samePath && newFile.length() <= File(entity.filePath).length())) {
             // 异常小的产物不替换
             if (newFile.exists() && !samePath) newFile.delete()
-            return false
+            return UpgradeResult.FAILED
         }
 
         // 2026-10-24 #1/#2 重复根治配套：yt-dlp 产物按模板 {uploader}/{title}.mp4 命名，
@@ -550,15 +566,23 @@ object MediaQualityUpgrader {
         }
 
         // 2026-10 P2 整改：终态迁移不可取消——取消落在挂起点会把"新文件已落盘、DB 仍指旧
-        // 文件"的中间态固化（孤儿新文件被扫描成重复条目）；NonCancellable 保证三步原子完成
+        // 文件"的中间态固化（孤儿新文件被扫描成重复条目）；NonCancellable 保证三步原子完成。
+        // 2026-11-07 审计修复：updateMediaFile 返回行数，0 行 = 记录已被用户删除/路径已变，
+        // 此时绝不能删旧文件（用户可能选择保留）；新产物按孤儿清理避免被扫描成重复条目
         withContext(kotlinx.coroutines.NonCancellable) {
-            dao.updateMediaFile(
+            val updated = dao.updateMediaFile(
                 oldPath = entity.filePath,
                 newPath = finalFile.absolutePath,
                 fileSize = finalFile.length(),
                 quality = "best"
             )
-            if (!samePath) {
+            if (updated == 0) {
+                Log.w(TAG, "HLS upgrade: DB matched 0 rows, keep old file & drop artifact: ${File(entity.filePath).name}")
+                if (!samePath) {
+                    newSidecar.delete()
+                    finalFile.delete()
+                }
+            } else if (!samePath) {
                 File(entity.filePath).delete()
                 oldSidecar.delete()
             }
@@ -570,7 +594,7 @@ object MediaQualityUpgrader {
             }
         }
         Log.i(TAG, "HLS upgraded: ${File(entity.filePath).name} -> ${finalFile.name}")
-        return true
+        return UpgradeResult.UPGRADED
     }
 
     /** 下载更优画质替换：新文件落盘 → 删旧媒体/sidecar → 重写 sidecar → 更新 DB。 */
@@ -578,13 +602,13 @@ object MediaQualityUpgrader {
         dao: com.ed.edqiu.data.database.DownloadHistoryDao,
         entity: DownloadHistoryEntity,
         remote: RemoteMedia
-    ): Boolean {
-        val tweetId = tweetIdOf(entity) ?: return false
+    ): UpgradeResult {
+        val tweetId = tweetIdOf(entity) ?: return UpgradeResult.FAILED
         val isVideo = entity.mediaType == MediaType.VIDEO
-        val remoteUrl = if (isVideo) remote.bestVideoUrl ?: return false
-        else remote.imageOrigUrl ?: return false
+        val remoteUrl = if (isVideo) remote.bestVideoUrl ?: return UpgradeResult.FAILED
+        else remote.imageOrigUrl ?: return UpgradeResult.FAILED
 
-        val dir = File(entity.filePath).parentFile ?: return false
+        val dir = File(entity.filePath).parentFile ?: return UpgradeResult.FAILED
         val uploader = entity.uploader.ifBlank { "unknown" }
         val mediaIndex = entity.mediaIndex ?: 1
         val kind = if (isVideo) "video" else "image"
@@ -595,7 +619,7 @@ object MediaQualityUpgrader {
         val newFile = File(dir, newName)
         if (newFile.absolutePath == entity.filePath) {
             // 目标与当前记录同路径（已是目标画质），无可升级
-            return false
+            return UpgradeResult.NO_GAIN
         }
         if (newFile.exists()) {
             // 2026-10 整改：目标已存在多为上次中断残留的孤儿文件（DB 仍指向旧文件）——
@@ -608,13 +632,14 @@ object MediaQualityUpgrader {
         val ok = downloadToFile(remoteUrl, newFile, proxy)
         if (!ok) {
             newFile.delete()
-            return false
+            return UpgradeResult.FAILED
         }
 
-        // 图片：下载后对比，未显著更大则放弃替换
+        // 图片：下载后对比，未显著更大则放弃替换——计入 NO_GAIN（已确认无需升级），
+        // 不进 retry 黑名单（2026-11-07 审计修复：旧实现每张已达原图的图片浪费 2 次全量下载）
         if (!isVideo && newFile.length() <= File(entity.filePath).length() * 1.05) {
             newFile.delete()
-            return false
+            return UpgradeResult.NO_GAIN
         }
 
         // sidecar：旧 → 新（quality 更新）
@@ -627,20 +652,30 @@ object MediaQualityUpgrader {
             newSidecar.writeText(json.toString())
         }
 
-        // 2026-10 P2 整改：同 HLS——终态迁移不可取消；updateMediaFile 按 filePath 匹配，
-        // 用户已删记录时 0 行更新，绝不能再删用户选择保留的文件
+        // 2026-10 P2 整改：同 HLS——终态迁移不可取消；updateMediaFile 按 filePath 匹配。
+        // 2026-11-07 审计修复：DAO 现返回行数，0 行 = 记录已被用户删除/路径已变——
+        // 绝不能删用户选择保留的旧文件；新产物按孤儿清理
+        var dbUpdated = true
         withContext(kotlinx.coroutines.NonCancellable) {
-            dao.updateMediaFile(
+            val updated = dao.updateMediaFile(
                 oldPath = entity.filePath,
                 newPath = newFile.absolutePath,
                 fileSize = newFile.length(),
                 quality = newQuality
             )
-            File(entity.filePath).delete()
-            oldSidecar.delete()
+            if (updated == 0) {
+                Log.w(TAG, "Upgrade: DB matched 0 rows, keep old file & drop artifact: ${File(entity.filePath).name}")
+                newSidecar.delete()
+                newFile.delete()
+                dbUpdated = false
+            } else {
+                File(entity.filePath).delete()
+                oldSidecar.delete()
+            }
         }
+        if (!dbUpdated) return UpgradeResult.FAILED
         Log.i(TAG, "Upgraded: ${File(entity.filePath).name} -> ${newFile.name} (bitrate=${remote.bestVideoBitrate})")
-        return true
+        return UpgradeResult.UPGRADED
     }
 
     /** 精简版 HTTP 下载（与 InternalMediaDownloader 同策略：64KB 缓冲 + .part + 单次重试）。 */

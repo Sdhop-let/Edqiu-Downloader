@@ -149,22 +149,27 @@ fun ListScreen(
     // （多 ClipData 条目 / Intent / URI / HTML / URL 编码正文），全部形态由
     // ClipContentReader 解出（含 EdqiuClip 诊断日志），批量正则提取；剪贴板里只有
     // t.co 短链时也算 hasLink（捕获管线内有限时网络兜底展开）。没有链接才弹手输框。
+    // 2026-11-07 审计修复：readClipTexts 改挂起（IO 切换），回调体包进协程——
+    // scope 上移声明供本回调与后续 ON_RESUME 延迟刷新共用
+    val scope = rememberCoroutineScope()
     val pasteFromClipboard: () -> Unit = {
         val clip = (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
             as? android.content.ClipboardManager)?.primaryClip
-        val clipTexts = com.ed.edqiu.capture.ClipContentReader.readClipTexts(clip, context)
-        val clipText = clipTexts.joinToString("\n")
-        val hasLink = clipText.isNotBlank() && (
-            com.ed.edqiu.domain.BatchTweetUrlExtractor
-                .extractWithOriginals(clipText).isNotEmpty() ||
-                com.ed.edqiu.capture.TcoLinkResolver.findShortLinks(clipText).isNotEmpty()
-            )
-        if (hasLink) {
-            vm.captureText(clipText)
-        } else {
-            // 手输框预填用第一条原始形态（不做解码/拼接，用户看到的仍是剪贴板原文）
-            pasteText = clipTexts.firstOrNull()?.takeIf { it.length <= 2000 } ?: ""
-            showPasteDialog = true
+        scope.launch {
+            val clipTexts = com.ed.edqiu.capture.ClipContentReader.readClipTexts(clip, context)
+            val clipText = clipTexts.joinToString("\n")
+            val hasLink = clipText.isNotBlank() && (
+                com.ed.edqiu.domain.BatchTweetUrlExtractor
+                    .extractWithOriginals(clipText).isNotEmpty() ||
+                    com.ed.edqiu.capture.TcoLinkResolver.findShortLinks(clipText).isNotEmpty()
+                )
+            if (hasLink) {
+                vm.captureText(clipText)
+            } else {
+                // 手输框预填用第一条原始形态（不做解码/拼接，用户看到的仍是剪贴板原文）
+                pasteText = clipTexts.firstOrNull()?.takeIf { it.length <= 2000 } ?: ""
+                showPasteDialog = true
+            }
         }
     }
     var sortExpanded by remember { mutableStateOf(false) }
@@ -173,7 +178,6 @@ fun ListScreen(
     val listState = rememberLazyListState()
     // iOS 大标题折叠：收件箱标题随列表滚动收缩为紧凑导航标题
     val titleCollapse by rememberTitleCollapseProgress(listState)
-    val scope = rememberCoroutineScope()
     val showScrollTop by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 200 } }
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -316,10 +320,14 @@ fun ListScreen(
                     onBatchDelete = vm::deleteSelected,
                     // 2026-10-24：统计总览卡（数据与「全部下载」动作合一）移入固定头部区，
                     // 随滚动收缩折叠；右上角「下载」按钮退役（动作进了统计卡）
-                    pendingCount = links.count { it.status == LinkStatus.PENDING },
-                    downloadedCount = links.count { it.status == LinkStatus.DOWNLOADED },
-                    failedCount = links.count {
-                        it.status == LinkStatus.FAILED || it.status == LinkStatus.DELETED
+                    // 2026-11-07 审计修复：三次全量 count 包 remember——下载进度 Map 每
+                    // 300ms 更新驱动重组时，头区不再每帧全量扫列表
+                    pendingCount = remember(links) { links.count { it.status == LinkStatus.PENDING } },
+                    downloadedCount = remember(links) { links.count { it.status == LinkStatus.DOWNLOADED } },
+                    failedCount = remember(links) {
+                        links.count {
+                            it.status == LinkStatus.FAILED || it.status == LinkStatus.DELETED
+                        }
                     },
                     onDownloadAll = vm::downloadAllPending,
                     collapse = titleCollapse

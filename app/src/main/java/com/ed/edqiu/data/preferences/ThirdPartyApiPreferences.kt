@@ -8,15 +8,19 @@ import android.content.SharedPreferences
  *
  * endpoint 留空 = 关闭；填入合法 http(s) 端点即启用（Key 视服务商可留空）。
  * 安全约定：接入任何付费 API 前必须人工甄别无广告 SDK / 跟踪器注入（项目铁律）。
+ * 2026-11-07 审计修复：api_key 是付费凭证，与 Cookie/WebDAV 密码同级——
+ * 改走 [SecretBox] Keystore 加密（旧明文在首次读取时自动迁移）。
  */
 class ThirdPartyApiPreferences(context: Context) {
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences("third_party_api", Context.MODE_PRIVATE)
 
+    private val secretBox = SecretBox(prefs, keyAlias = "edqiu_third_party_api", logTag = "ThirdPartyApi")
+
     fun getEndpoint(): String = prefs.getString(KEY_ENDPOINT, "") ?: ""
 
-    fun getApiKey(): String = prefs.getString(KEY_API_KEY, "") ?: ""
+    fun getApiKey(): String = secretBox.readSecret(KEY_API_KEY)
 
     /** 是否已配置可用端点（须以 http(s) 开头；{id} 占位可缺省）。 */
     val isConfigured: Boolean
@@ -25,8 +29,8 @@ class ThirdPartyApiPreferences(context: Context) {
     fun save(endpoint: String, apiKey: String) {
         prefs.edit()
             .putString(KEY_ENDPOINT, endpoint.trim())
-            .putString(KEY_API_KEY, apiKey.trim())
             .apply()
+        secretBox.writeSecret(KEY_API_KEY, apiKey.trim())
     }
 
     companion object {

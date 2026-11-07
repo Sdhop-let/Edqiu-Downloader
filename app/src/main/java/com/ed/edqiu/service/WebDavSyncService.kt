@@ -115,8 +115,12 @@ object WebDavSyncService {
     private var cachedEngine: WebDavEngine? = null
 
     private fun sharedEngine(prefs: CloudSyncPreferences): WebDavEngine =
-        cachedEngine ?: WebDavEngine(allowInsecureTls = { prefs.allowInsecureTls })
-            .also { cachedEngine = it }
+        // 2026-11-07 审计修复：check-then-act 加同步——并发首轮可能建出两个引擎实例，
+        // PATCH/MOVE 兼容性记忆分裂（城通每路都要重跑探测）
+        cachedEngine ?: synchronized(this) {
+            cachedEngine ?: WebDavEngine(allowInsecureTls = { prefs.allowInsecureTls })
+                .also { cachedEngine = it }
+        }
 
     suspend fun syncDownloads(
         context: Context,
@@ -290,18 +294,25 @@ object WebDavSyncService {
                 }
                 else -> {
                     // 冲突：本地版为用户设备真源；云端旧版本尽力改名保留，保不住则放弃上传
-                    val preserved = preserveRemoteCopy(engine, credential, remoteUrl, remoteName)
-                    if (preserved) {
-                        when (uploadLocalFile(engine, credential, remoteUrl, file, remoteName, total, processed, onProgress)) {
-                            UploadFileResult.UPLOADED -> { uploaded++; bytes += size }
-                            UploadFileResult.PAUSED -> pausedCount++
-                            UploadFileResult.FAILED -> failed++
-                            UploadFileResult.ABORTED -> return UploadOutcome(
-                                uploaded, skipped, conflicts, pausedCount, bytes, failed, aborted = true
-                            )
-                        }
+                    if (engine.isMoveUnsupported) {
+                        // 2026-11-07 审计修复：MOVE 不支持的服务器（城通类）上 preserveRemoteCopy
+                        // 每轮必败——不再发注定失败的 MOVE 请求；云端旧版无法改名保留，为守住
+                        // 「云端数据不静默丢失」仍跳过上传（用户手动清理云端旧版即可解锁）
+                        Log.i(TAG, "冲突且服务器不支持 MOVE（无法保留云端旧版），跳过上传（本地保持不变）：$remoteName")
                     } else {
-                        Log.w(TAG, "冲突且云端版本无法改名保留，跳过上传（本地保持不变）：$remoteName")
+                        val preserved = preserveRemoteCopy(engine, credential, remoteUrl, remoteName)
+                        if (preserved) {
+                            when (uploadLocalFile(engine, credential, remoteUrl, file, remoteName, total, processed, onProgress)) {
+                                UploadFileResult.UPLOADED -> { uploaded++; bytes += size }
+                                UploadFileResult.PAUSED -> pausedCount++
+                                UploadFileResult.FAILED -> failed++
+                                UploadFileResult.ABORTED -> return UploadOutcome(
+                                    uploaded, skipped, conflicts, pausedCount, bytes, failed, aborted = true
+                                )
+                            }
+                        } else {
+                            Log.w(TAG, "冲突且云端版本无法改名保留，跳过上传（本地保持不变）：$remoteName")
+                        }
                     }
                     conflicts++
                 }

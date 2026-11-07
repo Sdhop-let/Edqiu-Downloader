@@ -116,6 +116,14 @@ object AppUpdateService {
             val safeRelease = info.release.replace(Regex("[/\\\\:*?\"<>|]"), "_")
             val apkFile = File(updateDir, "twitter-downloader-$safeRelease.apk")
             if (apkFile.exists()) apkFile.delete()
+            // 2026-11-07 审计修复：.part 原子写——旧实现直写最终文件，中途被杀留半截
+            // APK（~80MB 弱网反复从头下载）；另清理上次安装成功的残留
+            val partFile = File(updateDir, apkFile.name + ".part")
+            updateDir.listFiles()?.forEach { f ->
+                if (f.isFile && (f.name.endsWith(".part") || (f != apkFile && f != partFile && f.name.endsWith(".apk")))) {
+                    f.delete()
+                }
+            }
 
             val downloadUrl = if (useMirror) info.apkMirrorUrl else info.apkUrl
             val connection = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
@@ -132,7 +140,7 @@ object AppUpdateService {
                 val total = connection.contentLengthLong.takeIf { it > 0L } ?: -1L
                 var copied = 0L
                 connection.inputStream.use { input ->
-                    apkFile.outputStream().use { output ->
+                    partFile.outputStream().use { output ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                         while (true) {
                             val read = input.read(buffer)
@@ -143,11 +151,16 @@ object AppUpdateService {
                         }
                     }
                 }
-                if (apkFile.length() <= 0L) throw IllegalStateException("Downloaded APK is empty")
+                if (partFile.length() <= 0L) throw IllegalStateException("Downloaded APK is empty")
+                if (!partFile.renameTo(apkFile)) {
+                    partFile.copyTo(apkFile, overwrite = true)
+                    partFile.delete()
+                }
                 // 安装前完整性自校验（2026-10 安全整改）：版本不低于当前 + 签名与已装应用一致
                 verifyApkIntegrity(context, apkFile)
                 apkFile
             } finally {
+                runCatching { if (partFile.exists()) partFile.delete() }
                 connection.disconnect()
             }
         }

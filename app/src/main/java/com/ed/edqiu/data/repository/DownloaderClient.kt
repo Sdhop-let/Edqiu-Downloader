@@ -235,7 +235,7 @@ class DownloaderClient(private val context: Context) {
                 title = "yt-dlp 回退下载",
                 thumbnail = "",
                 uploader = "unknown",
-                formatId = "best",
+                formatId = "bestvideo+bestaudio/best",
                 quality = "best",
                 ext = "mp4",
                 status = DownloadStatus.DOWNLOADING
@@ -245,7 +245,10 @@ class DownloaderClient(private val context: Context) {
 
             val launchResult = YoutubeDLService.downloadVideo(
                 url = url,
-                formatId = "best",
+                // 2026-11-07 审计修复：`best` 只选预合并（video+audio 单文件）格式，X 的
+                // 1080p+ 是 video-only HLS 自适应流——v1.9.10「直拉 1080p+」实际只拉到
+                // 最高码率渐进 mp4。改为 video+audio 合并选择
+                formatId = "bestvideo+bestaudio/best",
                 outputDir = outputDir.absolutePath,
                 onProgress = { progress, eta ->
                     DownloadTaskBus.updateTask(task.id) {
@@ -261,10 +264,29 @@ class DownloaderClient(private val context: Context) {
                     // 2026-10-25 产物规约化（对齐 MediaQualityUpgrader.performHlsUpgrade 修复）：
                     // yt-dlp 模板产物在 {uploader}/{标题}.mp4 子目录且名含推文无关标题——
                     // 扫描期解析依赖规约名，历史遗留曾因此产生重复条目。此处重命名/移动回
-                    // 规约名 {uploader}_{tweetId}_1_video_best.mp4（根目录），并清空残留子目录
+                    // 规约名 {uploader}_{tweetId}_{idx}_video_best.mp4（根目录），并清空残留子目录。
+                    // 2026-11-07 审计修复：规约名已存在时递增 idx——旧实现无条件 delete 旧产物，
+                    // 同推文先后两次 yt-dlp 下载（不同视频）会静默覆盖丢上一份
                     val rawFile = File(rawPath)
+                    if (!rawFile.exists()) {
+                        // 2026-11-07 审计修复：产物存在性防御——绝不给不存在的文件写
+                        // sidecar/置 COMPLETED（旧链路会出现「下载成功但文件不存在」横跳）
+                        val msg = "下载完成但产物不存在（${rawPath.take(120)}）"
+                        DownloadTaskBus.updateTask(task.id) {
+                            it.copy(status = DownloadStatus.FAILED, errorMessage = msg)
+                        }
+                        return@fold LaunchResult.Failed(msg)
+                    }
                     val safeUploader = uploader.replace(Regex("[/\\:*?\"<>|]"), "_").ifBlank { "unknown" }
-                    val convention = File(outputDir, "${safeUploader}_${tweetId}_1_video_best.mp4")
+                    val convention = run {
+                        var idx = 1
+                        var candidate = File(outputDir, "${safeUploader}_${tweetId}_${idx}_video_best.mp4")
+                        while (candidate.exists() && candidate.absolutePath != rawFile.absolutePath) {
+                            idx++
+                            candidate = File(outputDir, "${safeUploader}_${tweetId}_${idx}_video_best.mp4")
+                        }
+                        candidate
+                    }
                     val finalFile = if (convention.absolutePath != rawFile.absolutePath) {
                         runCatching {
                             if (convention.exists()) convention.delete()
@@ -280,6 +302,21 @@ class DownloaderClient(private val context: Context) {
                     } else rawFile
                     val path = finalFile.absolutePath
                     writeSidecar(File(path), url, tweetId)
+                    // 2026-11-07 审计修复：混合推文（视频+图片）被路由 yt-dlp 后
+                    // --no-playlist 只下 1 个视频，旧实现图片永久丢失且状态已 DOWNLOADED
+                    // 不再补。视频落定后补拉图片（skipVideos 只下图片；sidecar 落盘由
+                    // 媒体库扫描自动收编）；失败不影响视频结果（下轮重试/升级器兜底）
+                    runCatching {
+                        val settings = ProxyPreferences(context).getProxySettings()
+                        internalDownloader.downloadTweet(
+                            rawUrl = url,
+                            proxy = settings,
+                            allowHlsRouting = false,
+                            skipVideos = true,
+                        )
+                    }.onFailure {
+                        android.util.Log.w("DownloaderClient", "混合推文补拉图片失败（不影响视频）：$tweetId", it)
+                    }
                     DownloadTaskBus.updateTask(task.id) {
                         it.copy(
                             status = DownloadStatus.COMPLETED,
@@ -314,6 +351,9 @@ class DownloaderClient(private val context: Context) {
                 }
             )
             DownloadCancellation.unregister(task.id)
+            // 2026-11-07 审计修复：明文 cookie 文件用完即删（旧实现会话期内常驻磁盘，
+            // 清理仅在 App 启动时做一次）
+            cookieFile?.let { runCatching { File(it).delete() } }
             launchResult
         }.getOrElse { error ->
             LaunchResult.Failed("yt-dlp 回退异常：${error.message ?: "未知错误"}")

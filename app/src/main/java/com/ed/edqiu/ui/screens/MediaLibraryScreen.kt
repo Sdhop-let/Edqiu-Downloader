@@ -173,7 +173,8 @@ fun MediaLibraryScreen(
     infoRevealed: Boolean = false
 ) {
     val context = LocalContext.current
-    val allItems by historyViewModel.historyList.collectAsState()
+    // 2026-11-07 审计修复：collectAsStateWithLifecycle——后台页面不再持续重组（与其余页面口径统一）
+    val allItems by historyViewModel.historyList.collectAsStateWithLifecycle()
     // 2026-11-07 卡顿修复：统计值包 remember——此前每次重组（含转场动画逐帧重组）都全量 count/sumOf
     val (videoCount, imageCount, totalBytes) = remember(allItems) {
         Triple(
@@ -298,17 +299,24 @@ fun MediaLibraryScreen(
         }
     }
 
-    val filteredByType = when (filter) {
-        LibraryFilter.ALL -> allItems
-        LibraryFilter.VIDEO -> allItems.filter { it.mediaType == MediaType.VIDEO }
-        LibraryFilter.IMAGE -> allItems.filter { it.mediaType == MediaType.IMAGE }
+    // 2026-11-07 审计修复：筛选/搜索链包 remember——旧实现每次重组都产出新 List 实例，
+    // 下方 displayItems/authorSeq/authorTotal/groups 的 remember(items…) key 每帧失效
+    // 全量重算（filter+映射+sort O(n log n)+分组）；补拉/升级进度流高频发射时形成重组风暴
+    val filteredByType = remember(allItems, filter) {
+        when (filter) {
+            LibraryFilter.ALL -> allItems
+            LibraryFilter.VIDEO -> allItems.filter { it.mediaType == MediaType.VIDEO }
+            LibraryFilter.IMAGE -> allItems.filter { it.mediaType == MediaType.IMAGE }
+        }
     }
-    val items = if (searchQuery.isBlank()) filteredByType else {
-        val q = searchQuery.trim()
-        filteredByType.filter { entity ->
-            entity.title.contains(q, ignoreCase = true) ||
-                entity.uploader.contains(q, ignoreCase = true) ||
-                entity.filePath.substringAfterLast('/').contains(q, ignoreCase = true)
+    val items = remember(filteredByType, searchQuery) {
+        if (searchQuery.isBlank()) filteredByType else {
+            val q = searchQuery.trim()
+            filteredByType.filter { entity ->
+                entity.title.contains(q, ignoreCase = true) ||
+                    entity.uploader.contains(q, ignoreCase = true) ||
+                    entity.filePath.substringAfterLast('/').contains(q, ignoreCase = true)
+            }
         }
     }
 

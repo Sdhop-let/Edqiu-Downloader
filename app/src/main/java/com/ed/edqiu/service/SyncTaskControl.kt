@@ -34,8 +34,11 @@ object SyncTaskControl {
     /** 用户是否已请求停止当前同步轮。 */
     val abortRequested: Boolean get() = _abortRequested.value
 
-    /** 请求停止当前同步轮（运行中的轮在下一个进度回调处中断；无轮在跑时置位无副作用）。 */
+    /** 请求停止当前同步轮（运行中的轮在下一个进度回调处中断）。 */
     fun requestAbortRound() {
+        // 2026-11-07 审计修复：无轮在跑时忽略置位——旧实现空闲置位后 flag 会一直挂着，
+        // 污染下一轮（下一轮 0 传输秒停 + 写一条假 stopped 历史）
+        if (!runningFlag.get()) return
         _abortRequested.value = true
     }
 
@@ -53,8 +56,13 @@ object SyncTaskControl {
 
     /** 是否有同步轮在执行（自动备份 Worker 轮询据此跳过）。 */
 
-    /** 尝试领取运行令牌：true = 领取成功（本轮由该调用方执行）；false = 已有同步轮在跑。 */
-    fun tryBeginRun(): Boolean = runningFlag.compareAndSet(false, true)
+    /** 尝试领取运行令牌：true = 领取成功（本轮由该调用方执行）；false = 已有同步轮在跑。
+     *  领取成功时顺带清残留停止标记（双保险：endRun 与下一轮之间的脏置位不带进本轮）。 */
+    fun tryBeginRun(): Boolean {
+        if (!runningFlag.compareAndSet(false, true)) return false
+        _abortRequested.value = false
+        return true
+    }
 
     /** 结束同步轮：释放令牌并清空暂停/优先/完成/停止集合（控制仅对当轮生效，防用户遗忘残留）。 */
     fun endRun() {
