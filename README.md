@@ -4,12 +4,12 @@
 
 Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数据只存在你自己的手机和网盘里。
 
-[**下载 v1.9.16**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
+[**下载 v1.9.17**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
 
 [![Release CI](https://img.shields.io/badge/发版-推送_tag_自动构建-2EA043)](.github/workflows/release.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-F0B429)](LICENSE)
 
-> v1.9.16（versionCode 65，2026-11-07）· Android 7.0+（API 24）· 仅 arm64-v8a
+> v1.9.17（versionCode 66，2026-11-07）· Android 13+（API 33）· 仅 arm64-v8a
 > 现用正式签名（v1.9.11 起更换）——v1.9.10 及更早版本须卸载重装，先网盘全量备份，见[升级路径](#升级路径)
 > 曾用名：XInvox / EsQp / TwitterDownloader（已合并为 Edqiu）
 
@@ -46,7 +46,7 @@ Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数
 | | |
 |---|---|
 | **两种场合一键切换** | **标准模式**（默认）：媒体正常显示；**隐私模式**：视频/图片全量模糊防偷看。冷启动先选模式再进主界面（可勾选记住），也可在 设置 · 外观 随时切换 |
-| **按住临时查看** | 隐私模式下手指按住即临时清晰，松开（或手势被滚动接管）立即恢复模糊——防手滑误展示；Android 12+ 真高斯模糊，低版本蒙层兜底 |
+| **按住临时查看** | 隐私模式下手指按住即临时清晰，松开（或手势被滚动接管）立即恢复模糊——防手滑误展示；真高斯模糊为全系标配（v1.9.17 起仅支持 Android 13+） |
 | **全媒体面覆盖** | 收件箱卡片、详情大图、媒体库封面、下载页、作者页、备份页、播放器抽屉与播放画面统一模糊；隐私模式播放器不起播，按住画面才播放（松手暂停），双重防护 |
 
 ### 订阅
@@ -90,8 +90,9 @@ Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数
 
 | 当前版本 | 升级方式 |
 |---|---|
-| **v1.9.11 及以上** | 直接覆盖安装（应用内「检查更新」或下载 APK），数据全保留 |
+| **v1.9.11 及以上**（Android 13+ 设备） | 直接覆盖安装（应用内「检查更新」或下载 APK），数据全保留；建议升级前在 设置 · 备份中心 做一次网盘备份 |
 | **v1.9.10 及更早** | 签名已更换（v1.9.11 安全整顿），**无法直接覆盖**——先在 设置 · 备份中心 做网盘全量备份 → 卸载旧版 → 安装新版 → 从网盘恢复 |
+| **Android 12 及以下设备** | v1.9.17 起不再支持（仅 Android 13+），请停留在 v1.9.16 |
 
 > v1.7.0 之前的版本曾内置「预下载（攒批自动下载）」，v1.9.3 起移除：保存的链接一律在收件箱等待你点按下载，行为更可预期。
 
@@ -166,7 +167,6 @@ Cookie、网盘凭证等登录态经 AndroidKeyStore + AES/GCM 加密存储，�
 
 - **16KB 内存页机型**（部分 Android 15+ 新机）：上游 ffmpeg 依赖未适配对齐，yt-dlp 合流 / HLS 升级暂不可用；FXTwitter 直连链路不受影响（等待上游修复）；
 - **X 订阅检测**：游客通道对个别账号可能返回降级数据（App 会标注并建议配置 Cookie）；国内网络需在应用内配置代理；
-- **Android 12 以下设备**：隐私模式为蒙层兜底（表面色遮罩 +「已隐藏」标识），非真高斯模糊；
 - 仅通过 GitHub Releases 侧载分发（Google Play 的审核政策与自更新通道、全文件权限冲突），不上架 Play；
 - 仅支持 arm64-v8a 设备。
 
@@ -175,7 +175,7 @@ Cookie、网盘凭证等登录态经 AndroidKeyStore + AES/GCM 加密存储，�
 | 文档 | 说明 |
 |---|---|
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | **全部版本历史**（v1.3.0 起） |
-| [docs/RELEASE_NOTES-1.9.16.md](docs/RELEASE_NOTES-1.9.16.md) | 当前版本完整说明 |
+| [docs/RELEASE_NOTES-1.9.17.md](docs/RELEASE_NOTES-1.9.17.md) | 当前版本完整说明 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构：技术栈、模块划分、主要链路 |
 | [docs/release-automation.md](docs/release-automation.md) | 发版流程 |
 | [docs/webdav-cloud-backup-guide/](docs/webdav-cloud-backup-guide/webdav-cloud-backup-guide.html) | WebDAV 备份图文指南 |
