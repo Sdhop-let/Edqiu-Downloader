@@ -92,6 +92,26 @@ object DownloadEngineHealth {
         tweetFailures.remove(tweetId)
     }
 
+    /**
+     * 该推文的两个必跑引擎（FXTwitter + yt-dlp）是否全部被挡（24h 亲和命中或全局熔断冷却中）。
+     *
+     * 2026-11-11 断网死锁修复：推文亲和的设计前提是「至少有一个未失败引擎可直达路由」，
+     * 断网导致三层全失败时该前提崩塌——全部引擎被拉黑 24h，此后自动/手动重试全部命中
+     * 「近期失败过已跳过」，没有任何引擎真正被尝试，永远无法发现网络已恢复。
+     * 全拉黑时亲和不再提供任何路由价值，调用方应解除拉黑真正重探。
+     */
+    fun allEnginesBlockedForTweet(tweetId: String): Boolean =
+        isEngineUnavailableForTweet(tweetId, ENGINE_FXTWITTER) &&
+            isEngineUnavailableForTweet(tweetId, ENGINE_YTDLP)
+
+    private fun isEngineUnavailableForTweet(tweetId: String, engine: String): Boolean =
+        !isEngineAvailable(engine) || failedBefore(tweetId, engine)
+
+    /** 解除单推文全部引擎亲和记录（不清全局熔断——熔断 10 分钟自愈，24h 亲和才是死锁主因）。 */
+    fun clearTweetFailures(tweetId: String) {
+        tweetFailures.remove(tweetId)
+    }
+
     // ---------- P0-2 自救热修（2026-09-15 批次2） ----------
 
     private val selfHealAttempted = java.util.concurrent.atomic.AtomicBoolean(false)

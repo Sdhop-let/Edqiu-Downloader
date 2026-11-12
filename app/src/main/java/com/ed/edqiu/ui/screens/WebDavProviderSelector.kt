@@ -47,7 +47,9 @@ data class WebDavProvider(
  * 2026-10 统一 WebDAV 通道：移除百度网盘 / 阿里云盘预设——两者无官方 WebDAV，
  * 模板里的 `<内网IP>` 占位属"配置不完整"误导源，用户照填必然同步失败。
  * 此类网盘可经 CloudDrive2 / alist 挂载出 WebDAV 后选「自定义」接入（描述已注明）。
- * 新增城通网盘预设（官方支持 WebDAV 的国产老牌网盘）。
+ *
+ * 2026-11 勘误：移除移动云盘预设（webdav.139.com 实测无效——DNS 解析到内网、502，
+ * 移动云盘无官方 WebDAV，仅私有 API）；城通网盘 WebDAV 已收紧为仅付费会员可用。
  */
 val webDavProviders: List<WebDavProvider> = listOf(
     WebDavProvider(
@@ -55,16 +57,16 @@ val webDavProviders: List<WebDavProvider> = listOf(
         name = "123网盘",
         serverUrlTemplate = "https://webdav-{账号ID}.pd1.123pan.cn/webdav",
         remotePathTemplate = "/",
-        description = "123 网盘官方 WebDAV：网页端「第三方挂载 → WebDAV 授权管理 → 添加应用」生成应用密码（只显示一次，非登录密码，勾选读写权限）。把地址中的 {账号ID} 替换为你的账号 ID，或直接粘贴控制台给出的完整地址。",
+        description = "123 网盘官方 WebDAV（需 VIP）：网页端「第三方挂载 → WebDAV 授权管理 → 添加应用」生成应用密码（只显示一次，非登录密码，勾选读写权限）。⚠️ 服务器地址以控制台给出的完整地址为准，直接粘贴即可（含你的账号专属域名，勿照模板手改）。",
         needsMembership = true,
     ),
     WebDavProvider(
         id = "ctfile",
         name = "城通网盘",
         serverUrlTemplate = "https://dav.ctfile.com/ws<用户ID>",
-        remotePathTemplate = "/",
-        description = "城通网盘（ctfile.com），免费注册即享 5TB 共享空间，官方支持 WebDAV。登录网页版切回旧版界面 → 左侧「WebDAV」查看你的专属地址（形如 https://dav.ctfile.com/ws数字ID，直接覆盖本模板即可）；账号为注册邮箱，密码为账号密码。免费文件连续 6 个月无下载可能被清理，媒体库定期访问即续期。",
-        needsMembership = false,
+        remotePathTemplate = "",
+        description = "城通网盘（ctfile.com）。⚠️ 2026 年起 WebDAV 仅付费会员可用——免费账号即使凭证正确也返回 401，本预设仅供会员。登录网页版切回旧版界面 → 左侧「WebDAV」查看专属地址（形如 https://dav.ctfile.com/ws数字ID）；账号为注册邮箱，密码为账号密码。远程目录必须留空：地址本身即工作空间根，任何子目录（含中文）都返回 401。服务条款禁止将 WebDAV 用于同步/备份，建议手动同步、慎开自动备份。",
+        needsMembership = true,
     ),
     WebDavProvider(
         id = "clouddrive2",
@@ -75,35 +77,27 @@ val webDavProviders: List<WebDavProvider> = listOf(
         needsMembership = false,
     ),
     WebDavProvider(
-        id = "migu",
-        name = "移动云盘",
-        serverUrlTemplate = "https://webdav.139.com",
-        remotePathTemplate = "/",
-        description = "移动云盘官方 WebDAV，账号为手机号，密码为 WebDAV 密码（在移动云盘设置中开启 WebDAV 后生成）。",
-        needsMembership = false,
-    ),
-    WebDavProvider(
         id = "cstcloud",
         name = "数据胶囊",
-        serverUrlTemplate = "https://data.cstcloud.cn/webdav",
-        remotePathTemplate = "/XInvox",
-        description = "中科院中国科技云数据胶囊，实名认证后免费 20GB 永久空间，不限流量不限速，原生支持 WebDAV。账号为中国科技云通行证，密码在数据胶囊网页端「设置」中生成。",
+        serverUrlTemplate = "https://data.cstcloud.cn/dav",
+        remotePathTemplate = "",
+        description = "中科院中国科技云数据胶囊，实名认证后免费 20GB 永久空间，原生支持 WebDAV。账号为中国科技云通行证，密码在数据胶囊网页端「客户端访问」中生成。⚠️ 其 WebDAV 按客户端 User-Agent 校验应用类型，且上传仅放行 .zip/.prop（Zotero 文献同步专用），本应用的视频/图片无法经此上传；如需传视频请改用其 S3 接口或其它网盘。",
         needsMembership = false,
     ),
     WebDavProvider(
         id = "infinicloud",
         name = "InfiniCloud",
-        serverUrlTemplate = "https://<用户名>.teracloud.jp/dav/",
-        remotePathTemplate = "/XInvox",
-        description = "日本老牌免费网盘（原 TeraCloud），注册 20GB + 邀请码 5GB = 25GB 永久免费，不限流量。服务器地址在 My Page → Apps Connection 中查看，密码为 Apps Password（非登录密码）。",
+        serverUrlTemplate = "https://webdav.teracloud.jp/dav/",
+        remotePathTemplate = "/Edqiu",
+        description = "日本老牌免费网盘（原 TeraCloud），注册 20GB + 邀请码 5GB = 25GB 永久免费，不限流量，条款允许同步。⚠️ 需先在 My Page → Apps Connection 开启「Turn on Apps Connection」，地址以 My Page 显示的「WebDAV Connection URL」为准（形如 https://webdav.teracloud.jp/dav/ 或 https://xxx.infini-cloud.net/dav/），密码为系统随机生成的 Apps Password（非登录密码，只显示一次）。",
         needsMembership = false,
     ),
     WebDavProvider(
         id = "jianguoyun",
         name = "坚果云",
         serverUrlTemplate = "https://dav.jianguoyun.com/dav/",
-        remotePathTemplate = "/XInvox",
-        description = "坚果云官方 WebDAV，账号为注册邮箱，密码为应用密码（在「账户信息」→「安全选项」→「第三方应用管理」中添加应用生成）。免费版 3GB 空间，月上传 1GB / 下载 3GB，适合文档同步。",
+        remotePathTemplate = "/Edqiu",
+        description = "坚果云官方 WebDAV，账号为注册邮箱，密码为应用密码（「账户信息」→「安全选项」→「第三方应用管理」添加应用生成，非登录密码）。免费版按流量计：月上传 1GB / 下载 3GB（流量受限，仅够小文档，视频慎用）。⚠️ WebDAV 不支持在根目录建文件，需先在网页端创建「Edqiu」文件夹；现在开启 WebDAV 需安装坚果云客户端。",
         needsMembership = false,
     ),
     WebDavProvider(

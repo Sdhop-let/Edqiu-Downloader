@@ -5,6 +5,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -33,22 +34,27 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.ui.privacy.LocalPrivacyBlur
-import com.ed.edqiu.ui.privacy.PrivacyGateBox
+import com.ed.edqiu.ui.privacy.PrivacyBlurBox
+import com.ed.edqiu.ui.privacy.PrivacyText
 import com.ed.edqiu.data.model.SavedLink
 import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
@@ -72,7 +78,9 @@ fun LinkCard(
     // 「下载中 xx%」pill + 细进度条，下载完成即由 DB 的 DOWNLOADED 状态接管。
     downloadProgress: Int? = null
 ) {
-    val isDownloading = downloadProgress != null
+    // 2026-11-11 真机修复：DB 状态优先——DOWNLOADED 条目即使 Bus 残留聚合值也不显示
+    // 「下载中」pill（注释声称的「由 DB 接管」此前并未实现，isDownloading 只看进度非空）
+    val isDownloading = downloadProgress != null && link.status != LinkStatus.DOWNLOADED
     val accent = if (isDownloading) {
         MaterialTheme.colorScheme.primary
     } else {
@@ -85,16 +93,53 @@ fun LinkCard(
     val metadata = link.authorId?.takeIf { it.isNotBlank() }
         ?: "x.com/status/${link.tweetId.takeLast(8)}"
 
+    // 隐私模式（2026-11-12）：文字 + 缩略图统一由整卡 reveal 控制，按住期间临时显示。
+    val privacyActive = LocalPrivacyBlur.current
+    var reveal by remember { mutableStateOf(false) }
+    val hideText = privacyActive && !reveal
+
     // L1 玻璃卡片（双层玻璃：卡片在玻璃背景上的玻璃）—— 圆角 20dp 对齐原型 .lcard
     // 列表滚动项关闭 shadow：Modifier.shadow 创建独立 RenderNode，滚动合成压力大
     // 按压反馈（2026-09-14）：iOS 风按压缩放（0.975）替代涟漪 —— 按下即跟手，松手弹性回位
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
+    // 隐私模式下手势不走 interactionSource，用 reveal 补按压缩放反馈
+    val effectivePressed = if (privacyActive) reveal else pressed
     val cardScale by animateFloatAsState(
-        targetValue = if (pressed) 0.975f else 1f,
+        targetValue = if (effectivePressed) 0.975f else 1f,
         animationSpec = spring(dampingRatio = 0.72f, stiffness = 1100f),
         label = "linkCardPress"
     )
+    // 隐私模式手势：按住显示（reveal）+ 点击；隐私下长按不弹菜单（避免菜单泄露链接）。
+    // 非隐私模式：点击 + 长按弹菜单，保持原行为。
+    val gestureModifier = if (privacyActive) {
+        Modifier.pointerInput(Unit) {
+            detectTapGestures(
+                onPress = {
+                    // 长按 3 秒才显示（避免滑动/轻触瞬时露字）；满 3 秒后保持显示直到松开
+                    try {
+                        delay(3000L)
+                        reveal = true
+                        try {
+                            awaitRelease()
+                        } finally {
+                            reveal = false
+                        }
+                    } finally {
+                        reveal = false
+                    }
+                },
+                onTap = { if (selectionMode) onSelectionToggle() else onClick() },
+            )
+        }
+    } else {
+        Modifier.combinedClickable(
+            interactionSource = interactionSource,
+            indication = null,
+            onClick = if (selectionMode) onSelectionToggle else onClick,
+            onLongClick = onLongClick
+        )
+    }
     GlassSurface(
         tier = GlassTier.L1,
         shape = RoundedCornerShape(20.dp),
@@ -104,12 +149,7 @@ fun LinkCard(
                 scaleX = cardScale
                 scaleY = cardScale
             }
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = if (selectionMode) onSelectionToggle else onClick,
-                onLongClick = onLongClick
-            )
+            .then(gestureModifier)
     ) {
         // 选中态：状态色描边 + 淡底
         Box(
@@ -133,7 +173,7 @@ fun LinkCard(
                 )
             }
             // 批量模式下也保留视频/图片预览缩略图（勾选框与缩略图并排）
-            LinkPreviewImage(link = link, accent = accent)
+            LinkPreviewImage(link = link, accent = accent, privacyEnabled = hideText)
 
             Column(
                 modifier = Modifier.weight(1f),
@@ -143,8 +183,9 @@ fun LinkCard(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
+                    PrivacyText(
                         text = author,
+                        enabled = hideText,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -154,7 +195,8 @@ fun LinkCard(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     // 下载中：pill 换成「下载中 xx%」（主题蓝），下载完成由 DOWNLOADED 状态接管
-                    if (isDownloading && downloadProgress != null) {
+                    if (isDownloading) {
+                        // isDownloading 已蕴含 downloadProgress != null，见其定义
                         DownloadingPill(progress = downloadProgress)
                     } else {
                         StatusPill(status = link.status)
@@ -206,8 +248,9 @@ fun LinkCard(
                     }
                 }
 
-                Text(
+                PrivacyText(
                     text = preview,
+                    enabled = hideText,
                     fontSize = 12.5.sp,
                     lineHeight = 17.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -236,7 +279,8 @@ fun LinkCard(
                 }
 
                 // 实时下载进度条（仅下载中显示）：4dp 细条 + 主题蓝，随百分比平滑推进
-                if (isDownloading && downloadProgress != null) {
+                if (isDownloading) {
+                    // isDownloading 已蕴含 downloadProgress != null，见其定义
                     val animatedProgress by animateFloatAsState(
                         targetValue = downloadProgress / 100f,
                         animationSpec = tween(durationMillis = 280),
@@ -263,8 +307,9 @@ fun LinkCard(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
+                    PrivacyText(
                         text = metadata,
+                        enabled = hideText,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                         maxLines = 1,
@@ -283,7 +328,7 @@ fun LinkCard(
 }
 
 @Composable
-private fun LinkPreviewImage(link: SavedLink, accent: Color) {
+private fun LinkPreviewImage(link: SavedLink, accent: Color, privacyEnabled: Boolean) {
     Box(
         modifier = Modifier
             .size(80.dp)
@@ -302,8 +347,8 @@ private fun LinkPreviewImage(link: SavedLink, accent: Color) {
         contentAlignment = Alignment.Center
     ) {
         if (!link.thumbnailUrl.isNullOrBlank()) {
-            // 隐私模式（2026-11-07）：预览图模糊+按住查看（头像/状态点/播放钮保持清晰）
-            PrivacyGateBox(enabled = LocalPrivacyBlur.current, modifier = Modifier.fillMaxSize()) {
+            // 隐私模式（2026-11-12）：预览图模糊由整卡 reveal 统一控制（头像/状态点/播放钮保持清晰）
+            PrivacyBlurBox(enabled = privacyEnabled, modifier = Modifier.fillMaxSize()) {
                 AsyncImage(
                     model = link.thumbnailUrl,
                     contentDescription = null,

@@ -58,6 +58,11 @@ internal class SecretBox(
         prefs.edit().putString(key, stored).apply()
     }
 
+    /** 删除指定 key 的加密凭证（「单独删除网盘配置」时移除密码密文）。 */
+    fun removeSecret(key: String) {
+        prefs.edit().remove(key).apply()
+    }
+
     // ---------------- 加密实现（AndroidKeyStore + AES/GCM） ----------------
 
     private fun getOrCreateKey(): SecretKey {

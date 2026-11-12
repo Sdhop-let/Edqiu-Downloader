@@ -14,6 +14,10 @@
 > （`cfg_{pid}_*` 键，切预设互不覆盖）；**保存语义 = 测试连接成功才落盘，失败不保存**
 > （600ms 去抖自动落盘移除）；「同步情况详情」改为轻量对账页（本地 × PROPFIND 远端逐文件
 > 比对，无引擎依赖），仅测试通过后显示。
+>
+> 2026-11 勘误：城通网盘 WebDAV 收紧为仅付费会员（免费档凭证正确仍 401）；移除移动云盘预设
+> （`webdav.139.com` 无效，移动云盘无官方 WebDAV 仅私有 API）；数据胶囊地址 `/webdav`→`/dav`
+> 并标注仅放行 .zip/.prop；InfiniCloud 地址改 `webdav.teracloud.jp/dav/`（以 My Page 为准）。
 
 ## 1. 选型理由（参考对象与取舍）
 
@@ -60,19 +64,20 @@
 | 预设 | 服务器地址 | 账号 | 密码 | 备注 |
 |---|---|---|---|---|
 | 123网盘 ✻ | `https://webdav-{账号ID}.pd1.123pan.cn/webdav`（模板占位，或粘贴控制台完整地址） | 手机号/邮箱 | 网页端「第三方挂载 → WebDAV 授权管理 → 添加应用」生成的**应用密码**（只显示一次，勾选读写权限） | 第三方挂载需 VIP |
-| 城通网盘 | `https://dav.ctfile.com/ws<用户ID>`（**个人专属地址**，旧版界面左侧「WebDAV」查看，形如 dav.ctfile.com/ws3684788） | 注册邮箱 | 账号密码 | 免费注册即享 5TB 共享空间；免费文件 6 个月无下载可能清理 |
+| 城通网盘 ✻ | `https://dav.ctfile.com/ws<用户ID>`（**个人专属地址**，旧版界面左侧「WebDAV」查看，形如 dav.ctfile.com/ws3684788） | 注册邮箱 | 账号密码 | 2026 年起 WebDAV 仅付费会员可用；免费文件 6 个月无下载可能清理 |
 | CloudDrive2 | `http://<内网IP>:19798/dav` | CD2 内配置 | CD2 内配置 | 可把百度/阿里等挂载成本地 WebDAV |
-| 移动云盘 | `https://webdav.139.com` | 手机号 | 设置中开启 WebDAV 后生成 | |
-| 数据胶囊 | `https://data.cstcloud.cn/webdav` | 中科技云通行证 | 网页端「设置」生成 | 实名免费 20GB，不限速 |
-| InfiniCloud | `https://<用户名>.teracloud.jp/dav/` | 用户名 | Apps Password | 免费 25GB |
-| 坚果云 | `https://dav.jianguoyun.com/dav/` | 注册邮箱 | 应用密码（第三方应用管理生成） | 免费 3GB |
+| 数据胶囊 | `https://data.cstcloud.cn/dav` | 中科技云通行证 | 网页端「设置」生成 | 实名免费 20GB；WebDAV 仅放行 .zip/.prop（文献同步），视频请走 S3 |
+| InfiniCloud | `https://webdav.teracloud.jp/dav/`（以 My Page → Apps Connection 显示为准） | 用户名 | Apps Password（系统随机生成） | 免费 25GB，不限流量 |
+| 坚果云 | `https://dav.jianguoyun.com/dav/` | 注册邮箱 | 应用密码（第三方应用管理生成） | 月流量 1GB 上传/3GB 下载；根目录不能建文件 |
 | 自定义 | 任意 | 任意 | 任意 | NAS / alist / Nextcloud / 群晖等 |
 
-✻ = WebDAV 功能需要该网盘付费会员（仅提示，不阻断）。当前仅 123 网盘标注；城通网盘免费档可用。
-真机实测（2026-10-15）：城通免费账号 dav.ctfile.com/ws3684788 鉴权通过并完成 349 文件真实同步。
+✻ = WebDAV 功能需要该网盘付费会员（仅提示，不阻断）。当前 123 网盘与城通网盘标注。
+真机实测（2026-10-15）：城通免费账号曾鉴权通过并同步 349 文件；2026-11-06 起城通收紧免费 WebDAV，
+同一账号凭证正确仍返回 401（仅付费会员可用），已升级为 ✻ 提示。
 
-**已移除的预设**：百度网盘、阿里云盘（无官方 WebDAV，原模板 `http://<内网IP>:…` 属配置不完整误导源）。
-此类网盘请用 CloudDrive2 / alist 挂载后走「自定义」。
+**已移除的预设**：百度网盘、阿里云盘（无官方 WebDAV，原模板 `http://<内网IP>:…` 属配置不完整误导源）、
+移动云盘（`webdav.139.com` 实测无效——DNS 解析到内网、502，移动云盘无官方 WebDAV，仅私有 API）。
+此类网盘请用 CloudDrive2 / alist 挂载后走「自定义」，或改用有官方 WebDAV 的盘（InfiniCloud / Koofr）。
 
 ## 4. 连接状态与同步进度展示
 
@@ -148,7 +153,7 @@
 | key | 说明 |
 |---|---|
 | `sync_enabled` | WebDAV 同步总开关 |
-| `webdav_provider_id` | 当前选中预设 id（123pan/ctfile/clouddrive2/migu/cstcloud/infinicloud/jianguoyun/custom） |
+| `webdav_provider_id` | 当前选中预设 id（123pan/ctfile/clouddrive2/cstcloud/infinicloud/jianguoyun/custom） |
 | `cfg_{pid}_server_url` / `cfg_{pid}_username` / `cfg_{pid}_password`（加密） | **每网盘独立**连接三元组（2026-10 第三批，替代旧全局键） |
 | `cfg_{pid}_remote_path` | 每网盘独立远程根目录 |
 | `cfg_{pid}_verified` / `cfg_{pid}_verified_at` | 每网盘独立鉴权结论 + 上次验证通过时间（驱动详情入口与状态面板） |
@@ -192,6 +197,12 @@ WebDAV 方案不引入任何新权限；相比厂商直连**减少了** OAuth �
    建议 HTTPS + 自签开关组合。引擎对缺 scheme 的地址默认按 HTTPS 处理。
 7. **自签证书开关的安全代价**：开启 `allow_insecure_tls` 后不校验证书链与主机名，
    中间人可截获凭证——仅限内网可信环境。
+8. **城通 remotePath 强制空的历史边界（2026-11）**：城通地址即工作空间根，任何子路径 401，
+   故对其强制忽略 remotePath。若历史配置残留非空子目录（如「edqiu备份渠道」），其下已同步
+   文件不在根目录，切空后会重复上传到根——需手动迁移历史子目录。
+9. **平坦化命名碰撞（低概率）**：子目录文件平坦化为「目录前缀_文件名」，目录名与文件名
+   均含下划线时可能碰撞（`a/b_c.mp4` vs `a_b/c.mp4` 均 → `a_b_c.mp4`）。未改分隔符以兼容
+   历史文件，属已知低概率限制。
 
 ## 11. 改动文件索引（2026-10）
 
@@ -216,7 +227,7 @@ WebDAV 方案不引入任何新权限；相比厂商直连**减少了** OAuth �
 - `CloudSyncPreferences`：+`allow_insecure_tls`；`SettingsScreen`：+自签开关行、
   分阶段进度文案、双向结果弹窗文案
 - `AndroidManifest`：+`usesCleartextTraffic="true"`（局域网 http 放行）
-- `WebDavProviderSelector`：城通网盘预设改为「免费 5TB 可用 WebDAV」
+- `WebDavProviderSelector`：城通网盘预设改为「免费 5TB 可用 WebDAV」（2026-11 勘误：城通 WebDAV 已收紧为仅付费会员，免费档凭证正确仍 401，见开头勘误时间线）
 
 **第三批（本页即全部 + 每网盘独立配置）**：
 - 删除：`ui/backup/CloudBackup{Screen,ViewModel}.kt`、`backup/{engine,data,model/BackupTarget.kt,

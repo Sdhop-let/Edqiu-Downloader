@@ -93,7 +93,7 @@ import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.launch
 
-private enum class SubMenu { LIBRARY, AUTOMATION, NETWORK, LOOK, STORAGE, GENERAL }
+private enum class SubMenu { LIBRARY, NETWORK, SETTINGS }
 
 /**
  * 我的（2026-10-20 定稿：新头部 + 统计卡保留，入口列表恢复 v1.9.2 旧版六领域卡）。
@@ -101,8 +101,8 @@ private enum class SubMenu { LIBRARY, AUTOMATION, NETWORK, LOOK, STORAGE, GENERA
  * 版式（自上而下）：
  * - 220dp 平台色渐变头（#5E5CE6 → #007AFF → #0A2540）：68dp「秋」头像 + 小秋 + 版本行；
  * - L1 统计卡：三列等宽 + 1px 分隔 + 等宽数字（已下载 / 占用空间 / 收件箱，全部真实计数）；
- * - 六张领域卡（2026-10-15 IA，点标题展开子项）：作品库 / 订阅与自动化 / 网络与同步 /
- *   外观与播放 / 存储与备份 / 通用，+ 关于本机静态行；
+ * - 三张领域卡（2026-11-12 IA 精简，点标题展开子项）：作品库 / 网络与同步 / 设置；
+ *   原「订阅与自动化/外观与播放/存储与备份/通用/关于本机」五块合并进上述三卡。
  * - 本屏无 L3（二级页收敛范式）。
  *
  * 备份中心（2026-10 新媒体备份浮层）不走本页入口，经「网络与同步 → 网盘同步 →
@@ -377,8 +377,7 @@ fun MineScreen(mineNav: MineNav) {
         ) {
             StatsCard(stats)
 
-            // 心智模型：作品库（看与管）→ 订阅与自动化（让作品自己来）→ 网络与同步（连云端）
-            // → 外观与播放（观感）→ 存储与备份（数据放哪）→ 通用（版本维护）
+            // 心智模型：作品库（看与管）→ 网络与同步（连云端）→ 设置（偏好与维护）
             ExpandableMenuSection(
                 icon = Icons.Default.VideoLibrary,
                 title = "作品库",
@@ -392,17 +391,8 @@ fun MineScreen(mineNav: MineNav) {
                 SubMenuItemRow(Icons.Default.Delete, "回收站", "已删除项目保留 30 天，可随时恢复", mineNav.openTrash)
                 SubMenuDivider()
                 SubMenuItemRow(Icons.Default.Person, "作者中心", "按作者归档浏览与订阅", mineNav.openAuthors)
-            }
-            ExpandableMenuSection(
-                icon = Icons.Default.Bolt,
-                title = "订阅与自动化",
-                subtitle = "让新作品自己找上门",
-                isExpanded = expandedSection == SubMenu.AUTOMATION,
-                onToggle = { expandedSection = toggle(expandedSection, SubMenu.AUTOMATION) }
-            ) {
-                SubMenuItemRow(Icons.Default.NotificationsActive, "作品订阅", "订阅作者主页，新作品自动入库，点按下载") { mineNav.openSubscription() }
                 SubMenuDivider()
-                SubMenuItemRow(Icons.Default.ContentPaste, "下载行为", "失败重试策略与后台状态核对") { mineNav.openEdqiuSection(XSection.CAPTURE) }
+                SubMenuItemRow(Icons.Default.NotificationsActive, "作品订阅", "订阅作者主页，新作品自动入库，点按下载") { mineNav.openSubscription() }
             }
             ExpandableMenuSection(
                 icon = Icons.Default.Public,
@@ -416,42 +406,22 @@ fun MineScreen(mineNav: MineNav) {
                 SubMenuItemRow(Icons.Default.Sync, "网盘同步", "WebDAV 直连私有云盘，双向同步备份") { mineNav.openEdqiuSection(XSection.WEBDAV) }
             }
             ExpandableMenuSection(
-                icon = Icons.Default.AutoAwesome,
-                title = "外观与播放",
-                subtitle = "界面观感与播放体验",
-                isExpanded = expandedSection == SubMenu.LOOK,
-                onToggle = { expandedSection = toggle(expandedSection, SubMenu.LOOK) }
+                icon = Icons.Default.Settings,
+                title = "设置",
+                subtitle = "外观、存储、更新与关于",
+                isExpanded = expandedSection == SubMenu.SETTINGS,
+                onToggle = { expandedSection = toggle(expandedSection, SubMenu.SETTINGS) }
             ) {
                 SubMenuItemRow(Icons.Default.AutoAwesome, "外观质感", "主题颜色 / 玻璃与底栏 / 显示 / 触感") { mineNav.openEdqiuSection(XSection.APPEARANCE) }
                 SubMenuDivider()
                 SubMenuItemRow(Icons.Default.SmartDisplay, "播放体验", "双播放器 / 滑动手势 / 退场定位") { mineNav.openEdqiuSection(XSection.PLAYBACK) }
-            }
-            ExpandableMenuSection(
-                icon = Icons.Default.Save,
-                title = "存储与备份",
-                subtitle = "数据放在哪、怎么保",
-                isExpanded = expandedSection == SubMenu.STORAGE,
-                onToggle = { expandedSection = toggle(expandedSection, SubMenu.STORAGE) }
-            ) {
-                SubMenuItemRow(Icons.Default.Save, "存储路径", "下载存储 · 监控目录 · 数据备份") { mineNav.openEdqiuSection(XSection.STORAGE) }
                 SubMenuDivider()
-                SubMenuItemRow(Icons.Default.Backup, "备份与恢复", "收件箱与回收站数据导入导出") { mineNav.openEdqiuSection(XSection.BACKUP) }
-            }
-            ExpandableMenuSection(
-                icon = Icons.Default.Settings,
-                title = "通用",
-                subtitle = "版本更新与维护工具",
-                isExpanded = expandedSection == SubMenu.GENERAL,
-                onToggle = { expandedSection = toggle(expandedSection, SubMenu.GENERAL) }
-            ) {
+                SubMenuItemRow(Icons.Default.Save, "存储与备份", "下载存储 · 监控目录 · 数据备份 · 导入导出") { mineNav.openEdqiuSection(XSection.STORAGE) }
+                SubMenuDivider()
                 SubMenuItemRow(Icons.Default.Settings, "更新与工具", "版本更新、日志与调试工具") { mineNav.openEdqiuSection(XSection.UPDATE) }
+                SubMenuDivider()
+                SubMenuItemRow(Icons.Default.Info, "关于软件", "使用指南、常见问题 · v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})") { mineNav.openEdqiuSection(XSection.ABOUT) }
             }
-            StaticMenuRow(
-                icon = Icons.Default.Info,
-                title = "关于软件",
-                subtitle = "使用指南、常见问题 · v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
-                onClick = { mineNav.openEdqiuSection(XSection.ABOUT) }
-            )
 
             // 悬浮 Tab 栏净空
             Spacer(modifier = Modifier.height(80.dp))
@@ -634,70 +604,6 @@ private fun ExpandableMenuSection(
             }
         }
         }
-    }
-}
-
-/**
- * 静态入口行（2026-09-30）：无展开子项、点按直接跳转（如「关于本机」），
- * 与 ExpandableMenuSection 共用同一套行版式。
- */
-@Composable
-private fun StaticMenuRow(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
-) {
-    // 2026-10-15：与领域卡同款玻璃底（卡级统一，关于本机不再裸奔）
-    GlassSurface(
-        tier = GlassTier.L1,
-        shape = RoundedCornerShape(20.dp)
-    ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .pressableNoRipple { onClick() }
-            .padding(horizontal = 16.dp, vertical = 14.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(17.dp)
-            )
-        }
-        Column(
-            modifier = Modifier
-                .padding(start = 14.dp)
-                .weight(1f)
-        ) {
-            Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-            Text(
-                subtitle,
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                lineHeight = 15.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        Icon(
-            imageVector = Icons.Default.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .padding(start = 8.dp)
-                .size(20.dp)
-        )
-    }
     }
 }
 

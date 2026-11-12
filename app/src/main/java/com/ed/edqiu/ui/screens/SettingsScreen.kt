@@ -95,6 +95,7 @@ import com.ed.edqiu.data.model.ProxySettings
 import com.ed.edqiu.data.preferences.CloudSyncPreferences
 import com.ed.edqiu.data.preferences.CookiePreferences
 import com.ed.edqiu.data.preferences.ProxyPreferences
+import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.data.preferences.ThirdPartyApiPreferences
 import com.ed.edqiu.data.proxy.ProxyDetector
 import com.ed.edqiu.data.proxy.ProxyTester
@@ -144,6 +145,7 @@ fun DownloaderSettingsPage(
     onBack: () -> Unit,
     section: String? = null,
     onOpenMediaBackup: () -> Unit = {},
+    settings: SettingsRepository,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -193,6 +195,8 @@ fun DownloaderSettingsPage(
     val webDavSyncProgress = (webDavSyncState as? WebDavManualSync.State.Syncing)?.progress
     var isTestingConnection by remember { mutableStateOf(false) }
     var connectionVerified by remember { mutableStateOf(false) }
+    // 当前选中网盘是否有已保存配置（驱动「删除已保存配置」按钮可用态）
+    var hasSavedConfig by remember { mutableStateOf(false) }
     // 上次连接验证时间（epoch ms）：0 = 从未验证；驱动「连接状态」面板的鉴权结果展示
     var lastVerifiedAt by remember { mutableLongStateOf(0L) }
     // 允许自签名证书（HTTPS 自建 NAS 场景）；默认关
@@ -201,6 +205,10 @@ fun DownloaderSettingsPage(
     var autoBackupDays by remember { mutableIntStateOf(1) }
     // WebDAV 配置是否已从磁盘加载完成（去抖落盘防覆写开关，见下方 snapshotFlow）
     var webDavLoaded by remember { mutableStateOf(false) }
+
+    // 2026-11-12 下载行为并入网络连接：失败自动重试 + 后台状态核对（原独立「下载行为」分区）
+    val autoRetry by settings.autoRetryFlow.collectAsStateWithLifecycle(initialValue = true)
+    val backgroundSync by settings.backgroundSyncFlow.collectAsStateWithLifecycle(initialValue = true)
 
     LaunchedEffect(Unit) {
         val proxy = proxyPreferences.getProxySettings()
@@ -218,15 +226,22 @@ fun DownloaderSettingsPage(
         cookiesConfigured = cookiePreferences.hasCookies()
 
         useWebDavSync = cloudSyncPreferences.enabled
-        webDavProviderId = cloudSyncPreferences.providerId
+        // 2026-11-12 预设可能被移除（如已删除的 migu）：加载时校验，不在列表则
+        // 回退 custom 并回写，避免 chips 无选中 + 描述 fallback 割裂
+        val storedPid = cloudSyncPreferences.providerId
+        webDavProviderId = if (webDavProviders.any { it.id == storedPid }) storedPid else "custom"
+        if (webDavProviderId != storedPid) cloudSyncPreferences.providerId = webDavProviderId
         // 2026-10 每网盘独立配置：输入框加载当前选中预设自己的凭证（cfg_{pid}_*）
         val account = cloudSyncPreferences.accountFor(webDavProviderId)
         webDavServerUrl = account.serverUrl
         webDavUsername = account.username
         webDavPassword = account.password
-        webDavRemotePath = account.remotePath.ifBlank { "Edqiu" }
+        // 2026-11-11 城通排障：留空 = 根目录同步（城通 WebDAV 工作空间根即官方地址本身，
+        // 未知子路径一律 401）；不再强制把空路径显示成 "Edqiu" 子目录
+        webDavRemotePath = account.remotePath
         connectionVerified = account.verified
         lastVerifiedAt = account.verifiedAt
+        hasSavedConfig = account.isComplete
         lastSyncTime = cloudSyncPreferences.lastSyncTime
         syncedCount = cloudSyncPreferences.syncedFileCount
         allowInsecureTls = cloudSyncPreferences.allowInsecureTls
@@ -601,22 +616,18 @@ fun DownloaderSettingsPage(
             if (section == null || section == DlSection.UPDATE) {
             item {
                 SectionCard(title = "", subtitle = "", icon = Icons.Outlined.SystemUpdate) {
+                    // 2026-11-11 定案：yt-dlp 更新按钮移除。上游 fork（JunkFood02/youtubedl-android）
+                    // **没有任何 release**——库内更新器（YoutubeDLUpdater）拉一个必然 404 的地址，
+                    // 设计性失败（真机日志：failed to update youtube-dl / SSLHandshake 是墙的噪声，
+                    // 连上了也是 404）。Maven Central 0.18.1 已是终版，其内置 yt-dlp 为 2025-11
+                    // 构建（支持 2160p/1080p60），**随 APK 内置分发**，App 更新即 yt-dlp 更新。
                     ActionRow(
-                        title = "更新 yt-dlp",
-                        subtitle = updateStatus ?: "用于提升 X/Twitter 视频解析成功率",
+                        title = "yt-dlp 引擎版本",
+                        subtitle = "v0.18.1（随 App 内置分发，已支持 2160p/1080p60，无需单独更新）",
                         icon = Icons.Outlined.Download,
-                        busy = isUpdatingYtdlp,
-                        actionText = if (isUpdatingYtdlp) "更新中" else "更新",
-                        onClick = {
-                            if (isUpdatingYtdlp) return@ActionRow
-                            scope.launch {
-                                isUpdatingYtdlp = true
-                                YoutubeDLService.updateYoutubeDL(context)
-                                    .onSuccess { updateStatus = "yt-dlp 已更新完成" }
-                                    .onFailure { e -> updateStatus = "更新失败：${e.message ?: "未知错误"}" }
-                                isUpdatingYtdlp = false
-                            }
-                        }
+                        busy = false,
+                        actionText = "内置",
+                        onClick = { }
                     )
                     HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color(0xFFE2E8F0))
                     ActionRow(
@@ -880,6 +891,38 @@ fun DownloaderSettingsPage(
                         }
                     ) { Text("保存第三方兜底") }
 
+                    // 2026-11-12 下载行为并入网络连接（原独立「下载行为」分区）
+                    HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color(0xFFE2E8F0))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Icon(Icons.Outlined.Download, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("下载行为", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                            Text("失败自动重试与后台状态核对", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("下载失败后自动重试", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                            Text("按退避间隔自动重试失败链接", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        DynamicSwitch(
+                            checked = autoRetry,
+                            onCheckedChange = { scope.launch { settings.setAutoRetry(it) } }
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("后台更新下载状态", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                            Text("系统允许时定期扫描监控目录，同步已下载文件", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        DynamicSwitch(
+                            checked = backgroundSync,
+                            onCheckedChange = { scope.launch { settings.setBackgroundSync(it) } }
+                        )
+                    }
+
                 }
             }
             }
@@ -926,10 +969,11 @@ fun DownloaderSettingsPage(
                                 webDavUsername = saved.username
                                 webDavPassword = saved.password
                                 webDavRemotePath = saved.remotePath.ifBlank {
-                                    provider.remotePathTemplate.ifBlank { "Edqiu" }
+                                    provider.remotePathTemplate
                                 }
                                 connectionVerified = saved.verified
                                 lastVerifiedAt = saved.verifiedAt
+                                hasSavedConfig = saved.isComplete
                             }
                         )
                         Spacer(Modifier.height(6.dp))
@@ -985,7 +1029,9 @@ fun DownloaderSettingsPage(
                                         serverUrl = webDavServerUrl.trim(),
                                         username = webDavUsername.trim(),
                                         password = webDavPassword,
-                                        remotePath = webDavRemotePath,
+                                        // 2026-11-12 城通地址即工作空间根，子路径一律 401；
+                                        // 测试连接与同步保持一致，强制忽略 remotePath
+                                        remotePath = if (webDavProviderId == "ctfile") "" else webDavRemotePath,
                                     )
                                     WebDavEngine(
                                         allowInsecureTls = { cloudSyncPreferences.allowInsecureTls }
@@ -995,6 +1041,7 @@ fun DownloaderSettingsPage(
                                             // 独立配置（cfg_{pid}_*）+ 验证结论；失败一律不保存
                                             connectionVerified = true
                                             lastVerifiedAt = System.currentTimeMillis()
+                                            hasSavedConfig = true
                                             cloudSyncPreferences.saveAccount(
                                                 webDavProviderId,
                                                 WebDavAccountConfig(
@@ -1031,6 +1078,32 @@ fun DownloaderSettingsPage(
                                 enabled = !isWebDavSyncing && connectionVerified,
                                 modifier = Modifier.weight(1f)
                             ) { Text(if (isWebDavSyncing) "同步中" else "立即同步") }
+                        }
+
+                        // 2026-11-12 单独删除已保存配置：只清当前选中网盘的 cfg_{pid}_*
+                        // （账号/密码/地址/目录/验证结论），不动全局开关与其他网盘配置
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                val provider = webDavProviders.firstOrNull { it.id == webDavProviderId }
+                                    ?: webDavProviders.last()
+                                cloudSyncPreferences.clearAccount(webDavProviderId)
+                                // 表单回填模板、复位验证态
+                                webDavServerUrl = provider.serverUrlTemplate
+                                webDavUsername = ""
+                                webDavPassword = ""
+                                webDavRemotePath = provider.remotePathTemplate
+                                connectionVerified = false
+                                lastVerifiedAt = 0L
+                                hasSavedConfig = false
+                                inlineFeedback = FeedbackMessage("已删除「${provider.name}」的已保存配置", FeedbackKind.SUCCESS)
+                            },
+                            enabled = hasSavedConfig,
+                            modifier = Modifier.fillMaxWidth(),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        ) {
+                            Text("删除已保存配置（账号 / 密码）")
                         }
 
                         // 2026-10 统一 WebDAV 通道：连接状态面板——状态 / 地址 / 账号 /

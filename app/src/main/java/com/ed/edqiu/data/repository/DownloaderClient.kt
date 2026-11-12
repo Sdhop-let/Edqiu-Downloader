@@ -17,6 +17,7 @@ import com.ed.edqiu.downloader.ThirdPartyApiResolver
 import com.ed.edqiu.domain.TweetIdExtractor
 import com.ed.edqiu.service.YoutubeDLService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -46,7 +47,15 @@ class DownloaderClient(private val context: Context) {
     sealed interface LaunchResult {
         data class Downloaded(val files: List<InternalMediaDownloader.DownloadedFile>) : LaunchResult
         data object LaunchedExternal : LaunchResult
-        data class Failed(val reason: String) : LaunchResult
+
+        /**
+         * @param fromSkip true = 本轮没有任何引擎真正执行（全部被熔断/推文亲和跳过）。
+         *   2026-11-11 断网死锁修复：调用方（SavedLinkRepository）对 fromSkip 失败不烧
+         *   attemptCount、不推进退避——「跳过」不是真实失败，烧计数会把自动重试在断网期
+         *   烧光，网络恢复后反而停摆。
+         */
+        data class Failed(val reason: String, val fromSkip: Boolean = false) : LaunchResult
+
         /** 推文已不存在（被删/私密/未公开）——永久失败，不再回退、不再重试。 */
         data object TweetGone : LaunchResult
     }
@@ -61,6 +70,11 @@ class DownloaderClient(private val context: Context) {
         val tweetId = TweetIdExtractor.fromUrl(rawUrl)
             ?: return LaunchResult.Failed("链接中没有有效的推文 ID")
         val normalizedUrl = "https://x.com/i/status/$tweetId"
+
+        // 2026-11-11 断网死锁修复（手动线）：用户点下载/详情页/重试 = 明确授权重探，
+        // 先清该推文的引擎亲和记忆，保证手动重试永远真正触碰引擎链。旧实现 24h 亲和
+        // 会把断网期失败过的全部引擎拉黑，手动重试空转成「近期失败过已跳过」。
+        if (manual) DownloadEngineHealth.clearTweetFailures(tweetId)
 
         // 2026-10-22「下载无反馈」修复：引擎链启动期（FXTwitter API 分析 ~2s +
         // 熔断判定 + yt-dlp 二进制初始化 3-8s）内 Bus 无任何任务，收件箱卡片停在
@@ -101,11 +115,23 @@ class DownloaderClient(private val context: Context) {
         val effectiveProxy = proxy ?: ProxyPreferences(context).getProxySettings().takeIf { it.enabled }
         val health = DownloadEngineHealth
 
+        // 2026-11-11 断网死锁修复（自动线）：两个必跑引擎全部被挡（24h 亲和/全局熔断）
+        // 时，亲和已无任何「直达可用引擎」的路由价值——自动解除拉黑，本轮真正重探。
+        // 网络未恢复 → 真失败重新拉黑（下轮 retryDueDownloads 再解除再探，15 分钟一轮，
+        // 天然变成断网探测心跳）；网络已恢复 → 首轮重试即成功。
+        if (health.allEnginesBlockedForTweet(tweetId)) {
+            health.clearTweetFailures(tweetId)
+        }
+        // 2026-11-11 fromSkip 跟踪：本轮是否有任何引擎真正执行过（含 HLS 路由/回退）。
+        // 三层全被跳过时最终 Failed 带 fromSkip=true，由调用方决定不烧重试计数。
+        var anyEngineExecuted = false
+
         // ---------- 引擎一：FXTwitter ----------
         var internalError: String? = null
         if (health.isEngineAvailable(DownloadEngineHealth.ENGINE_FXTWITTER) &&
             !health.failedBefore(tweetId, DownloadEngineHealth.ENGINE_FXTWITTER)
         ) {
+            anyEngineExecuted = true
             internalError = internalDownloader.downloadTweet(normalizedUrl, effectiveProxy).fold(
                 onSuccess = { files ->
                     if (files.isNotEmpty()) {
@@ -125,7 +151,14 @@ class DownloaderClient(private val context: Context) {
                     // 这是路由决策而非引擎故障：API 活着，不计熔断。
                     if (error is HlsBetterSourceException) {
                         health.recordEngineSuccess(DownloadEngineHealth.ENGINE_FXTWITTER)
-                        val ytResult = ytdlpFallback(normalizedUrl, tweetId, error.message ?: "存在 HLS 高画质源")
+                        val ytResult = ytdlpFallback(
+                            normalizedUrl,
+                            tweetId,
+                            error.message ?: "存在 HLS 高画质源",
+                            // 2026-11-11 实证闸门基准：FXTwitter 渐进 mp4 最高变体码率。
+                            // HLS 产物实测码率必须严格超过它才落位，否则丢弃走回退直下 mp4
+                            baselineBitrate = error.maxMp4Bitrate
+                        )
                         // 2026-10-25 宽路由保底：yt-dlp 拉流失败（无 HLS / 登录失效 / 网络）时
                         // 回退内部引擎直下 mp4——「拉不到最高画质」不能变成「什么都拿不到」。
                         // 用户主动取消不回退（尊重取消）
@@ -164,6 +197,7 @@ class DownloaderClient(private val context: Context) {
         if (health.isEngineAvailable(DownloadEngineHealth.ENGINE_YTDLP) &&
             !health.failedBefore(tweetId, DownloadEngineHealth.ENGINE_YTDLP)
         ) {
+            anyEngineExecuted = true
             when (val result = ytdlpFallback(normalizedUrl, tweetId, internalError)) {
                 is LaunchResult.Downloaded -> {
                     health.markTweetSuccess(tweetId)
@@ -181,7 +215,9 @@ class DownloaderClient(private val context: Context) {
         }
 
         // ---------- 引擎三：第三方 API 兜底（默认关闭，设置页配置后启用） ----------
-        return when (val thirdParty = thirdPartyFallback(normalizedUrl, tweetId, effectiveProxy, manual)) {
+        val (thirdParty, thirdPartyExecuted) = thirdPartyFallback(normalizedUrl, tweetId, effectiveProxy, manual)
+        if (thirdPartyExecuted) anyEngineExecuted = true
+        return when (thirdParty) {
             is LaunchResult.Downloaded -> thirdParty
             else -> {
                 val tpReason = (thirdParty as? LaunchResult.Failed)?.reason
@@ -205,7 +241,9 @@ class DownloaderClient(private val context: Context) {
                         }
                         .onFailure { android.util.Log.w("DownloaderClient", "yt-dlp self-heal failed", it) }
                 }
-                LaunchResult.Failed(message)
+                // 2026-11-11：fromSkip = 三层引擎全部被跳过、没有任何引擎真正执行——
+                // 调用方对这类失败不烧 attemptCount（跳过 ≠ 真失败）
+                LaunchResult.Failed(message, fromSkip = !anyEngineExecuted)
             }
         }
     }
@@ -216,6 +254,8 @@ class DownloaderClient(private val context: Context) {
         tweetId: String,
         internalError: String?,
         uploader: String = "unknown",
+        /** 2026-11-11 实证闸门基准：FXTwitter 渐进 mp4 最高变体码率（0 = 无基准，跳过闸门）。 */
+        baselineBitrate: Int = 0,
     ): LaunchResult {
         return runCatching {
             val proxyUrl = ProxyPreferences(context).getProxySettings().toProxyUrl()
@@ -243,6 +283,12 @@ class DownloaderClient(private val context: Context) {
             DownloadTaskBus.add(task)
             DownloadCancellation.register(task.id)
 
+            // 2026-11-11 回弹修复：`bestvideo+bestaudio/best` 会先下视频流再下音频流，
+            // yt-dlp 每段各自 0→100 报数——旧实现直接透传，视频流下完瞬间进度从 ~100%
+            // 回弹到 0% 重新爬（用户误读为「下载到一半重来」）。段切换检测（进度骤降
+            // >10 个百分点）后按段数加权：显示值 = (已完成段×100 + 当前段进度) / 段数。
+            var segCount = 1
+            var segPeak = 0f
             val launchResult = YoutubeDLService.downloadVideo(
                 url = url,
                 // 2026-11-07 审计修复：`best` 只选预合并（video+audio 单文件）格式，X 的
@@ -251,8 +297,15 @@ class DownloaderClient(private val context: Context) {
                 formatId = "bestvideo+bestaudio/best",
                 outputDir = outputDir.absolutePath,
                 onProgress = { progress, eta ->
+                    if (progress < segPeak - 10f && segCount == 1) {
+                        segCount = 2
+                        segPeak = progress
+                    } else if (progress > segPeak) {
+                        segPeak = progress
+                    }
+                    val aggregated = ((segCount - 1) * 100f + progress) / segCount
                     DownloadTaskBus.updateTask(task.id) {
-                        it.copy(progress = progress, etaSeconds = eta)
+                        it.copy(progress = aggregated, etaSeconds = eta)
                     }
                 },
                 proxyUrl = proxyUrl,
@@ -277,6 +330,34 @@ class DownloaderClient(private val context: Context) {
                         }
                         return@fold LaunchResult.Failed(msg)
                     }
+                    // 2026-11-11 画质实证闸门：路由 yt-dlp ≠ 拉到了更高画质——hasHls 只是
+                    // FXTwitter 的字符串级弱信号（m3u8 URL 匹配，标记可缺失可误报），无
+                    // Cookie 时 HLS 上限甚至可能低于渐进 mp4。产物必须实测（码率 =
+                    // fileSize*8/duration，含音频口径与渐进变体一致）严格优于基准才落位；
+                    // 测不出（retriever 失败/损坏文件）一律按不达标处理。拒绝落位 → 走宽
+                    // 路由回退直下 mp4——用户要的是肉眼可见的提升，不是「走过 HLS 通道」。
+                    val measured = measureMediaSpecs(rawFile)
+                    if (baselineBitrate > 0 && (measured == null || measured.first <= baselineBitrate)) {
+                        val msg = "HLS 产物画质未超过渐进变体" +
+                            "（实测 ${measured?.first?.toString() ?: "未知"}bps vs 基准 ${baselineBitrate}bps），回退直下 mp4"
+                        android.util.Log.w("DownloaderClient", "HLS gate rejected tweet=$tweetId: $msg")
+                        runCatching { rawFile.delete() }
+                        DownloadTaskBus.updateTask(task.id) {
+                            it.copy(status = DownloadStatus.FAILED, errorMessage = msg)
+                        }
+                        return@fold LaunchResult.Failed(msg)
+                    }
+                    // 落位：sidecar 画质标签用实测分辨率（短边）/码率反推的档位（实证值，不再写死 "best"）
+                    val measuredQuality = bitrateToQualityLabel(
+                        measured?.first ?: 0,
+                        measured?.second ?: 0,
+                        measured?.third ?: 0
+                    )
+                    android.util.Log.i(
+                        "DownloaderClient",
+                        "HLS 产物落位 tweet=$tweetId：实测 ${measured?.second ?: 0}x${measured?.third ?: 0} /" +
+                            "${(measured?.first ?: 0) / 1000}kbps → 档位 $measuredQuality"
+                    )
                     val safeUploader = uploader.replace(Regex("[/\\:*?\"<>|]"), "_").ifBlank { "unknown" }
                     val convention = run {
                         var idx = 1
@@ -301,22 +382,13 @@ class DownloaderClient(private val context: Context) {
                         }.getOrElse { rawFile }
                     } else rawFile
                     val path = finalFile.absolutePath
-                    writeSidecar(File(path), url, tweetId)
-                    // 2026-11-07 审计修复：混合推文（视频+图片）被路由 yt-dlp 后
-                    // --no-playlist 只下 1 个视频，旧实现图片永久丢失且状态已 DOWNLOADED
-                    // 不再补。视频落定后补拉图片（skipVideos 只下图片；sidecar 落盘由
-                    // 媒体库扫描自动收编）；失败不影响视频结果（下轮重试/升级器兜底）
-                    runCatching {
-                        val settings = ProxyPreferences(context).getProxySettings()
-                        internalDownloader.downloadTweet(
-                            rawUrl = url,
-                            proxy = settings,
-                            allowHlsRouting = false,
-                            skipVideos = true,
-                        )
-                    }.onFailure {
-                        android.util.Log.w("DownloaderClient", "混合推文补拉图片失败（不影响视频）：$tweetId", it)
-                    }
+                    writeSidecar(File(path), url, tweetId, quality = measuredQuality)
+                    // 2026-11-11 真机实测修复（收件箱 99% 卡住）：旧实现补拉图片**同步**跑在
+                    // COMPLETED 更新之前——FXTwitter API + 封面补拉 10-30s 里，视频文件早已
+                    // 落盘且被媒体库扫描收编（用户看到「下载完成」），但 Bus 还是
+                    // ytdlp COMPLETED(100) + 补拉图片 DOWNLOADING(99) → 收件箱聚合
+                    // (100+99)/2=99% 卡住，DB 落位同样被拖住。改为先置 COMPLETED、
+                    // 补拉图片 fire-and-forget 到应用级 IO scope（失败静默，升级器兜底）。
                     DownloadTaskBus.updateTask(task.id) {
                         it.copy(
                             status = DownloadStatus.COMPLETED,
@@ -324,6 +396,26 @@ class DownloaderClient(private val context: Context) {
                             progress = 100f,
                             completedAt = System.currentTimeMillis()
                         )
+                    }
+                    runCatching {
+                        val appScope = (context.applicationContext as? com.ed.edqiu.EdqiuApplication)
+                            ?.container?.globalIoScope
+                        appScope?.launch {
+                            runCatching {
+                                val settings = ProxyPreferences(context).getProxySettings()
+                                internalDownloader.downloadTweet(
+                                    rawUrl = url,
+                                    proxy = settings,
+                                    allowHlsRouting = false,
+                                    skipVideos = true,
+                                    // 独立前缀：不进收件箱聚合正则（bgimg 不匹配任何归并 ID），
+                                    // 补拉期间卡片已由 DB DOWNLOADED 接管，不回拉 99%
+                                    taskPrefix = "bgimg",
+                                )
+                            }.onFailure {
+                                android.util.Log.w("DownloaderClient", "混合推文补拉图片失败（不影响视频）：$tweetId", it)
+                            }
+                        }
                     }
                     LaunchResult.Downloaded(
                         listOf(
@@ -361,26 +453,29 @@ class DownloaderClient(private val context: Context) {
     }
 
     /**
-     * 第三方 API 兜底（P0-1 第三层）：解析直链 → 复用内部引擎的断点续传下载器落盘 + 写 sidecar。
+     * 第三方 API 兜底（P0-1 第三层）：解析直链 → 复用内部引擎的多线程分段下载器落盘 + 写 sidecar。
      * 未配置端点时静默关闭（返回 Failed 附说明）；配置后仍受熔断/单推文亲和约束。
      * 注意：任务 ID 前缀 tpapi_ 不在收件箱实时进度归并正则内（xinvox_/ytdlp_），
      * 下载中心仍可见任务，收件箱卡片以最终落库状态为准。
+     *
+     * @return (结果, 是否真正执行过解析/下载)。未配置或被熔断/亲和挡住 = false，
+     *   供 launchEngines 的 fromSkip 判定（跳过 ≠ 真失败）。
      */
     private suspend fun thirdPartyFallback(
         url: String,
         tweetId: String,
         proxy: ProxySettings?,
         manual: Boolean,
-    ): LaunchResult {
+    ): Pair<LaunchResult, Boolean> {
         val apiPrefs = ThirdPartyApiPreferences(context)
         if (!apiPrefs.isConfigured) {
-            return LaunchResult.Failed("第三方 API 兜底未配置（设置 → 网络与认证）")
+            return LaunchResult.Failed("第三方 API 兜底未配置（设置 → 网络与认证）") to false
         }
         val health = DownloadEngineHealth
         if (!health.isEngineAvailable(DownloadEngineHealth.ENGINE_THIRD_PARTY) ||
             health.failedBefore(tweetId, DownloadEngineHealth.ENGINE_THIRD_PARTY)
         ) {
-            return LaunchResult.Failed("第三方 API 兜底暂不可用（熔断/近期失败）")
+            return LaunchResult.Failed("第三方 API 兜底暂不可用（熔断/近期失败）") to false
         }
 
         val medias = ThirdPartyApiResolver()
@@ -392,7 +487,7 @@ class DownloaderClient(private val context: Context) {
                         health.recordEngineFailure(DownloadEngineHealth.ENGINE_THIRD_PARTY, error.message)
                     }
                     health.markTweetFailed(tweetId, DownloadEngineHealth.ENGINE_THIRD_PARTY)
-                    return LaunchResult.Failed("第三方 API 解析失败：${error.message ?: "未知错误"}")
+                    return LaunchResult.Failed("第三方 API 解析失败：${error.message ?: "未知错误"}") to true
                 },
             )
 
@@ -471,21 +566,85 @@ class DownloaderClient(private val context: Context) {
             if (files.isNotEmpty()) {
                 health.recordEngineSuccess(DownloadEngineHealth.ENGINE_THIRD_PARTY)
                 health.markTweetSuccess(tweetId)
-                LaunchResult.Downloaded(files)
+                LaunchResult.Downloaded(files) to true
             } else {
                 if (manual) {
                     health.recordEngineFailure(DownloadEngineHealth.ENGINE_THIRD_PARTY, lastError)
                 }
                 health.markTweetFailed(tweetId, DownloadEngineHealth.ENGINE_THIRD_PARTY)
-                LaunchResult.Failed("第三方 API 链接下载失败：${lastError ?: "未知错误"}")
+                LaunchResult.Failed("第三方 API 链接下载失败：${lastError ?: "未知错误"}") to true
             }
         }
     }
 
     private fun sanitizeName(name: String): String = name.replace(Regex("[/\\\\:*?\"<>|]"), "_")
 
-    /** 写 sidecar（.meta.json），供收件箱 DownloadMonitor 按 tweetId 配对；yt-dlp 路径无发布时间（JSON null 占位）。 */
-    private fun writeSidecar(mediaFile: File, sourceUrl: String, tweetId: String) {
+    /**
+     * 实测产物规格（2026-11-11 画质实证闸门）：MediaMetadataRetriever 读时长与宽高，
+     * 码率 = fileSize*8/duration（含音频，与 X 渐进 mp4 变体的 bitrate 字段口径一致，
+     * 可直接对比）。读不出（损坏/不支持的封装）返回 null → 闸门按不达标处理。
+     * 返回 (码率bps, 宽, 高)。
+     */
+    private fun measureMediaSpecs(file: File): Triple<Int, Int, Int>? {
+        if (!file.exists() || file.length() <= 0L) return null
+        val retriever = android.media.MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            val durationMs = retriever.extractMetadata(
+                android.media.MediaMetadataRetriever.METADATA_KEY_DURATION
+            )?.toLongOrNull()
+            if (durationMs == null || durationMs <= 0L) return null
+            val bitrate = ((file.length() * 8.0) / (durationMs / 1000.0)).toInt()
+            val width = retriever.extractMetadata(
+                android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH
+            )?.toIntOrNull() ?: 0
+            val height = retriever.extractMetadata(
+                android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT
+            )?.toIntOrNull() ?: 0
+            Triple(bitrate, width, height)
+        } catch (e: Exception) {
+            null
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
+    /**
+     * 实测规格 → 档位标签（2026-11-11 升级为分辨率优先）：2160p 档（Premium+ 创作者
+     * 4K60 内容）此前被 ≥2M→1080p 的纯码率映射吞掉——实测 8Mbps 的 4K 产物被标成
+     * "1080p"，标签失真。现 height 实测值（MediaMetadataRetriever）优先判档，
+     * height 读不出才退回码率映射。
+     *
+     * 2026-11-11 真机实测修正：判档用 min(宽, 高)——720×1280 竖屏视频的 height=1280
+     * 被旧逻辑误标 "1080p"（实测 1112kbps 也印证它是 720p 档）。分辨率档位以短边为准。
+     */
+    private fun bitrateToQualityLabel(bitrate: Int, width: Int = 0, height: Int = 0): String {
+        // 短边 = 有效分辨率（竖屏取宽、横屏取高；缺一边取另一边）
+        val shortSide = if (width > 0 && height > 0) minOf(width, height) else maxOf(width, height)
+        return when {
+            shortSide >= 2000 -> "2160p"
+            shortSide >= 1000 -> "1080p"
+            shortSide >= 700 -> "720p"
+            shortSide >= 460 -> "480p"
+            shortSide > 0 -> "360p"
+            bitrate >= 2_000_000 -> "1080p"
+            bitrate >= 832_000 -> "720p"
+            bitrate >= 320_000 -> "480p"
+            bitrate > 0 -> "360p"
+            else -> "best"
+        }
+    }
+
+    /**
+     * 写 sidecar（.meta.json），供收件箱 DownloadMonitor 按 tweetId 配对；yt-dlp 路径无发布时间（JSON null 占位）。
+     * 2026-11-11：quality 改由调用方传实测档位（实证闸门通过后反推），不再写死 "best"。
+     */
+    private fun writeSidecar(
+        mediaFile: File,
+        sourceUrl: String,
+        tweetId: String,
+        quality: String = "best"
+    ) {
         val json = JSONObject()
             .put("url", sourceUrl)
             .put("tweetId", tweetId)
@@ -493,7 +652,7 @@ class DownloaderClient(private val context: Context) {
             .put("authorName", "")
             .put("title", "")
             .put("thumbnail", "")
-            .put("quality", "best")
+            .put("quality", quality)
             .put("formatId", "ytdlp")
             .put("mediaIndex", 1)
             .put("mediaType", "VIDEO")

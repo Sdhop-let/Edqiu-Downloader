@@ -92,7 +92,7 @@ class WebDavAutoBackupWorker(
             Log.i(TAG, "自动备份未开启或连接未验证，跳过")
             return Result.success()
         }
-        Log.i(TAG, "开始自动双向同步，server=${account.serverUrl}, remotePath=${account.remotePath}")
+        Log.i(TAG, "开始自动双向同步，server=${account.serverUrl}, remotePath=${if (prefs.providerId == "ctfile") "" else account.remotePath}")
         // 备份中心历史前置快照（2026-10）：同 WebDavManualSync 口径
         val firstEver = prefs.lastSyncTime == 0L
         val recovering = prefs.syncInProgress
@@ -139,6 +139,7 @@ class WebDavAutoBackupWorker(
                         files = 0,
                         bytes = 0L,
                         status = "failed",
+                        error = e.message ?: "未知错误",
                     )
                 )
                 // 2026-10 整改：配置性失败（密码改了/服务器下线）旧实现无限退避重试——

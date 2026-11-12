@@ -155,6 +155,28 @@ interface SavedLinkDao {
         nextRetryAt: Long?
     )
 
+    /**
+     * 「引擎被跳过」记账（2026-11-11 断网死锁修复）：本轮没有任何引擎真正执行
+     * （熔断/推文亲和全命中）——只更新 last_error 供 UI 展示，**不烧 attemptCount、
+     * 不推进 next_retry_at**。条目保持 FAILED + 原 next_retry_at，下一轮
+     * retryDueDownloads 继续捞起（15 分钟一轮 = 断网探测心跳），配合
+     * DownloadEngineHealth.allEnginesBlockedForTweet 自动解除拉黑，网络恢复后
+     * 首轮即真探成功。旧实现把「跳过」当真失败烧计数，3 次后自动重试永久停摆。
+     */
+    @Query(
+        """
+        UPDATE saved_links
+        SET last_attempt_at = :attemptedAt,
+            last_error = :error
+        WHERE tweetId = :tweetId
+        """
+    )
+    suspend fun markDownloadSkipped(
+        tweetId: String,
+        attemptedAt: Long,
+        error: String
+    )
+
     @Query(
         """
         UPDATE saved_links

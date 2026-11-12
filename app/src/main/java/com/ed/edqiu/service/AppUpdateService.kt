@@ -17,6 +17,11 @@ import java.net.URL
 // 2026-09-28 检查源切换：旧仓库静态 JSON → GitHub Releases API（Sdhop-let/Edqiu-Downloader）
 private const val RELEASES_LATEST_URL = "https://api.github.com/repos/Sdhop-let/Edqiu-Downloader/releases/latest"
 
+// 2026-11-11 真机修复：GitHub API 直连被墙（TLS 握手重置），App 更新检查失效。
+// gh-proxy.com 对 api.github.com 的代理已实测可用（返回完整 release JSON）——
+// 直连（含显式代理对象）失败后走镜像前缀，同款 URL 加速。
+private const val RELEASES_LATEST_MIRROR_PREFIX = "https://gh-proxy.com/"
+
 data class AppUpdateInfo(
     val versionName: String,
     val versionCode: Int,
@@ -41,7 +46,7 @@ object AppUpdateService {
     suspend fun checkForUpdate(context: Context): Result<AppUpdateInfo?> = withContext(Dispatchers.IO) {
         runCatching {
             val body = try {
-                fetchText(RELEASES_LATEST_URL)
+                fetchTextWithFallback(RELEASES_LATEST_URL, context)
             } catch (e: IllegalStateException) {
                 // 仓库还没有发布过任何 Release
                 if (e.message?.contains("404") == true) return@runCatching null else throw e
@@ -253,6 +258,49 @@ object AppUpdateService {
 
     private fun fetchText(url: String): String {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15_000
+            readTimeout = 20_000
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "edqiu-downloader/${BuildConfig.VERSION_NAME}")
+            setRequestProperty("Accept", "application/vnd.github+json")
+        }
+        return try {
+            val code = connection.responseCode
+            if (code !in 200..299) throw IllegalStateException("Request failed: HTTP $code")
+            connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /**
+     * 带回退的版本检查请求（2026-11-11 真机修复）：
+     * ① 显式 Proxy 对象（App 配置的 Clash——与 yt-dlp `--proxy` 同款通道，实测可达）；
+     * ② gh-proxy.com 镜像前缀（国内直连可达，已实测代理 api.github.com 返回完整 JSON）。
+     * 旧的 JVM 系统属性注入（http.proxyHost）在 Android 连接栈上不可靠，弃用。
+     */
+    private fun fetchTextWithFallback(url: String, context: Context): String {
+        // ① 显式代理对象
+        val proxy = com.ed.edqiu.data.preferences.ProxyPreferences(context)
+            .getProxySettings().toJavaProxy()
+        if (proxy != null) {
+            try {
+                return fetchText(url, proxy)
+            } catch (e: Exception) {
+                android.util.Log.w("AppUpdateService", "代理通道检查失败，回退 gh-proxy 镜像：${e.message}")
+            }
+        }
+        // ② 镜像前缀（无代理直连，国内可达）
+        return fetchText("$RELEASES_LATEST_MIRROR_PREFIX$url", null)
+    }
+
+    private fun fetchText(url: String, proxy: java.net.Proxy?): String {
+        val connection = if (proxy != null) {
+            URL(url).openConnection(proxy) as HttpURLConnection
+        } else {
+            URL(url).openConnection() as HttpURLConnection
+        }
+        connection.apply {
             connectTimeout = 15_000
             readTimeout = 20_000
             instanceFollowRedirects = true

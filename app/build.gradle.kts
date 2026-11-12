@@ -41,9 +41,11 @@ android {
         //   ffmpeg zip 载荷内 libwebp* 等 5 个库仍是 4KB 对齐（libavcodec DT_NEEDED 直接依赖），
         //   16KB 页设备上 ffmpeg 功能不可用——需升级上游依赖或等待重打包后复测。
         targetSdk = 37
-        // 2026-11-07 v1.9.17：全库工程审计修复（11 P1 + ~45 P2/P3）+ 支持范围定案仅 Android 13+（minSdk 33，见 defaultConfig 顶部注释）
-        versionCode = 66
-        versionName = "1.9.17"
+        // 2026-11-12 E-0.1.0：版本体系重置（1.x → E-0.x 新纪元）。versionCode 自 100 起，
+        // 后续 E-0.1.1 → 101、E-0.1.2 → 102（每小版本 +1）。
+        // 支持范围定案仅 Android 13+（minSdk 33，见 defaultConfig 顶部注释）
+        versionCode = 100
+        versionName = "E-0.1.0"
 
         // 2026-09-15：只保留 arm64-v8a（Android 16/17 手机端均为 arm64），APK 从 225.9MB 降至约 80MB；
         // ffmpeg/yt-dlp 功能完整保留，x86 系模拟器不再支持

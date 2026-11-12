@@ -21,6 +21,8 @@ data class SyncHistoryRecord(
     val files: Int,
     val bytes: Long,
     val status: String,
+    /** 失败原因（已脱敏，无 token/密码）；成功为空串。 */
+    val error: String = "",
 )
 
 /** 单个网盘预设的独立账号配置（每网盘一份，互不覆盖）。 */
@@ -46,7 +48,7 @@ data class WebDavAccountConfig(
  * [SecretBox]（AndroidKeyStore + AES/GCM）加密落盘；旧版明文值在首次读取时自动迁移。
  *
  * 2026-10 每网盘独立配置重构：
- * - 每个网盘预设（123pan/ctfile/clouddrive2/migu/…/custom）独立一组
+ * - 每个网盘预设（123pan/ctfile/clouddrive2/cstcloud/infinicloud/jianguoyun/custom）独立一组
  *   `cfg_{pid}_*` 键（server_url / username / password / remote_path / verified / verified_at），
  *   切换预设互不覆盖、互不串号；
  * - **保存语义**：仅「测试连接」成功时由设置页显式调用 [saveAccount] 落盘；
@@ -169,6 +171,7 @@ class CloudSyncPreferences(context: Context) {
                     files = o.optInt("files"),
                     bytes = o.optLong("bytes"),
                     status = o.optString("status", "success"),
+                    error = o.optString("error", ""),
                 )
             }
         }.getOrDefault(emptyList())
@@ -187,6 +190,7 @@ class CloudSyncPreferences(context: Context) {
                     put("files", r.files)
                     put("bytes", r.bytes)
                     put("status", r.status)
+                    put("error", r.error)
                 }
             )
         }
@@ -227,6 +231,22 @@ class CloudSyncPreferences(context: Context) {
 
     /** 当前选中预设的配置（同步链路统一从这里取凭证）。 */
     fun currentAccount(): WebDavAccountConfig = accountFor(providerId)
+
+    /**
+     * 删除指定网盘预设的全部已保存配置（含加密密码），用于「单独删除配置」。
+     * 只清 `cfg_{pid}_*` 六个键，不动全局开关（sync_enabled / auto_backup_* 等）。
+     */
+    fun clearAccount(providerId: String) {
+        val pid = providerId.ifBlank { "custom" }
+        prefs.edit()
+            .remove(CFG_PREFIX + pid + CFG_SERVER_URL)
+            .remove(CFG_PREFIX + pid + CFG_USERNAME)
+            .remove(CFG_PREFIX + pid + CFG_REMOTE_PATH)
+            .remove(CFG_PREFIX + pid + CFG_VERIFIED)
+            .remove(CFG_PREFIX + pid + CFG_VERIFIED_AT)
+            .apply()
+        secrets.removeSecret(CFG_PREFIX + pid + CFG_PASSWORD)
+    }
 
 
         /**

@@ -220,7 +220,15 @@ object MediaQualityUpgrader {
         // 2026-09-16 修复长尾盲区：一次拉全量（LIMIT 2000 覆盖现有库容）再内存过滤已检查，
         // 此前 LIMIT 200 窗口被已检查记录占满后，窗口外候选永不轮到
         val rawCandidates = dao.getQualityUpgradeCandidates(2000)
-        val candidates = rawCandidates.filterNot { tweetIdOf(it) in checkedIds }
+        val candidates = rawCandidates
+            .filterNot { tweetIdOf(it) in checkedIds }
+            // 2026-11-11 源头策略配套收紧：源头已优先最高画质（视频 HLS 路由 + 图片
+            // name=orig 强制原图），新下载几乎总是最优——候选排除「已确认最优」条目
+            // （视频 quality=best 已是 HLS 档 / 图片 quality=original 已是原图），
+            // 不再烧 FXTwitter API 做无谓检测；quality 为空的历史数据保留检测。
+            // 视频 1080p 渐进档保留（仍有 HLS 60fps 升级空间，由 needsHls 判定）。
+            .filterNot { it.mediaType == MediaType.VIDEO && it.quality == "best" }
+            .filterNot { it.mediaType == MediaType.IMAGE && it.quality == "original" }
         if (candidates.isEmpty()) {
             // 空转反馈（仅手动路径发，自动路径静默）：修「点击升级零反应」。
             // 2026-09-16 补 hlsHint：存量全部检测过时恰恰最需要知道 HLS 高画质没跑的原因。
@@ -306,16 +314,17 @@ object MediaQualityUpgrader {
                             return@withPermit
                         }
                         // 有 HLS 高画质源且 mp4 变体不够好 → 走 yt-dlp 拉 HLS 最佳（预算制）。
-                        // 2026-09-16 放宽：低档视频（720p 及以下）+ 用户已配置 Cookie →
-                        // 无条件进 HLS 路径——FXTwitter 的 hasHls 标记经常缺失，而 X 登录态
-                        // 下 yt-dlp 能拉到 1080p HLS（这正是「配了 Cookie 才解锁高画质」的
-                        // 意义）；产物有大小保护（不比原文件大就不替换），失败进 retry。
+                        // 2026-11-11 画质策略升级（对齐源头路由）：配 Cookie（登录态可拉最高档）
+                        // 时，检测到 HLS 流的视频**无条件**尝试 HLS 升级——不再要求远端 mp4
+                        // <2Mbps，1080p 档渐进变体也换 HLS 高帧率；产物有大小保护（不比原文件
+                        // 大就不替换），失败进 retry。hasHls 标记缺失时仍只对低档位尝试
+                        // （避免高码率视频在标记缺失下白跑 yt-dlp）。
+                        val hasCookies = runCatching {
+                            com.ed.edqiu.data.preferences.CookiePreferences(context).hasCookies()
+                        }.getOrDefault(false)
                         val needsHls = entity.mediaType == MediaType.VIDEO && (
-                            (remote.hasHls && remote.bestVideoBitrate < 2_000_000) ||
-                                (entity.quality in LOW_QUALITY_TIERS &&
-                                    runCatching {
-                                        com.ed.edqiu.data.preferences.CookiePreferences(context).hasCookies()
-                                    }.getOrDefault(false))
+                            (remote.hasHls && (remote.bestVideoBitrate < 2_000_000 || hasCookies)) ||
+                                (entity.quality in LOW_QUALITY_TIERS && hasCookies)
                             )
                         val outcome = if (needsHls) {
                             if (hlsBudget.getAndDecrement() <= 0) {

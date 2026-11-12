@@ -120,9 +120,8 @@ private val Muted = Color(0xFF8A8A8E)
 /** 收件箱设置分组标识（二级菜单入口用） */
 object XSection {
     const val APPEARANCE = "appearance"
+    // 2026-11-12 精简：备份与恢复并入存储分区（section=storage），下载行为并入网络分区
     const val STORAGE = "storage"
-    const val BACKUP = "backup"
-    const val CAPTURE = "capture"
     /** 播放与媒体库（2026-10-03 批次F 定案：真双播放器开关在此分区） */
     const val PLAYBACK = "playback"
     // 2026-10-21 设置页合并：原先独立的「下载器设置」页（ui/screens/SettingsScreen）
@@ -147,8 +146,6 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val snackbar = LocalSnackbarController.current
     val monitorUri by settings.monitorDirUriFlow.collectAsStateWithLifecycle(initialValue = null)
-    val autoRetry by settings.autoRetryFlow.collectAsStateWithLifecycle(initialValue = true)
-    val backgroundSync by settings.backgroundSyncFlow.collectAsStateWithLifecycle(initialValue = true)
     // 2026-10-03 批次F 定案：真双播放器开关（默认开；生效还需旗舰硬件，见卡片内说明）
     val dualPlayer by settings.dualPlayerFlow.collectAsStateWithLifecycle(initialValue = true)
     val backupDirUri by backupVm.backupDirUri.collectAsStateWithLifecycle()
@@ -284,7 +281,8 @@ fun SettingsScreen(
         com.ed.edqiu.ui.screens.DownloaderSettingsPage(
             onBack = onBack,
             section = section,
-            onOpenMediaBackup = onOpenMediaBackup
+            onOpenMediaBackup = onOpenMediaBackup,
+            settings = settings
         )
         return
     }
@@ -329,9 +327,7 @@ fun SettingsScreen(
                     Text(
                         text = when (section) {
                             XSection.APPEARANCE -> "外观设置"
-                            XSection.STORAGE -> "存储路径"
-                            XSection.BACKUP -> "备份与恢复"
-                            XSection.CAPTURE -> "下载行为"
+                            XSection.STORAGE -> "存储与备份"
                             XSection.NETWORK -> "网络与认证"
                             XSection.WEBDAV -> "网盘同步"
                             XSection.UPDATE -> "更新与工具"
@@ -345,14 +341,12 @@ fun SettingsScreen(
                     Text(
                         text = when (section) {
                             XSection.APPEARANCE -> "颜色 / 玻璃与底栏 / 玻璃外观 / 显示 / 手势与触感"
-                            XSection.STORAGE -> "下载存储与监控目录"
-                            XSection.BACKUP -> "自动备份开关与导出导入"
-                            XSection.CAPTURE -> "下载重试与后台同步"
-                            XSection.NETWORK -> "代理、Cookie 与第三方解析兜底"
+                            XSection.STORAGE -> "下载存储 · 监控目录 · 数据备份 · 导入导出"
+                            XSection.NETWORK -> "代理、Cookie、第三方解析与下载行为"
                             XSection.WEBDAV -> "WebDAV 连接、双向同步与自动备份"
                             XSection.UPDATE -> "yt-dlp 解析器与 App 版本更新"
                             XSection.ABOUT -> "版本信息与使用说明"
-                            else -> "外观、存储路径、备份与下载行为"
+                            else -> "外观、存储与备份、网络与同步"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -600,10 +594,10 @@ fun SettingsScreen(
         }
         }
 
-        if (section == null || section == XSection.BACKUP) {
+        if (section == null || section == XSection.STORAGE) {
         SectionCard(
             title = "备份与恢复",
-            subtitle = "自动备份开关与导出导入（备份目录在「存储路径」页设置）",
+            subtitle = "自动备份开关与导出导入（备份目录在上方「存储路径」页设置）",
             icon = Icons.Default.Backup
         ) {
             // ── 自动备份（2026-09-28 分组说明化） ──
@@ -659,26 +653,6 @@ fun SettingsScreen(
             }
             lastBackupError?.let {
                 Text("最近错误：$it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        }
-
-        if (section == null || section == XSection.CAPTURE) {
-        SectionCard(
-            title = "下载行为",
-            subtitle = "下载重试与后台同步（监控目录在「存储路径」页设置）",
-            icon = Icons.Default.Sync
-        ) {
-            Text(
-                text = "两项分别控制失败链接的自动重试，与已下载状态的定期核对；目录类设置全部在「存储路径」页配置。",
-                style = MaterialTheme.typography.bodySmall,
-                color = Muted
-            )
-            SwitchRow("下载失败后自动重试", "按退避间隔自动重试失败链接", autoRetry) {
-                scope.launch { settings.setAutoRetry(it) }
-            }
-            SwitchRow("后台更新下载状态", "系统允许时定期扫描监控目录，同步已下载文件", backgroundSync) {
-                scope.launch { settings.setBackgroundSync(it) }
             }
         }
         }
@@ -843,8 +817,10 @@ private fun PrivacyModeOptionRow(
             }
         }
         Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Muted)
+            // 2026-11-11 对比度修复：onBackground/Muted 写死灰在玻璃背景（尤其滚动渐隐带）
+            // 上对比度崩掉，与全页其他行（onSurface/onSurfaceVariant）不匹配——统一主题语义色
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -1551,7 +1527,8 @@ private fun GroupCard(
                     Text(
                         text = description,
                         fontSize = 11.sp,
-                        color = Muted,
+                        // 2026-11-11 对比度修复：写死灰 Muted 在玻璃背景对比不足，统一 onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 15.sp,
                         modifier = Modifier.padding(start = 16.dp, top = 3.dp, end = 16.dp)
                     )

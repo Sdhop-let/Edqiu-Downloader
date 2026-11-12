@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -22,8 +23,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -108,4 +116,88 @@ fun PrivacyGateBox(
             }
         }
     }
+}
+
+/**
+ * 隐私模式模糊容器（无手势版，2026-11-12）：模糊/蒙层逻辑与 [PrivacyGateBox]
+ * 完全一致，但不自带「按住查看」手势——reveal 由外层（如 LinkCard 整卡）统一控制，
+ * 避免卡片内多段文字/缩略图各自挂手势产生嵌套手势竞争。`enabled` 直接表达
+ * 「当前是否应模糊」（已含 reveal 判断，外部传 `隐私模式 && 未按住`）。
+ */
+@Composable
+fun PrivacyBlurBox(
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    fallbackIcon: ImageVector = Icons.Outlined.VisibilityOff,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val legacyMask = enabled && Build.VERSION.SDK_INT < 31
+    Box(modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .privacyBlur(enabled),
+            content = content,
+        )
+        if (legacyMask) {
+            Column(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.86f)),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+            ) {
+                Icon(
+                    imageVector = fallbackIcon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.size(22.dp),
+                )
+                Text(
+                    text = "已隐藏",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 隐私模式文字门控（2026-11-12）：`enabled` 时用占位符替换真实文字，防偷看
+ * （连文字长度都不泄露）；占位符沿用原 [Text] 的样式参数，切换不引起布局跳动。
+ * 真实文字的显隐由外部 reveal 状态控制（`enabled` = 隐私模式 && 未按住查看）。
+ */
+@Composable
+fun PrivacyText(
+    text: String,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+    color: Color = Color.Unspecified,
+    fontSize: TextUnit = TextUnit.Unspecified,
+    fontWeight: FontWeight? = null,
+    fontFamily: FontFamily? = null,
+    lineHeight: TextUnit = TextUnit.Unspecified,
+    maxLines: Int = Int.MAX_VALUE,
+    minLines: Int = 1,
+    overflow: TextOverflow = TextOverflow.Clip,
+    textAlign: TextAlign? = null,
+    placeholder: String = "••••••",
+) {
+    Text(
+        text = if (enabled) placeholder else text,
+        modifier = modifier,
+        style = style,
+        color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f) else color,
+        fontSize = fontSize,
+        fontWeight = fontWeight,
+        fontFamily = fontFamily,
+        lineHeight = lineHeight,
+        maxLines = maxLines,
+        minLines = minLines,
+        overflow = overflow,
+        textAlign = textAlign,
+    )
 }

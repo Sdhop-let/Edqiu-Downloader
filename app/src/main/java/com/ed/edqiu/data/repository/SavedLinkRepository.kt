@@ -215,15 +215,23 @@ class SavedLinkRepository(
                 DownloadRequestResult.Downloaded
             }
             is DownloaderClient.LaunchResult.Failed -> {
-                val nextRetryAt = DownloadRetryPolicy.nextRetryAt(attemptNumber, now)
-                dao.markDownloadFailed(
-                    tweetId = tweetId,
-                    attemptCount = attemptNumber,
-                    attemptedAt = now,
-                    error = result.reason,
-                    nextRetryAt = nextRetryAt
-                )
-                DownloadRequestResult.Failed(result.reason, nextRetryAt)
+                if (result.fromSkip) {
+                    // 2026-11-11 断网死锁修复：本轮没有任何引擎真正执行（熔断/亲和全跳过）
+                    // ——不算真实失败，不烧 attemptCount、不推进退避；条目保持 FAILED +
+                    // 原 next_retry_at，下一轮 retryDueDownloads 继续捞起真探。
+                    dao.markDownloadSkipped(tweetId, now, result.reason)
+                    DownloadRequestResult.Failed(result.reason, null)
+                } else {
+                    val nextRetryAt = DownloadRetryPolicy.nextRetryAt(attemptNumber, now)
+                    dao.markDownloadFailed(
+                        tweetId = tweetId,
+                        attemptCount = attemptNumber,
+                        attemptedAt = now,
+                        error = result.reason,
+                        nextRetryAt = nextRetryAt
+                    )
+                    DownloadRequestResult.Failed(result.reason, nextRetryAt)
+                }
             }
             DownloaderClient.LaunchResult.TweetGone -> {
                 dao.markTweetGone(tweetId, now)

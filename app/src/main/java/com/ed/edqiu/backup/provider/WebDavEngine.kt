@@ -83,6 +83,17 @@ class WebDavEngine(
 
         /** 安全写入文件名前缀（去掉 query / 截断超长），用于日志不暴露敏感。 */
         private fun safeUrlForLog(url: String): String = url.take(160)
+
+        /** 用户名脱敏：保留首 3 字符与域名/后 2 字符，中间掩码（排障可对号又不泄露）。 */
+        private fun maskUsername(username: String): String {
+            if (username.length <= 5) return "***"
+            val at = username.lastIndexOf('@')
+            return if (at > 0 && at < username.length - 1) {
+                username.take(3) + "***" + username.substring(at)
+            } else {
+                username.take(3) + "***" + username.takeLast(2)
+            }
+        }
     }
 
     /** 标准客户端（系统信任链）。 */
@@ -335,35 +346,96 @@ class WebDavEngine(
     }
 
     /**
-     * 连通性探测：OPTIONS 到服务器地址（设置页「测试连接」入口）。
+     * 连通性探测（设置页「测试连接」入口）。
      *
-     * - 2xx/3xx → 服务可用且认证通过；
-     * - 405 → 部分服务器不允许 OPTIONS，但能响应说明服务可达，视为可达；
-     * - 401/403 → 认证失败（抛中文错误提示检查账号密码）；
-     * - 其他 → 服务不可用。
+     * 2026-11-11 真机修复「测试通过却同步 401」：旧实现只发 **OPTIONS 到根 URL**——
+     * 多数 WebDAV 网关对 OPTIONS **匿名放行**（不校验凭据，代码旧注释也承认
+     * 「认证留给后续 MKCOL/PUT 校验」），于是「测试通过」从未真正验证过凭据，
+     * 凭据错误要等同步第一个真请求（MKCOL/PROPFIND）才暴露 401。
+     *
+     * 现为两段式真鉴权探测：
+     * ① OPTIONS 根 URL → 服务可达性（保持兼容；401/403 直接报认证失败）；
+     * ② **PROPFIND Depth:0 到 remotePath 子目录** → 真凭据验证 + 路径级 ACL 覆盖
+     *    （207=通过；404=目录未建——同步的 ensureRemoteDirectories 会 MKCOL 补建，
+     *    不算失败；405=服务器不支持 PROPFIND，退化为仅可达性结论；401/403=认证失败）。
      */
     suspend fun probe(url: String, credential: WebDavCredential): Result<Boolean> = withContext(Dispatchers.IO) {
         runCatchingNotCancelled {
-            val request = buildRequest(url, "OPTIONS", credential)
+            // 2026-11-11 排障日志：凭据摘要（密码只记长度——SecretBox 解密失败会静默返回
+            // 空串，拿空密码发请求恒 401；长度日志可直接区分「凭据空」与「服务端拒绝」）
+            Log.i(
+                TAG,
+                "PROBE 凭据摘要：user=${maskUsername(credential.username)} " +
+                    "pwdLen=${credential.password.length} remotePath=${credential.remotePath} " +
+                    "server=${safeUrlForLog(url)}"
+            )
+            // ① 可达性：OPTIONS 根 URL
+            val optionsCode = executeWithDigestFallback(buildRequest(url, "OPTIONS", credential), credential)
+                .use { it.code }
+            when {
+                optionsCode == 401 || optionsCode == 403 -> {
+                    Log.w(TAG, "PROBE 鉴权失败 HTTP $optionsCode for ${safeUrlForLog(url)}")
+                    throw BackupException("WebDAV 认证失败（HTTP $optionsCode），请检查账号与密码")
+                }
+                optionsCode !in 200..399 && optionsCode != 405 -> {
+                    Log.w(TAG, "PROBE 服务不可用 HTTP $optionsCode for ${safeUrlForLog(url)}")
+                    throw BackupException("WebDAV 服务不可用（HTTP $optionsCode）")
+                }
+            }
+
+            // ② 真鉴权：PROPFIND Depth:0 到 remotePath 子目录（真请求，凭据必经校验）
+            val probeUrl = buildUrl(url, credential.remotePath)
+            val propfindBody = "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
+                "<D:propfind xmlns:D=\"DAV:\"><D:allprop/></D:propfind>"
+            val request = Request.Builder()
+                .url(probeUrl)
+                .method("PROPFIND", propfindBody.toRequestBody("application/xml; charset=utf-8".toMediaType()))
+                .header("Depth", "0")
+                .header("Authorization", basicAuth(credential.username, credential.password))
+                .header("User-Agent", USER_AGENT)
+                .build()
             executeWithDigestFallback(request, credential).use { response ->
                 val code = response.code
                 when {
-                    code in 200..399 -> {
-                        Log.i(TAG, "PROBE OK $code for ${safeUrlForLog(url)}")
+                    code in 200..299 -> {
+                        Log.i(TAG, "PROBE auth OK $code for ${safeUrlForLog(probeUrl)}")
+                        true
+                    }
+                    code == 404 -> {
+                        Log.i(TAG, "PROBE 404（目录未建，同步将自动创建）for ${safeUrlForLog(probeUrl)}")
                         true
                     }
                     code == 405 -> {
-                        // 部分服务器不允许 OPTIONS，但能响应说明服务可达；认证留给后续 MKCOL/PUT 校验
-                        Log.i(TAG, "PROBE 405（服务器不支持 OPTIONS，视为可达）for ${safeUrlForLog(url)}")
+                        Log.i(TAG, "PROBE 405（服务器不支持 PROPFIND，仅可达性结论）for ${safeUrlForLog(probeUrl)}")
                         true
                     }
                     code == 401 || code == 403 -> {
-                        Log.w(TAG, "PROBE 鉴权失败 HTTP $code for ${safeUrlForLog(url)}")
+                        // 2026-11-11 城通网盘排障：子目录 401 有两种可能——凭据真失败，
+                        // 或目录路径问题（部分服务器对不存在/无权路径也回 401）。回探根目录
+                        // 区分：根 207 = 凭据有效，报路径问题；根也 401 = 真认证失败。
+                        Log.w(TAG, "PROBE 子目录鉴权失败 HTTP $code，回探根目录区分归属")
+                        val rootCode = executeWithDigestFallback(
+                            Request.Builder()
+                                .url(url)
+                                .method("PROPFIND", propfindBody.toRequestBody("application/xml; charset=utf-8".toMediaType()))
+                                .header("Depth", "0")
+                                .header("Authorization", basicAuth(credential.username, credential.password))
+                                .header("User-Agent", USER_AGENT)
+                                .build(),
+                            credential,
+                        ).use { it.code }
+                        if (rootCode in 200..299) {
+                            Log.w(TAG, "PROBE 根目录 $rootCode 通过 → 凭据有效，问题在路径 ${credential.remotePath}")
+                            throw BackupException(
+                                "凭据有效，但远程目录「${credential.remotePath}」不可访问（HTTP $code）——请检查目录名/权限"
+                            )
+                        }
+                        Log.w(TAG, "PROBE 根目录也 $rootCode → 真认证失败（pwdLen=${credential.password.length}）")
                         throw BackupException("WebDAV 认证失败（HTTP $code），请检查账号与密码")
                     }
                     else -> {
-                        Log.w(TAG, "PROBE 服务不可用 HTTP $code for ${safeUrlForLog(url)}")
-                        throw BackupException("WebDAV 服务不可用（HTTP $code）")
+                        Log.w(TAG, "PROBE 服务异常 HTTP $code for ${safeUrlForLog(probeUrl)}")
+                        throw BackupException("WebDAV 服务异常（HTTP $code），请检查地址")
                     }
                 }
             }

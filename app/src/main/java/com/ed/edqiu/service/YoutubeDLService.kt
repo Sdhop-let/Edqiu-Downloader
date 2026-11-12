@@ -60,6 +60,10 @@ object YoutubeDLService {
                 addOption("-f", formatId)
                 addOption("-o", outputPath)
                 addOption("--newline")
+                // 2026-11-11 提速：X 视频 HLS 自适应流是数百个分片，yt-dlp 默认串行拉取
+                // （一次 1 个 fragment），高延迟代理线路上吞吐被 RTT 串行化——这是
+                // 「网络良好但下载极慢」的主因之一。开 8 并发分片，网页播放器同款策略。
+                addOption("--concurrent-fragments", "8")
                 addOption("--socket-timeout", "30") // 单个 socket 操作 30s 失败，防半开连接永久挂起
                 if (playlistIndex != null) {
                     addOption("--playlist-items", playlistIndex.toString())
@@ -119,6 +123,54 @@ object YoutubeDLService {
     }
 
     /**
+     * 视频格式实证探测（2026-11-11 HLS 路由 B1 漏报兜底）：
+     * `--dump-single-json` 让 yt-dlp 解析 x.com 页面拿**全部真实格式**（渐进 mp4 各档 +
+     * HLS 自适应各档，每档带一手 height/fps/tbr），只探测不下载。
+     *
+     * 用途：FXTwitter 的 hasHls 是字符串级弱信号（URL 含 .m3u8 才置真，漏报高发）——
+     * 漏报时此处兜底实证：探测到的最高 video 档显著高于渐进 mp4 基准（60fps/更高分辨率）
+     * 才路由 yt-dlp，否则直下 mp4 零损耗。
+     */
+    suspend fun probeVideoFormats(
+        url: String,
+        proxyUrl: String? = null,
+        cookieFilePath: String? = null,
+    ): Result<org.json.JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val request = YoutubeDLRequest(url).apply {
+                addOption("--dump-single-json")
+                addOption("--no-warnings")
+                addOption("--socket-timeout", "30")
+                if (proxyUrl != null) addOption("--proxy", proxyUrl)
+                if (cookieFilePath != null) addOption("--cookies", cookieFilePath)
+            }
+            // 探测应秒级完成；仍挂看门狗防半开连接挂死订阅/下载队列（同 getFlatPlaylistIds 模式）
+            val pid = UUID.randomUUID().toString()
+            val startedAt = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+            val watchdog = launch {
+                while (true) {
+                    delay(STALL_CHECK_INTERVAL_MS)
+                    val idleMs = System.currentTimeMillis() - startedAt.get()
+                    if (idleMs > STALL_TIMEOUT_MS) {
+                        Log.w(TAG, "格式探测停滞 ${idleMs / 60000}min，强杀进程（pid=$pid）")
+                        runCatching { YoutubeDL.getInstance().destroyProcessById(pid) }
+                        return@launch
+                    }
+                }
+            }
+            val result = try {
+                YoutubeDL.getInstance().execute(request, pid)
+            } finally {
+                watchdog.cancel()
+            }
+            Result.success(parseDumpJson(result.out))
+        } catch (e: Exception) {
+            Log.e(TAG, "probeVideoFormats error for $url", e)
+            Result.failure(translateLinkerFailure(e))
+        }
+    }
+
+    /**
      * Cancel an ongoing download by process ID.
      */
     fun cancelDownload(processId: String) {
@@ -132,17 +184,48 @@ object YoutubeDLService {
     /**
      * Update yt-dlp binary to latest version.
      * No proxy needed 鈥?this only updates the yt-dlp binary itself.
+     *
+     * 2026-11-11 真机实测修复：更新器（库内 YoutubeDLUpdater → URL.openStream → jackson）
+     * **不走 App 显式代理**，直连 GitHub —— 墙内 TLS 握手被重置（实测
+     * `SSLHandshakeException: connection closed`，用户 Clash 分应用模式不覆盖此连接）。
+     * 注入 JVM 级代理属性让 openStream 走 App 配置的代理（Clash），finally 恢复原值。
+     * 注入窗口内无参 openConnection() 的直连路径会短暂跟随代理——更新是低频单发操作，
+     * 窗口数秒，可接受。
      */
     suspend fun updateYoutubeDL(context: Context): Result<String> = withContext(Dispatchers.IO) {
+        val proxySettings = com.ed.edqiu.data.preferences.ProxyPreferences(context).getProxySettings()
+        val props: Map<String, String>? = if (proxySettings.enabled) {
+            if (proxySettings.type == com.ed.edqiu.data.model.ProxySettings.TYPE_SOCKS5) {
+                mapOf(
+                    "socksProxyHost" to proxySettings.host,
+                    "socksProxyPort" to proxySettings.port.toString(),
+                )
+            } else {
+                mapOf(
+                    "http.proxyHost" to proxySettings.host,
+                    "http.proxyPort" to proxySettings.port.toString(),
+                    "https.proxyHost" to proxySettings.host,
+                    "https.proxyPort" to proxySettings.port.toString(),
+                )
+            }
+        } else null
+        val previous = props?.mapValues { System.getProperty(it.key) }
         try {
-            val status = YoutubeDL.getInstance().updateYoutubeDL(
-                context,
-                com.yausername.youtubedl_android.YoutubeDL.UpdateChannel.STABLE
-            )
-            Result.success(status?.name ?: "Updated successfully")
-        } catch (e: Exception) {
-            Log.e(TAG, "updateYoutubeDL error", e)
-            Result.failure(e)
+            props?.forEach { (k, v) -> System.setProperty(k, v) }
+            try {
+                val status = YoutubeDL.getInstance().updateYoutubeDL(
+                    context,
+                    com.yausername.youtubedl_android.YoutubeDL.UpdateChannel.STABLE
+                )
+                Result.success(status?.name ?: "Updated successfully")
+            } catch (e: Exception) {
+                Log.e(TAG, "updateYoutubeDL error", e)
+                Result.failure(e)
+            }
+        } finally {
+            previous?.forEach { (k, v) ->
+                if (v == null) System.clearProperty(k) else System.setProperty(k, v)
+            }
         }
     }
 

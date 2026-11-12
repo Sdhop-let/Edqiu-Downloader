@@ -69,6 +69,10 @@ class InternalMediaDownloader(private val context: Context) {
         allowHlsRouting: Boolean = true,
         // 2026-11-07 审计修复：true = 只下图片（混合推文视频被 yt-dlp 拿走后补图专用）
         skipVideos: Boolean = false,
+        // 2026-11-11：Bus 任务 ID 前缀（默认 xinvox_）。混合推文后台补拉图片传 "bgimg"，
+        // 使补拉任务不进收件箱聚合正则——补拉期间（fire-and-forget 5-30s）卡片已由
+        // DB 的 DOWNLOADED 状态接管，xinvox 任务在场会把聚合拉回 99% 误导用户
+        taskPrefix: String = "xinvox",
     ): Result<List<DownloadedFile>> = withContext(Dispatchers.IO) {
         runCatching {
             val tweetId = TweetIdExtractor.fromUrl(rawUrl)
@@ -93,10 +97,12 @@ class InternalMediaDownloader(private val context: Context) {
             val media = if (skipVideos) allMedia.filter { it.kind == "image" } else allMedia
             if (media.isEmpty()) error("推文中没有可下载的视频或图片")
 
-            // 2026-09-15 源头画质优化 → 2026-10-25 放宽（对齐 MediaQualityUpgrader 语义）：
-            // 旧条件 = hasHls && <2Mbps——FXTwitter 的 HLS 标记经常缺失，大量 ≤720p 视频先落盘
-            // 低清文件、再靠后台升级器二次下载（重复流量+等待）。现对齐升级器的激进档：
-            // 已配置 X Cookie（登录态可拉 1080p HLS）时，最高 mp4 <2Mbps 即直接转 yt-dlp 一次到位。
+            // 2026-11-11 画质策略升级：X 的 HLS 自适应流码率/帧率恒 ≥ 渐进 mp4（网页端清晰、
+            // App 内模糊的根源）。旧策略仅「mp4 <2Mbps」才路由 yt-dlp，1080p 档渐进变体
+            // （≥2Mbps）永远直下 mp4 错过 HLS 高帧率。现放宽：用户已配置 X Cookie（登录态
+            // 可拉最高档 HLS）→ 所有含 HLS 流的视频默认路由 yt-dlp 一次到位；
+            // 未配 Cookie 保持保守（无登录态拉不到高档 HLS，直下 mp4 即无登录最佳）。
+            // yt-dlp 已开 --concurrent-fragments 8 并发分片，「HLS 慢」不再是理由。
             // 守卫：仅含视频的推文路由（纯图片推文无流可拉）；16KB 页机型 ffmpeg 不可用不路由；
             // 调用方 allowHlsRouting=false 时跳过（回退通道专用）
             val (maxMp4Bitrate, hasHls) = analyzeVariants(tweet)
@@ -108,13 +114,32 @@ class InternalMediaDownloader(private val context: Context) {
                 ?.is16kPageDevice == true
             // 2026-11-07 审计修复：码率解析不到（=0）≠ 低码率——旧实现 0 < 2M 恒真 +
             // cookieBoost 使配 Cookie 用户的所有视频（包括本已高码率的）都绕道 yt-dlp
-            // 白跑一遍。码率已知且低才走 cookieBoost 路由；纯 HLS（解析不到任何 mp4 变体）仍路由
-            val bitrateKnownAndLow = maxMp4Bitrate in 1..1_999_999
-            val hlsOnly = hasHls && maxMp4Bitrate == 0
-            if (allowHlsRouting && hasVideoMedia && !is16kPage &&
-                (bitrateKnownAndLow || hlsOnly) && (hasHls || cookieBoost)
-            ) {
+            // 白跑一遍。现语义反转（Cookie 登录态=画质优先）：hasHls 存在时，
+            // 码率已知且低（<2Mbps，含 0=纯 HLS）→ 无 Cookie 也路由；
+            // 配了 Cookie → 无条件路由（拉 HLS 最高帧率/码率档）
+            val shouldRouteHls = hasVideoMedia && !is16kPage && hasHls &&
+                (maxMp4Bitrate <= 1_999_999 || cookieBoost)
+            if (allowHlsRouting && shouldRouteHls) {
                 throw HlsBetterSourceException(maxMp4Bitrate, uploader)
+            }
+            // 2026-11-11 B1 漏报兜底：hasHls=false = FXTwitter 漏报高发区（旧逻辑此场景
+            // 「低码率+Cookie 盲赌路由」，09-16 定案；高码率+漏报则永远直下 1080p30 mp4，
+            // 错过 HLS 60fps / Premium+ 2160p）。主用户 Cookie 恒配置 → 此场景让 yt-dlp
+            // 实证探测一次真实格式表（height/fps/tbr 一手值）：存在显著高于渐进 mp4 基准
+            // 的 video 档（10% 容差过滤同档噪声）才路由，探测失败/无增益 → 直下 mp4 零损耗。
+            if (allowHlsRouting && !shouldRouteHls && hasVideoMedia && !is16kPage && cookieBoost) {
+                val probedBestBps = probeYtdlpBestBitrate(normalizedUrl)
+                if (probedBestBps != null &&
+                    probedBestBps > maxMp4Bitrate * 1.1 &&
+                    probedBestBps > 0
+                ) {
+                    Log.i(
+                        TAG,
+                        "漏报兜底路由：FXTwitter 未报 m3u8，yt-dlp 实测最高档 $probedBestBps bps " +
+                            "> 渐进基准 $maxMp4Bitrate bps，转 yt-dlp 拉 HLS（tweet=$tweetId）"
+                    )
+                    throw HlsBetterSourceException(maxMp4Bitrate, uploader)
+                }
             }
 
             val outputDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
@@ -135,7 +160,7 @@ class InternalMediaDownloader(private val context: Context) {
                 val filename = sanitize("${uploader}_${tweetId}_${mediaIndex}_${item.kind}_${item.quality}.${item.ext}")
                 val target = File(outputDir, filename)
                 val task = DownloadTask(
-                    id = "xinvox_${tweetId}_$mediaIndex",
+                    id = "${taskPrefix}_${tweetId}_$mediaIndex",
                     url = normalizedUrl,
                     title = caption ?: normalizedUrl,
                     thumbnail = localCover ?: item.thumbnail ?: item.url,
@@ -248,6 +273,44 @@ class InternalMediaDownloader(private val context: Context) {
         return maxBitrate to hasHls
     }
 
+    /**
+     * yt-dlp 实证探测（2026-11-11 B1 漏报兜底）：FXTwitter 报了视频但没报 m3u8 时，
+     * 让 yt-dlp 解析一次 x.com 页面拿全部真实格式（`--dump-single-json`，只探测不下载），
+     * 返回最高 video 档的码率（bps）。yt-dlp 的 tbr 单位 kbit/s，×1000 换算后与
+     * FXTwitter 的 bitrate（bps）口径对齐。
+     *
+     * 探测失败（网络/解析异常/无 video 格式）返回 null → 调用方直下 mp4 零损耗。
+     * Cookie 文件用完即删（同 ytdlpFallback 纪律）。
+     */
+    private suspend fun probeYtdlpBestBitrate(url: String): Int? {
+        val cookiePreferences = com.ed.edqiu.data.preferences.CookiePreferences(context)
+        val cookieFile = if (cookiePreferences.hasCookies()) {
+            com.ed.edqiu.service.YoutubeDLService.writeCookieFile(
+                context, cookiePreferences.getAuthToken(), cookiePreferences.getCt0()
+            )
+        } else null
+        return try {
+            val proxyUrl = com.ed.edqiu.data.preferences.ProxyPreferences(context)
+                .getProxySettings().toProxyUrl()
+            val json = com.ed.edqiu.service.YoutubeDLService.probeVideoFormats(url, proxyUrl, cookieFile)
+                .getOrNull() ?: return null
+            val formats = json.optJSONArray("formats") ?: return null
+            var bestKbps = 0.0
+            (0 until formats.length()).forEach { i ->
+                val f = formats.optJSONObject(i) ?: return@forEach
+                // vcodec=none 是纯音频流，不参与画质对比
+                if (f.optString("vcodec", "none") == "none") return@forEach
+                bestKbps = maxOf(bestKbps, f.optDouble("tbr", 0.0))
+            }
+            if (bestKbps <= 0.0) null else (bestKbps * 1000).toInt()
+        } catch (e: Exception) {
+            Log.w(TAG, "yt-dlp 格式探测失败（漏报兜底跳过，直下 mp4）: $url", e)
+            null
+        } finally {
+            cookieFile?.let { runCatching { File(it).delete() } }
+        }
+    }
+
     private fun extractMedia(tweet: JSONObject): List<MediaItem> {        val mediaObject = tweet.optJSONObject("media") ?: JSONObject()
         val candidates = buildList {
             addAll(mediaObject.optObjects("videos"))
@@ -288,7 +351,10 @@ class InternalMediaDownloader(private val context: Context) {
                 val key = imageUrl.substringBefore("?")
                 if (!seen.add(key)) return@mapNotNull null
                 return@mapNotNull MediaItem(
-                    url = imageUrl,
+                    // 2026-11-11 源头画质补齐：图片 URL 强制 name=orig（原图，无压缩参数）——
+                    // 视频侧已做 HLS 优先路由，图片侧此前的 URL 可能带 CDN 压缩参数，
+                    // 源头策略在图片侧是半成品
+                    url = toOrigImageUrl(imageUrl),
                     thumbnail = imageUrl,
                     ext = inferImageExtension(imageUrl),
                     quality = "original",
@@ -300,47 +366,267 @@ class InternalMediaDownloader(private val context: Context) {
     }
 
     /**
-     * 媒体文件下载（2026-09-14 网络路径优化）：
-     * 1. 64KB 缓冲流（原为默认 8KB 拷贝，小缓冲是慢速首因之一）；
-     * 2. 断点续传：下载写 .part 临时文件，中断后凭 Range 头续传，失败自动重试 2 次；
-     * 3. 进度回写 DownloadTaskBus（300ms 节流），下载中列表可见实时进度；
-     * 4. 服务器不支持 Range 时（HTTP 200）自动降级为全量重下。
+     * 媒体文件下载（2026-11-11 重构：多线程分段并行）：
+     * 1. 磁盘满预检 + 旧版整文件 .part 兼容（升级前残留走原单流续传收尾）；
+     * 2. Range 探测：206 响应解析远端总大小，≥8MB 自动拆段并行下载（见 downloadParallel）；
+     * 3. 小文件 / 不支持 Range / 探测失败 → 单流路径（64KB 缓冲 + .part 断点续传 + 2 次重试）；
+     * 4. 进度统一 300ms 节流回写 DownloadTaskBus。
      */
-    /** 共享原语（internal）：可断点续传的媒体文件下载，第三方兜底引擎复用。 */
+    /** 共享原语（internal）：媒体文件下载入口，第三方兜底引擎复用。 */
     internal fun downloadFile(url: String, target: File, proxy: ProxySettings?, taskId: String? = null) {
-        val part = File(target.parentFile, target.name + ".part")
-        val maxAttempts = 2
-        // 2026-11-07 审计修复：磁盘满预检——旧实现零处理，ENOSPC 表现为晦涩 IOException
-        // 且 .part 残留继续占空间、每次重试先写两次注定失败的 IO
         val dir = target.parentFile
         if (dir != null && dir.usableSpace in 1 until MIN_FREE_SPACE_BYTES) {
             error("存储空间不足（剩余不足 64MB），请清理存储后重试")
         }
+        // 旧版整文件 .part（升级前遗留）：按原单流续传逻辑收尾，保持兼容
+        if (File(dir, target.name + ".part").exists()) {
+            downloadSingleStream(url, target, proxy, taskId)
+            return
+        }
+        val totalBytes = probeRemoteSize(url, proxy)
+        if (totalBytes != null && totalBytes >= SPLIT_MIN_BYTES) {
+            downloadParallel(url, target, proxy, taskId, totalBytes)
+        } else {
+            downloadSingleStream(url, target, proxy, taskId)
+        }
+    }
+
+    /** 构建带代理的 GET 连接（共享原语）：Edqiu UA + 15s 连接 / 30s 读超时 + 跟随重定向。 */
+    private fun openConnection(url: String, proxy: ProxySettings?): HttpURLConnection {
+        val proxyObj = proxy?.toJavaProxy()
+        val connection = if (proxyObj != null) {
+            URL(url).openConnection(proxyObj) as HttpURLConnection
+        } else {
+            // 无代理时必须用无参 openConnection()，传 null 在部分 Android 版本会抛 "proxy can not be null"
+            URL(url).openConnection() as HttpURLConnection
+        }
+        connection.requestMethod = "GET"
+        connection.setRequestProperty("User-Agent", "Edqiu/1.0")
+        connection.connectTimeout = 15_000
+        connection.readTimeout = 30_000
+        connection.instanceFollowRedirects = true
+        return connection
+    }
+
+    /**
+     * Range 探测：发 `Range: bytes=0-0`，响应 206 时从 Content-Range 解析远端总大小
+     * （分段并行可用）；200（服务器不认 Range）/ 异常 / 未知大小 → 返回 null 走单流。
+     * 探测失败不阻断下载，只降级路径。
+     */
+    private fun probeRemoteSize(url: String, proxy: ProxySettings?): Long? {
+        val connection = openConnection(url, proxy)
+        return try {
+            connection.setRequestProperty("Range", "bytes=0-0")
+            when (connection.responseCode) {
+                HttpURLConnection.HTTP_PARTIAL ->
+                    parseContentRangeTotal(connection.getHeaderField("Content-Range"))
+                else -> null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Range 探测失败，降级单流下载：$url", e)
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /** 从 Content-Range 头（"bytes 0-0/12345"）解析总大小；未知（`*`）或非法返回 null。 */
+    private fun parseContentRangeTotal(header: String?): Long? {
+        if (header == null) return null
+        return header.substringAfterLast('/', "").trim().toLongOrNull()?.takeIf { it > 0 }
+    }
+
+    /**
+     * 多线程分段并行下载（2026-11-11 提速：单 TCP 流经代理吞吐受限，跨境高延迟链路
+     * 单流往往只有几百 KB/s；X CDN 支持并发 Range 连接——网页播放器本就多连接拉分片）。
+     * - 线程数按文件大小自动分配：8-32MB → 3 段，32-128MB → 4 段，≥128MB → 6 段；
+     * - 每段独立连接 + `Range: bytes=start-end` 写独立段文件 `<target>.p<i>`，段级断点续传；
+     * - 段响应必须 206（探测过支持 Range）；416 = 段残留越界 → 清段重下；
+     * - 任一段 2 次重试后仍失败 → 保留全部段文件抛错，下轮重试只补缺段；
+     * - 全部段完成 → 校验段长 → 顺序拼接为 .part → rename 转正（下载完成前 target 不存在，
+     *   保持「完成即落位」原子性）；拼接/校验失败删 .part 保留段文件供续传。
+     */
+    private fun downloadParallel(
+        url: String,
+        target: File,
+        proxy: ProxySettings?,
+        taskId: String?,
+        totalBytes: Long
+    ) {
+        val dir = target.parentFile
+        val threads = when {
+            totalBytes >= 128L * 1024 * 1024 -> 6
+            totalBytes >= 32L * 1024 * 1024 -> 4
+            else -> 3
+        }
+        val segSize = totalBytes / threads
+        val segFiles = (0 until threads).map { i -> File(dir, target.name + ".p$i") }
+        val segments = (0 until threads).map { i ->
+            val start = i * segSize
+            val end = if (i == threads - 1) totalBytes - 1 else (i + 1) * segSize - 1
+            Triple(i, start, end)
+        }
+        // 续传基线：已有段文件按其长度计入（超长段按段长封顶，写循环内自纠）
+        val totalWritten = java.util.concurrent.atomic.AtomicLong(
+            segments.sumOf { (_, start, end) ->
+                val i = ((start / segSize).toInt()).coerceAtMost(threads - 1)
+                segFiles[i].length().coerceAtMost(end - start + 1)
+            }
+        )
+        val lastReportAt = java.util.concurrent.atomic.AtomicLong(0L)
+
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(threads)
+        try {
+            val futures = segments.map { (i, start, end) ->
+                pool.submit {
+                    downloadSegment(url, segFiles[i], start, end, proxy, taskId, totalWritten, lastReportAt, totalBytes)
+                }
+            }
+            try {
+                futures.forEach { it.get() }
+            } catch (e: java.util.concurrent.ExecutionException) {
+                // 段失败：保留全部段文件抛原异常，交由调用方 FAILED → 自动重试续传补缺
+                throw e.cause ?: e
+            }
+        } finally {
+            pool.shutdownNow()
+        }
+
+        // 全部段完成：校验段长 → 拼接 → 转正
+        segments.forEach { (i, start, end) ->
+            val segLen = end - start + 1
+            val segFile = segFiles[i]
+            if (!segFile.exists() || segFile.length() != segLen) {
+                error("分段 ${segFile.name} 不完整（${if (segFile.exists()) segFile.length() else -1}/$segLen）")
+            }
+        }
+        val merged = File(dir, target.name + ".part")
+        var mergedOk = false
+        try {
+            java.io.FileOutputStream(merged).use { out ->
+                segFiles.forEach { seg ->
+                    seg.inputStream().use { it.copyTo(out, 128 * 1024) }
+                }
+            }
+            if (merged.length() != totalBytes) {
+                error("拼接总字节 ${merged.length()} ≠ 远端 $totalBytes")
+            }
+            if (target.exists()) target.delete()
+            if (!merged.renameTo(target)) {
+                merged.copyTo(target, overwrite = true)
+                merged.delete()
+            }
+            mergedOk = true
+            Log.i(TAG, "分段并行下载完成：${target.name}（$threads 线程，$totalBytes 字节）")
+        } finally {
+            if (mergedOk) {
+                segFiles.forEach { runCatching { it.delete() } }
+            } else {
+                runCatching { merged.delete() }
+            }
+        }
+    }
+
+    /** 单段下载（段级断点续传 + 2 次重试 + 取消检查），供 downloadParallel 的线程池调用。 */
+    private fun downloadSegment(
+        url: String,
+        segFile: File,
+        segStart: Long,
+        segEnd: Long,
+        proxy: ProxySettings?,
+        taskId: String?,
+        totalWritten: java.util.concurrent.atomic.AtomicLong,
+        lastReportAt: java.util.concurrent.atomic.AtomicLong,
+        totalBytes: Long
+    ) {
+        val segLen = segEnd - segStart + 1
+        var lastError: Throwable? = null
+        for (attempt in 1..2) {
+            try {
+                if (segFile.exists() && segFile.length() > segLen) segFile.delete() // 异常残留重下
+                val resumed = if (segFile.exists()) segFile.length() else 0L
+                if (resumed >= segLen) return // 段已完成（上轮写满）
+                val connection = openConnection(url, proxy)
+                try {
+                    connection.setRequestProperty("Range", "bytes=${segStart + resumed}-$segEnd")
+                    val code = connection.responseCode
+                    if (code == 416) {
+                        // 段起点越界（残留偏移异常）→ 清段重下，耗一次重试额度
+                        Log.w(TAG, "HTTP 416 段续传越界（seg=${segStart + resumed}），清段重下：${segFile.name}")
+                        segFile.delete()
+                        error("HTTP 416 段续传越界")
+                    }
+                    if (code != HttpURLConnection.HTTP_PARTIAL) {
+                        error("分段下载段响应 HTTP $code（必须 206）")
+                    }
+                    connection.inputStream.use { raw ->
+                        java.io.BufferedInputStream(raw, 128 * 1024).use { input ->
+                            java.io.FileOutputStream(segFile, true).use { output ->
+                                val buffer = ByteArray(128 * 1024)
+                                var written = resumed
+                                while (written < segLen) {
+                                    if (taskId != null && DownloadCancellation.isCancelled(taskId)) {
+                                        throw DownloadCancelledException()
+                                    }
+                                    val want = (segLen - written).coerceAtMost(buffer.size.toLong()).toInt()
+                                    val read = input.read(buffer, 0, want)
+                                    if (read == -1) break
+                                    output.write(buffer, 0, read)
+                                    written += read
+                                    totalWritten.addAndGet(read.toLong())
+                                    reportProgress(taskId, totalWritten.get(), totalBytes, lastReportAt)
+                                }
+                            }
+                        }
+                    }
+                    return
+                } finally {
+                    connection.disconnect()
+                }
+            } catch (e: DownloadCancelledException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e
+                Log.w(TAG, "段下载中断（第 $attempt 次）seg=${segFile.name} 已有 ${segFile.length()}/$segLen 字节，将续传", e)
+            }
+        }
+        throw lastError ?: error("分段下载失败")
+    }
+
+    /** 分段并行进度回写：全局 300ms 节流（CAS 抢占式，多段并发只取一个写者）。 */
+    private fun reportProgress(
+        taskId: String?,
+        written: Long,
+        totalBytes: Long,
+        lastReportAt: java.util.concurrent.atomic.AtomicLong
+    ) {
+        if (taskId == null || totalBytes <= 0) return
+        val now = System.currentTimeMillis()
+        val last = lastReportAt.get()
+        if (now - last > 300 && lastReportAt.compareAndSet(last, now)) {
+            DownloadTaskBus.updateTask(taskId) {
+                it.copy(progress = (written.toFloat() / totalBytes * 100f).coerceIn(0f, 99f))
+            }
+        }
+    }
+
+    /** 单流下载（原逻辑保留）：64KB 缓冲 + 整文件 .part 断点续传 + 2 次重试 + 200 降级全量重下。 */
+    private fun downloadSingleStream(url: String, target: File, proxy: ProxySettings?, taskId: String?) {
+        val part = File(target.parentFile, target.name + ".part")
+        val maxAttempts = 2
         var lastError: Throwable? = null
         for (attempt in 1..maxAttempts) {
             try {
                 val resumedBytes = if (part.exists()) part.length() else 0L
-                val proxyObj = proxy?.toJavaProxy()
-                val connection = if (proxyObj != null) {
-                    URL(url).openConnection(proxyObj) as HttpURLConnection
-                } else {
-                    // 无代理时必须用无参 openConnection()，传 null 在部分 Android 版本会抛 "proxy can not be null"
-                    URL(url).openConnection() as HttpURLConnection
-                }
-                connection.requestMethod = "GET"
-                connection.setRequestProperty("User-Agent", "Edqiu/1.0")
-                // 续传请求：只取未下载部分（CDN twimg 普遍支持 Range）
-                if (resumedBytes > 0L) {
-                    connection.setRequestProperty("Range", "bytes=$resumedBytes-")
-                }
-                connection.connectTimeout = 15_000
-                connection.readTimeout = 30_000
-                connection.instanceFollowRedirects = true
+                val connection = openConnection(url, proxy)
                 try {
+                    // 续传请求：只取未下载部分（CDN twimg 普遍支持 Range）
+                    if (resumedBytes > 0L) {
+                        connection.setRequestProperty("Range", "bytes=$resumedBytes-")
+                    }
                     val code = connection.responseCode
-                    // 2026-11-07 审计修复：.part ≥ 远端文件（远端被较小版本替换/上轮落位
-                    // 失败残留）→ Range 起点越界 416，旧实现两次重试全 416 永久失败且
-                    // .part 永不修复。清零重下（耗一次重试额度，第二次从 0 全量下载）
+                    // .part ≥ 远端文件（远端被较小版本替换/上轮落位失败残留）→ Range 起点越界
+                    // 416，两次重试全 416 永久失败且 .part 永不修复。清零重下（耗一次重试额度）
                     if (code == 416 && resumedBytes > 0L) {
                         Log.w(TAG, "HTTP 416（.part=$resumedBytes ≥ 远端），清零重下：$url")
                         part.delete()
@@ -393,7 +679,7 @@ class InternalMediaDownloader(private val context: Context) {
                 // 取消不重试、不覆盖 lastError 语义，直接上抛
                 throw e
             } catch (e: Exception) {
-                // 2026-11-07 审计修复：ENOSPC 翻译为用户可读文案（原文晦涩且每次重试无意义）
+                // ENOSPC 翻译为用户可读文案（原文晦涩且每次重试无意义）
                 lastError = if (e.message?.contains("ENOSPC", ignoreCase = true) == true ||
                     e.message?.contains("No space left", ignoreCase = true) == true
                 ) {
@@ -503,6 +789,13 @@ class InternalMediaDownloader(private val context: Context) {
         return if (ext in IMAGE_EXTENSIONS) ext else "jpg"
     }
 
+    /** pbs.twimg.com 图片 URL 换 name=orig（原图，无 CDN 压缩参数）；已带 name 则替换。 */
+    private fun toOrigImageUrl(url: String): String = when {
+        url.contains("name=") -> url.substringBefore("name=") + "name=orig"
+        url.contains("?") -> "$url&name=orig"
+        else -> "$url?name=orig"
+    }
+
     private fun bitrateToQuality(bitrate: Int): String = when {
         bitrate >= 2_000_000 -> "1080p"
         bitrate >= 832_000 -> "720p"
@@ -528,6 +821,9 @@ class InternalMediaDownloader(private val context: Context) {
 
         /** 下载前磁盘最低水位（2026-11-07 审计修复：磁盘满预检）。 */
         private const val MIN_FREE_SPACE_BYTES = 64L * 1024L * 1024L
+
+        /** 分段并行下载的文件大小门槛（2026-11-11 提速）：小于此值单流下载（建 3+ 连接不划算）。 */
+        private const val SPLIT_MIN_BYTES = 8L * 1024L * 1024L
         private val VIDEO_TYPES = setOf("video", "gif", "animated_gif")
         private val IMAGE_TYPES = setOf("photo", "image")
         private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif")

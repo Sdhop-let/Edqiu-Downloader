@@ -147,11 +147,27 @@ object WebDavSyncService {
                         throw BackupException("请先填写 WebDAV 地址、账号和密码，并测试连接通过")
                     }
                     val engine = sharedEngine(prefs)
+                    // 2026-11-12 根治：城通 WebDAV 地址（dav.ctfile.com/ws*）本身就是工作空间根，
+                    // 任何子路径（含中文）一律 401（与密码错误同码）。历史配置可能残留非空
+                    // remotePath，首个 MKCOL 即 401 → 整轮 0 文件失败。此处对城通强制忽略
+                    // remotePath，直接同步进根目录。
+                    // ⚠️ 已知边界：若历史 remotePath 非空（如曾存的「edqiu备份渠道」），其下
+                    // 已同步文件不在根目录，切空后会被重复上传到根——需手动迁移历史子目录。
+                    val effectiveRemotePath =
+                        if (prefs.providerId == "ctfile") "" else account.remotePath
                     val credential = WebDavCredential(
                         serverUrl = account.serverUrl,
                         username = account.username,
                         password = account.password,
-                        remotePath = account.remotePath.ifBlank { "Edqiu" },
+                        remotePath = effectiveRemotePath,
+                    )
+                    // 2026-11-11 排障：凭据摘要（密码只记长度）——区分「解密失败空密码」
+                    // 与「服务端拒绝」；401 归属判定配合 WebDavEngine.PROBE 的根目录回探
+                    android.util.Log.i(
+                        "WebDavSyncService",
+                        "SYNC 凭据摘要：pwdLen=${credential.password.length} " +
+                            "user=${credential.username.take(3)}*** remote=${credential.remotePath} " +
+                            "server=${account.serverUrl.take(48)}"
                     )
 
                     engine.ensureRemoteDirectories(credential).getOrElse { throw it }
@@ -185,6 +201,9 @@ object WebDavSyncService {
     /**
      * 平坦化远端名（全链路唯一派生口径：上传 / 下载落位 / 对账）。
      * 子目录文件 = 「目录前缀_文件名」（`a/b/c.mp4` → `a_b_c.mp4`），根目录文件保持原名。
+     *
+     * ⚠️ 已知边界：目录名与文件名均含下划线时可能碰撞（`a/b_c.mp4` vs `a_b/c.mp4`
+     * 均 → `a_b_c.mp4`），属低概率已知限制；未改分隔符以避免历史已同步文件全量重传。
      */
     fun remoteNameFor(root: File, file: File): String {
         val rel = file.parentFile?.relativeToOrNull(root)?.invariantSeparatorsPath

@@ -4,6 +4,7 @@ import com.ed.edqiu.ui.util.pressableNoRipple
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -65,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 import com.ed.edqiu.data.model.LinkStatus
 import com.ed.edqiu.data.model.SavedLink
 import com.ed.edqiu.ui.components.FeedbackDialog
@@ -74,6 +77,8 @@ import com.ed.edqiu.ui.components.GlassSurface
 import com.ed.edqiu.ui.components.GlassTier
 import com.ed.edqiu.ui.components.StatusBadge
 import com.ed.edqiu.ui.navigation.LocalSnackbarController
+import com.ed.edqiu.ui.privacy.LocalPrivacyBlur
+import com.ed.edqiu.ui.privacy.PrivacyText
 import com.ed.edqiu.ui.util.copyToClipboard
 import com.ed.edqiu.ui.util.formatRelativeTime
 import com.ed.edqiu.ui.util.openTwitterProfile
@@ -115,6 +120,12 @@ fun DetailScreen(
     }
 
     val data = link
+
+    // 隐私模式（2026-11-12）：详情页文字与收件箱同规则——按住任意位置临时显示，松开恢复。
+    val privacyActive = LocalPrivacyBlur.current
+    var reveal by remember { mutableStateOf(false) }
+    val hideText = privacyActive && !reveal
+
     FeedbackDialog(message = downloadErrorDialog, onDismiss = { downloadErrorDialog = null })
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -134,7 +145,28 @@ fun DetailScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                // 隐私模式：整页按住显示文字（仅 onPress，不消费子元素的点击/长按）
+                .pointerInput(privacyActive) {
+                    if (privacyActive) {
+                        detectTapGestures(
+                            onPress = {
+                                // 长按 3 秒才显示（避免滑动/轻触瞬时露字）；满 3 秒后保持显示直到松开
+                                try {
+                                    delay(3000L)
+                                    reveal = true
+                                    try {
+                                        awaitRelease()
+                                    } finally {
+                                        reveal = false
+                                    }
+                                } finally {
+                                    reveal = false
+                                }
+                            }
+                        )
+                    }
+                },
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             DetailTopBar(
@@ -145,7 +177,8 @@ fun DetailScreen(
                 downloadProgress = downloadProgress[data.tweetId],
                 onOpenProfile = { handle ->
                     if (!openTwitterProfile(context, handle)) snackbar.show("无法打开作者主页", kind = FeedbackKind.ERROR)
-                }
+                },
+                privacyEnabled = hideText
             )
 
             MediaPreview(data = data)
@@ -153,7 +186,7 @@ fun DetailScreen(
             // 视频/图片预览下方的文案（视频资源显示其推文文案，长文案可折叠）
             if (!data.caption.isNullOrBlank()) {
                 InfoCard(title = "文案") {
-                    CollapsibleCaption(caption = data.caption)
+                    CollapsibleCaption(caption = data.caption, privacyEnabled = hideText)
                 }
             }
 
@@ -161,7 +194,8 @@ fun DetailScreen(
                 data = data,
                 onOpenProfile = { handle ->
                     if (!openTwitterProfile(context, handle)) snackbar.show("无法打开作者主页", kind = FeedbackKind.ERROR)
-                }
+                },
+                privacyEnabled = hideText
             )
 
             RecordsCard(data = data)
@@ -175,7 +209,8 @@ fun DetailScreen(
                 onOpenTwitter = {
                     val success = openTwitterStatus(context, data.tweetId)
                     if (!success) snackbar.show("无法打开 X/Twitter", kind = FeedbackKind.ERROR)
-                }
+                },
+                privacyEnabled = hideText
             )
 
             Spacer(Modifier.height(16.dp))
@@ -192,7 +227,8 @@ private fun DetailTopBar(
     downloading: Boolean,
     // 实时下载百分比（0..99）：下载中且有进度时按钮显示数字替代纯转圈
     downloadProgress: Int? = null,
-    onOpenProfile: (String) -> Unit
+    onOpenProfile: (String) -> Unit,
+    privacyEnabled: Boolean = false
 ) {
     val authorName = data.authorName ?: data.authorId ?: "未知作者"
     Row(
@@ -213,7 +249,7 @@ private fun DetailTopBar(
                 .fillMaxHeight()
                 .then(
                     if (data.authorId != null) {
-                        Modifier.pressableNoRipple { onOpenProfile(data.authorId!!) }
+                        Modifier.pressableNoRipple { onOpenProfile(data.authorId) }
                     } else Modifier
                 ),
             contentAlignment = Alignment.Center
@@ -222,8 +258,9 @@ private fun DetailTopBar(
                 shape = RoundedCornerShape(18.dp),
                 color = MaterialTheme.colorScheme.primary
             ) {
-                Text(
+                PrivacyText(
                     text = authorName,
+                    enabled = privacyEnabled,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onPrimary,
@@ -343,7 +380,7 @@ private fun MediaPreview(data: SavedLink) {
 
 /** 作者卡片：头像 + 名称/推特 ID + 主页简介，最右侧为主页跳转按钮。 */
 @Composable
-private fun AuthorCard(data: SavedLink, onOpenProfile: (String) -> Unit) {
+private fun AuthorCard(data: SavedLink, onOpenProfile: (String) -> Unit, privacyEnabled: Boolean = false) {
     val handle = data.authorId
     GlassSurface(
         tier = GlassTier.L1,
@@ -368,16 +405,18 @@ private fun AuthorCard(data: SavedLink, onOpenProfile: (String) -> Unit) {
                 Avatar(data = data)
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text(
+                PrivacyText(
                     text = data.authorName ?: handle ?: "未知作者",
+                    enabled = privacyEnabled,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(
+                PrivacyText(
                     text = handle?.let { "@$it" } ?: "推文 ${data.tweetId.takeLast(8)}",
+                    enabled = privacyEnabled,
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
@@ -387,8 +426,9 @@ private fun AuthorCard(data: SavedLink, onOpenProfile: (String) -> Unit) {
                 // 作者主页简介（fxtwitter 提供，尽力而为）
                 if (!data.authorBio.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(
+                    PrivacyText(
                         text = data.authorBio,
+                        enabled = privacyEnabled,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 3,
@@ -530,7 +570,8 @@ private fun SnapshotTimeCell(label: String, value: String, modifier: Modifier = 
 private fun OriginalLinkCard(
     data: SavedLink,
     onCopy: () -> Unit,
-    onOpenTwitter: () -> Unit
+    onOpenTwitter: () -> Unit,
+    privacyEnabled: Boolean = false
 ) {
     InfoCard(title = "原始链接") {
         Row(
@@ -543,8 +584,9 @@ private fun OriginalLinkCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             SelectionContainer(modifier = Modifier.weight(1f)) {
-                Text(
+                PrivacyText(
                     text = data.rawUrl,
+                    enabled = privacyEnabled,
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
@@ -575,9 +617,13 @@ private fun OriginalLinkCard(
 
 /** 长文案可折叠：默认收起到 3 行，点击「展开/收起」切换，带高度过渡动画。 */
 @Composable
-private fun CollapsibleCaption(caption: String) {
+private fun CollapsibleCaption(caption: String, privacyEnabled: Boolean = false) {
     var expanded by remember { mutableStateOf(false) }
     var overflowing by remember { mutableStateOf(false) }
+    // 隐私模式复位：松开恢复隐藏时，折叠/展开判定回到初始，避免「展开」按钮残留
+    LaunchedEffect(privacyEnabled) {
+        if (privacyEnabled) overflowing = false
+    }
     val style = MaterialTheme.typography.bodyLarge.copy(
         lineHeight = 26.sp,
         lineHeightStyle = LineHeightStyle(
@@ -593,13 +639,14 @@ private fun CollapsibleCaption(caption: String) {
         Column {
             SelectionContainer {
                 Text(
-                    text = caption,
+                    text = if (privacyEnabled) "••••••" else caption,
                     style = style,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = if (privacyEnabled) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        else MaterialTheme.colorScheme.onSurface,
                     maxLines = if (expanded) Int.MAX_VALUE else 1,
                     overflow = if (expanded) TextOverflow.Clip else TextOverflow.Ellipsis,
                     onTextLayout = { layout ->
-                        if (!expanded) overflowing = layout.hasVisualOverflow
+                        if (!expanded && !privacyEnabled) overflowing = layout.hasVisualOverflow
                     }
                 )
             }

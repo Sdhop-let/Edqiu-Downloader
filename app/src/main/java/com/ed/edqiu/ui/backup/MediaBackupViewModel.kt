@@ -310,7 +310,8 @@ class MediaBackupViewModel(
                 serverUrl = account.serverUrl,
                 username = account.username,
                 password = account.password,
-                remotePath = account.remotePath.ifBlank { "Edqiu" },
+                // 2026-11-12 城通地址即工作空间根，子路径一律 401；对账与同步保持一致
+                remotePath = if (cloudSyncPreferences.providerId == "ctfile") "" else account.remotePath,
             )
             // 远端清单（PROPFIND Depth:1，忽略 .edqiu-part 暂存）
             val remoteFiles = engine.listDirectory(

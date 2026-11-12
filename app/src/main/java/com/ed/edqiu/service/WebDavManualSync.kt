@@ -122,6 +122,7 @@ object WebDavManualSync {
                             files = 0,
                             bytes = 0L,
                             status = "failed",
+                            error = error.message ?: "未知错误",
                         )
                     )
                     _state.value = State.Failed(error.message ?: "未知错误")
