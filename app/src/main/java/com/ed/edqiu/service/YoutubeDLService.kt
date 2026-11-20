@@ -15,6 +15,9 @@ object YoutubeDLService {
 
     private const val TAG = "YoutubeDLService"
 
+    /** 随 APK 内置的 yt-dlp 版本（library 0.18.1 载荷，审计实测 2025.11.12 构建）。 */
+    private const val BUNDLED_ENGINE_VERSION = "2025.11.12（随 APK 内置分发）"
+
     /**
      * 进度停滞判定（2026-11-07 审计修复）：yt-dlp 的 execute 是阻塞调用，协程取消无法
      * 中断它——慢速/半开连接下可数小时无进展，任务永久卡 DOWNLOADING（retryDueDownloads
@@ -219,47 +222,32 @@ object YoutubeDLService {
      * No proxy needed 鈥?this only updates the yt-dlp binary itself.
      *
      * 2026-11-11 真机实测修复：更新器（库内 YoutubeDLUpdater → URL.openStream → jackson）
-     * **不走 App 显式代理**，直连 GitHub —— 墙内 TLS 握手被重置（实测
-     * `SSLHandshakeException: connection closed`，用户 Clash 分应用模式不覆盖此连接）。
-     * 注入 JVM 级代理属性让 openStream 走 App 配置的代理（Clash），finally 恢复原值。
-     * 注入窗口内无参 openConnection() 的直连路径会短暂跟随代理——更新是低频单发操作，
-     * 窗口数秒，可接受。
+     * **不走 App 显式代理**，直连 GitHub —— 墙内 TLS 握手被重置；JVM 系统属性注入在
+     * Android 连接栈上不可靠（AppUpdateService 同日结论，弃用该方案）。
+     *
+     * 2026-11-21 轻云控重写：改走 [YtdlpEngineUpdater]（自写双通道 updater——
+     * ① 显式 Proxy 对象直连 GitHub API/资产；② 失败回退 gh-proxy.com 镜像直连），
+     * 落点/版本账本与库内 updater 完全同键（noBackupFilesDir/youtubedl-android/yt-dlp +
+     * SharedPreferences dlpVersion/dlpVersionName）。自救热修与手动「立即更新」共用此入口。
+     *
+     * @return 新版本号；已最新返回当前版本号（调用方仅做日志/清熔断，不区分）。
      */
-    suspend fun updateYoutubeDL(context: Context): Result<String> = withContext(Dispatchers.IO) {
-        val proxySettings = com.ed.edqiu.data.preferences.ProxyPreferences(context).getProxySettings()
-        val props: Map<String, String>? = if (proxySettings.enabled) {
-            if (proxySettings.type == com.ed.edqiu.data.model.ProxySettings.TYPE_SOCKS5) {
-                mapOf(
-                    "socksProxyHost" to proxySettings.host,
-                    "socksProxyPort" to proxySettings.port.toString(),
-                )
-            } else {
-                mapOf(
-                    "http.proxyHost" to proxySettings.host,
-                    "http.proxyPort" to proxySettings.port.toString(),
-                    "https.proxyHost" to proxySettings.host,
-                    "https.proxyPort" to proxySettings.port.toString(),
-                )
-            }
-        } else null
-        val previous = props?.mapValues { System.getProperty(it.key) }
-        try {
-            props?.forEach { (k, v) -> System.setProperty(k, v) }
-            try {
-                val status = YoutubeDL.getInstance().updateYoutubeDL(
-                    context,
-                    com.yausername.youtubedl_android.YoutubeDL.UpdateChannel.STABLE
-                )
-                Result.success(status?.name ?: "Updated successfully")
-            } catch (e: Exception) {
-                Log.e(TAG, "updateYoutubeDL error", e)
-                Result.failure(e)
-            }
-        } finally {
-            previous?.forEach { (k, v) ->
-                if (v == null) System.clearProperty(k) else System.setProperty(k, v)
+    suspend fun updateYoutubeDL(context: Context): Result<String> =
+        YtdlpEngineUpdater.update(context, YtdlpEngineUpdater.Channel.STABLE).map { outcome ->
+            when (outcome) {
+                is YtdlpEngineUpdater.Outcome.Updated -> {
+                    Log.i(TAG, "yt-dlp engine updated to ${outcome.version} (viaMirror=${outcome.viaMirror})")
+                    outcome.version
+                }
+                YtdlpEngineUpdater.Outcome.AlreadyUpToDate ->
+                    YtdlpEngineUpdater.currentVersion(context) ?: "already-up-to-date"
             }
         }
+
+    /** 当前 yt-dlp 引擎版本（库账本；未更新过 = 随 APK 内置的 2025.11 构建）。 */
+    fun engineVersion(context: Context): String {
+        val cloud = YtdlpEngineUpdater.currentVersion(context)
+        return cloud ?: BUNDLED_ENGINE_VERSION
     }
 
     /**

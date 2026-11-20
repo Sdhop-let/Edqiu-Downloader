@@ -105,6 +105,7 @@ import com.ed.edqiu.service.WebDavManualSync
 import com.ed.edqiu.service.WebDavSyncPhase
 import com.ed.edqiu.service.WebDavSyncProgress
 import com.ed.edqiu.service.YoutubeDLService
+import com.ed.edqiu.service.YtdlpEngineUpdater
 import com.ed.edqiu.backup.provider.WebDavEngine
 import com.ed.edqiu.backup.provider.WebDavCredential
 import com.ed.edqiu.data.preferences.WebDavAccountConfig
@@ -158,6 +159,10 @@ fun DownloaderSettingsPage(
 
     var updateStatus by remember { mutableStateOf<String?>(null) }
     var isUpdatingYtdlp by remember { mutableStateOf(false) }
+    // 2026-11-21 轻云控：yt-dlp 引擎独立更新（库账本读版本；未更新过显示内置版本）
+    var engineVersionText by remember {
+        mutableStateOf("当前版本 ${YoutubeDLService.engineVersion(context)}")
+    }
     var appUpdateInfo by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var isCheckingAppUpdate by remember { mutableStateOf(false) }
     var isDownloadingAppUpdate by remember { mutableStateOf(false) }
@@ -328,6 +333,40 @@ fun DownloaderSettingsPage(
                     )
                 }
             isCheckingAppUpdate = false
+        }
+    }
+
+    /**
+     * yt-dlp 引擎独立更新（2026-11-21 轻云控）：双通道自动回退——
+     * ① 代理直连 GitHub（用户常开代理）；② gh-proxy.com 镜像直连。
+     * 落点/版本账本与库内 updater 同键，更新对下次下载立即生效（进行中的下载用旧进程不受影响）。
+     */
+    fun updateYtdlpEngine() {
+        if (isUpdatingYtdlp) return
+        scope.launch {
+            isUpdatingYtdlp = true
+            YtdlpEngineUpdater.update(context, YtdlpEngineUpdater.Channel.STABLE)
+                .onSuccess { outcome ->
+                    engineVersionText = "当前版本 ${YoutubeDLService.engineVersion(context)}"
+                    inlineFeedback = when (outcome) {
+                        is YtdlpEngineUpdater.Outcome.Updated -> FeedbackMessage(
+                            "yt-dlp 引擎已更新到 ${outcome.version}" +
+                                "（${if (outcome.viaMirror) "镜像" else "代理"}通道），下次下载生效",
+                            FeedbackKind.SUCCESS
+                        )
+                        YtdlpEngineUpdater.Outcome.AlreadyUpToDate -> FeedbackMessage(
+                            "yt-dlp 引擎已是最新（${YoutubeDLService.engineVersion(context)}）",
+                            FeedbackKind.NEUTRAL
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    inlineFeedback = FeedbackMessage(
+                        "yt-dlp 引擎更新失败：${e.message ?: "网络异常"}",
+                        FeedbackKind.ERROR
+                    )
+                }
+            isUpdatingYtdlp = false
         }
     }
 
@@ -616,18 +655,20 @@ fun DownloaderSettingsPage(
             if (section == null || section == DlSection.UPDATE) {
             item {
                 SectionCard(title = "", subtitle = "", icon = Icons.Outlined.SystemUpdate) {
-                    // 2026-11-11 定案：yt-dlp 更新按钮移除。上游 fork（JunkFood02/youtubedl-android）
-                    // **没有任何 release**——库内更新器（YoutubeDLUpdater）拉一个必然 404 的地址，
-                    // 设计性失败（真机日志：failed to update youtube-dl / SSLHandshake 是墙的噪声，
-                    // 连上了也是 404）。Maven Central 0.18.1 已是终版，其内置 yt-dlp 为 2025-11
-                    // 构建（支持 2160p/1080p60），**随 APK 内置分发**，App 更新即 yt-dlp 更新。
+                    // 2026-11-21 轻云控：yt-dlp 引擎支持独立更新。随包库 0.18.1 内置
+                    // 2025.11 构建 zipapp；库 init 仅在二进制缺失时释放，云端更新的版本
+                    // 重启保留（反编译实证）。双通道自动回退：代理直连 GitHub → gh-proxy
+                    // 镜像，与 App 更新检查同构。
+                    // 旧「按钮移除」定案（2026-11-11）基于当时旧库「拉必然 404」的结论——
+                    // 0.18.1 起库内更新器已指向 yt-dlp 官方 releases/latest（天天发版），
+                    // 该结论不再成立，恢复入口并改为自研双通道更新器。
                     ActionRow(
                         title = "yt-dlp 引擎版本",
-                        subtitle = "v0.18.1（随 App 内置分发，已支持 2160p/1080p60，无需单独更新）",
+                        subtitle = engineVersionText,
                         icon = Icons.Outlined.Download,
-                        busy = false,
-                        actionText = "内置",
-                        onClick = { }
+                        busy = isUpdatingYtdlp,
+                        actionText = if (isUpdatingYtdlp) "更新中" else "立即更新",
+                        onClick = { updateYtdlpEngine() }
                     )
                     HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color(0xFFE2E8F0))
                     ActionRow(

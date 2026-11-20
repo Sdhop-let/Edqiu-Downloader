@@ -167,6 +167,9 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.xerial:sqlite-jdbc:3.41.2.2")
+    // 2026-11-21：org.json 真实现——android.jar 的 org.json 是 throw-stub，
+    // JVM 单测解析 JSON（YtdlpEngineUpdater.parseRelease 等）必须用真库
+    testImplementation("org.json:json:20240303")
 
     androidTestImplementation("androidx.test:core-ktx:1.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
