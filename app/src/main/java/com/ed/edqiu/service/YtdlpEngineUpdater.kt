@@ -25,8 +25,9 @@ import java.net.URL
  * ① 代理通道：显式 Proxy 对象直连 GitHub（用户都开着代理，与 yt-dlp `--proxy` 同款通道）；
  * ② 镜像通道：gh-proxy.com 前缀直连（国内可达），失败才有它。
  *
- * 校验：zipapp 完整性下限（≥1MB + "PK" 头，yt-dlp release 资产是 zip 容器）；
- * SHA256 校验属完全云控（C 档，自建清单）范畴，本档不引入。
+ * 校验：zipapp 完整性（≥1MB 下限 + shebang/zip 头 + GitHub 元数据 size 精确一致——
+ * 2026-11-21 机器直测：`yt-dlp` 资产 3,073,072 字节，头两字节为 `#!` 的 zipapp）；
+ * SHA256 校验属完全云控（C 档，自建清单）范畴，本档以 size 一致性 + 双通道兜底。
  */
 object YtdlpEngineUpdater {
 
@@ -48,7 +49,9 @@ object YtdlpEngineUpdater {
         val versionName: String,
         val downloadUrl: String,
         /** 镜像直链（gh-proxy 前缀同一资产）。 */
-        val downloadMirrorUrl: String
+        val downloadMirrorUrl: String,
+        /** 资产精确字节数（GitHub 元数据）：下载后长度必须一致（防截断/污染，强于魔数校验）。 */
+        val assetSize: Long = 0L
     )
 
     private const val MIRROR_PREFIX = "https://gh-proxy.com/"
@@ -125,7 +128,7 @@ object YtdlpEngineUpdater {
                         viaMirror = true
                     }
 
-                    validateBinary(tmp)
+                    validateBinary(tmp, release.assetSize)
 
                     // 原子落位：同目录 tmp → rename（进程被杀不落半截二进制）
                     val dir = File(appContext.noBackupFilesDir, BASE_DIR_NAME)
@@ -170,10 +173,12 @@ object YtdlpEngineUpdater {
         val assets = json.optJSONArray("assets")
             ?: throw IllegalStateException("远端 release 缺少 assets")
         var url: String? = null
+        var size = 0L
         for (i in 0 until assets.length()) {
             val asset = assets.optJSONObject(i) ?: continue
             if (asset.optString("name") == YTDLP_BIN_NAME) {
                 url = asset.optString("browser_download_url").takeIf { it.isNotBlank() }
+                size = asset.optLong("size", 0L)
                 break
             }
         }
@@ -182,7 +187,8 @@ object YtdlpEngineUpdater {
             version = tag.removePrefix("v"),
             versionName = json.optString("name").ifBlank { tag },
             downloadUrl = downloadUrl,
-            downloadMirrorUrl = "$MIRROR_PREFIX$downloadUrl"
+            downloadMirrorUrl = "$MIRROR_PREFIX$downloadUrl",
+            assetSize = size
         )
     }
 
@@ -200,16 +206,28 @@ object YtdlpEngineUpdater {
         return false
     }
 
-    /** zipapp 完整性下限：长度 + "PK"（zip 容器）魔数。 */
-    private fun validateBinary(file: File) {
+    /**
+     * zipapp 完整性校验：
+     * - 长度下限（防列表文本/空响应）；
+     * - 头部为 zipapp 合法形态之一——`#!`（shebang + 内嵌 zip，GitHub `yt-dlp` 资产
+     *   实测形态，2026-11-21 机器直测 3,073,072 字节头两字节即 `#!`）或 `PK`（纯 zip）；
+     *   旧实现只认 "PK" 会把正常 zipapp 拒掉（实测抓出）；
+     * - assetSize > 0 时长度必须精确一致（GitHub 元数据，强于魔数——截断/镜像污染全拦）。
+     */
+    internal fun validateBinary(file: File, expectedSize: Long = 0L) {
         require(file.isFile && file.length() >= MIN_BINARY_BYTES) {
             "下载产物过小（${file.length()} 字节），疑似截断或错误内容"
         }
+        if (expectedSize > 0) {
+            require(file.length() == expectedSize) {
+                "下载产物长度（${file.length()}）≠ GitHub 元数据（$expectedSize），疑似截断或被污染"
+            }
+        }
         val head = ByteArray(2)
         file.inputStream().use { it.read(head) }
-        require(head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte()) {
-            "下载产物不是 zip 容器（yt-dlp zipapp），疑似被劫持或返回了错误内容"
-        }
+        val isZipapp = head[0] == '#'.code.toByte() && head[1] == '!'.code.toByte()
+        val isZip = head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte()
+        require(isZipapp || isZip) { "下载产物不是 yt-dlp zipapp/zip 形态，疑似被劫持或返回了错误内容" }
     }
 
     /**
