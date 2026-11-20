@@ -1,15 +1,17 @@
 # GitHub Release 自动发版（2026-09-30 起；2026-10-07 起支持正式签名）：
-# 推送 v* tag → GitHub 服务器构建 APK → 创建 Release 并上传资产。
+# 推送 tag → GitHub 服务器构建 APK → 创建 Release 并上传资产。
 # 本地无需访问 api.github.com（发版动作全部在 GitHub 侧执行）。
 # 签名：仓库 Secrets 配置 SIGNING_KEYSTORE_BASE64 等四项时构建正式签名包
 #（可覆盖安装到已装用户）；未配置时回退 debug 签名包（仅适合全新安装）。
-# 约定：tag 名 = 版本号（v1.7.0），必须与 app/build.gradle.kts 的 versionName 一致；
+# 约定：tag 名 = 版本号（v1.7.0 / vE-0.1.2），须与 app/build.gradle.kts 的 versionName 一致；
+# 例外：补丁 tag（如 E0.1.2fix，2026-11-21 起）允许与 versionName 不同——用于在
+# 不 bump 版本的前提下把 tag 后追加的修复/功能重出同一版本号的安装包（覆盖安装兼容）。
 # Release 说明自动取 docs/ 下最新的 RELEASE_NOTES-*.md（保证文档与 APK 同步）。
 name: Release
 
 on:
   push:
-    tags: [ 'v*' ]
+    tags: [ 'v*', 'E*' ]
 
 permissions:
   contents: write

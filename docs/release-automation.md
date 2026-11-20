@@ -29,6 +29,9 @@ CI 按仓库 Secrets 是否配置签名凭据走双模式：
    versionCode = 103
    versionName = "E-0.1.3"
    ```
+   例外：**补丁 tag**（如 `E0.1.2fix`，workflow 自 2026-11-21 起同时接受 `v*` 与 `E*`）——
+   用于把 tag 后追加的修复/功能在**不 bump 版本**的前提下重出同一 versionCode 的安装包
+   （与前一 tag 包覆盖安装兼容；注意：应用内更新检查对补丁 tag 不弹提示，需手动下载）。
 
 2. **写本版说明**：新建 `docs/RELEASE_NOTES-<版本号>.md`。
    CI 取 `docs/RELEASE_NOTES-*.md` 中**版本号最大**的一份作为 Release 正文，因此文件名必须与 tag 一致。
