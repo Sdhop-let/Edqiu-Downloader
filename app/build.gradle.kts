@@ -44,8 +44,9 @@ android {
         // 2026-11-12 E-0.1.0：版本体系重置（1.x → E-0.x 新纪元）。versionCode 自 100 起，
         // 后续 E-0.1.1 → 101、E-0.1.2 → 102（每小版本 +1）。
         // 支持范围定案仅 Android 13+（minSdk 33，见 defaultConfig 顶部注释）
-        versionCode = 100
-        versionName = "E-0.1.0"
+        // 2026-11-20 E-0.1.1：下载进度回弹根治 + 下载前视频源选型 + 隐私长按状态机修复 + 构建链升级
+        versionCode = 101
+        versionName = "E-0.1.1"
 
         // 2026-09-15：只保留 arm64-v8a（Android 16/17 手机端均为 arm64），APK 从 225.9MB 降至约 80MB；
         // ffmpeg/yt-dlp 功能完整保留，x86 系模拟器不再支持
