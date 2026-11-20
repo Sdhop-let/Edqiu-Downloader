@@ -12,7 +12,7 @@ import com.ed.edqiu.data.model.SavedLink
 
 @Database(
     entities = [SavedLink::class, DeletedLinkHistory::class],
-    version = 11,
+    version = 12,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -192,6 +192,22 @@ abstract class EdqiuDatabase : RoomDatabase() {
             "ALTER TABLE saved_links ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"
         )
 
+        /**
+         * 2026-11-21（v12）：deleted_link_history 加 origin 列——回收站快照此前丢失来源线，
+         * 订阅作品删除→恢复后错落用户收件箱（双线隔离被打破：进错页、重试风暴走错线、
+         * 订阅页消失）。存量快照默认 user（与旧行为一致）；备份模型同步补 origin 字段
+         * （旧备份 JSON 无字段时 kotlinx 取默认值，向后兼容）。
+         */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_11_12_SQL.forEach(db::execSQL)
+            }
+        }
+
+        val MIGRATION_11_12_SQL = listOf(
+            "ALTER TABLE deleted_link_history ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"
+        )
+
         fun getDatabase(context: Context): EdqiuDatabase {
             return INSTANCE ?: synchronized(lock) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -201,7 +217,7 @@ abstract class EdqiuDatabase : RoomDatabase() {
                 ).addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                    MIGRATION_9_10, MIGRATION_10_11
+                    MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
                 )
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .build()

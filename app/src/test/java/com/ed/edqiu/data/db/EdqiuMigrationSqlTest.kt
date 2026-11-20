@@ -89,6 +89,56 @@ class EdqiuMigrationSqlTest {
         }
     }
 
+    /** 2026-11-21 v12：deleted_link_history 补 origin 列——回收站快照保留来源线，
+     *  订阅作品删除→恢复后归位订阅页（双线隔离），存量快照默认 user。 */
+    @Test
+    fun migrationAddsOriginToDeletedLinkHistory() {
+        val dbFile = Files.createTempFile("edqiu-deleted-origin-migration-", ".db")
+        try {
+            DriverManager.getConnection("jdbc:sqlite:${dbFile.toAbsolutePath()}").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute(CREATE_VERSION_11_DELETED_HISTORY)
+                    statement.execute(
+                        """
+                        INSERT INTO deleted_link_history (
+                            archive_id, tweet_id, raw_url, saved_at, status, attempt_count, deleted_at, deletion_reason
+                        ) VALUES (
+                            'arch-1',
+                            '1234567890123456789',
+                            'https://x.com/i/status/1234567890123456789',
+                            1000,
+                            'DOWNLOADED',
+                            0,
+                            2000,
+                            'user-delete'
+                        )
+                        """.trimIndent()
+                    )
+                    EdqiuDatabase.MIGRATION_11_12_SQL.forEach(statement::execute)
+                }
+
+                val columns = mutableSetOf<String>()
+                connection.createStatement().use { statement ->
+                    statement.executeQuery("PRAGMA table_info(deleted_link_history)").use { result ->
+                        while (result.next()) columns += result.getString("name")
+                    }
+                }
+                assertTrue("origin 列应存在", columns.contains("origin"))
+
+                connection.createStatement().use { statement ->
+                    statement.executeQuery(
+                        "SELECT origin FROM deleted_link_history WHERE archive_id = 'arch-1'"
+                    ).use { result ->
+                        assertTrue(result.next())
+                        assertEquals("user", result.getString("origin"))
+                    }
+                }
+            }
+        } finally {
+            Files.deleteIfExists(dbFile)
+        }
+    }
+
     /** 2026-10 v9：saved_links 补 (status, next_retry_at) 复合索引，重试轮询不再全表扫描。 */
     @Test
     fun migrationAddsRetryIndexToSavedLinks() {
@@ -188,6 +238,34 @@ class EdqiuMigrationSqlTest {
                 file_path TEXT,
                 downloaded_at INTEGER,
                 PRIMARY KEY(tweetId)
+            )
+            """
+
+        /** v11 形态的回收站快照表（无 origin 列，MIGRATION_11_12_SQL 的迁移起点）。 */
+        const val CREATE_VERSION_11_DELETED_HISTORY =
+            """
+            CREATE TABLE IF NOT EXISTS deleted_link_history (
+                archive_id TEXT NOT NULL,
+                tweet_id TEXT NOT NULL,
+                raw_url TEXT NOT NULL,
+                author_id TEXT,
+                author_name TEXT,
+                caption TEXT,
+                thumbnail_url TEXT,
+                avatar_url TEXT,
+                author_bio TEXT,
+                published_at INTEGER,
+                saved_at INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                file_path TEXT,
+                downloaded_at INTEGER,
+                attempt_count INTEGER NOT NULL,
+                last_attempt_at INTEGER,
+                last_error TEXT,
+                next_retry_at INTEGER,
+                deleted_at INTEGER NOT NULL,
+                deletion_reason TEXT NOT NULL,
+                PRIMARY KEY(archive_id)
             )
             """
     }

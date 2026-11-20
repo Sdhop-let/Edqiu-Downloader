@@ -16,7 +16,7 @@ import com.ed.edqiu.data.model.MediaType
         SubscriptionEntity::class,
         SubscriptionMessageEntity::class,
     ],
-    version = 18,
+    version = 17,
     exportSchema = false
 )
 @TypeConverters(AppDatabase.Converters::class)
@@ -330,19 +330,6 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        /**
-         * 2026-11-21（v18）：deleted_link_history 加 origin 列——回收站快照此前丢失来源线，
-         * 订阅作品删除→恢复后错落用户收件箱（双线隔离被打破）。存量快照默认 user（与
-         * 旧行为一致），备份模型同步补 origin 字段（旧备份 JSON 无字段时取默认值）。
-         */
-        private val MIGRATION_17_18 = object : Migration(17, 18) {
-            override fun migrate(database: SupportSQLiteDatabase) {
-                database.execSQL(
-                    "ALTER TABLE `deleted_link_history` ADD COLUMN `origin` TEXT NOT NULL DEFAULT 'user'"
-                )
-            }
-        }
-
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -354,8 +341,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                     MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
-                    MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
-                    MIGRATION_17_18
+                    MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17
                 )
                 // 2026-10 安全整改：移除 fallbackToDestructiveMigration()——
                 // 升级路径 schema 漂移时它会把整库（下载历史/任务/订阅）静默删除重建。
