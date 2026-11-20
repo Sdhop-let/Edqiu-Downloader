@@ -28,16 +28,17 @@ import java.util.Locale
  */
 class TweetGoneException(message: String) : Exception(message)
 
-/**
- * 源推文只有低码率 mp4 变体（<2Mbps）但存在 HLS 高画质自适应流。
- * 下载层收到该异常后转交 yt-dlp 引擎拉取 HLS 最佳画质（2026-09-15 源头画质优化：
- * 避免先落盘低清 mp4 再靠后台升级，X 网页清晰而 App 内模糊的根源即在此）。
- */
+/** 已有部分成品时保留原下载任务，重试仅补缺项，禁止跨引擎重下整条推文。 */
+class PartialMediaDownloadException(message: String) : Exception(message)
+
+/** 下载前确认存在更高画质格式，交给 yt-dlp 按固定格式下载。 */
 class HlsBetterSourceException(
     val maxMp4Bitrate: Int,
     // 2026-10-25：携带作者 handle——ytdlpFallback 据此把产物重命名回 App 规约名
     val uploader: String = "unknown",
-) : Exception("检测到 HLS 高画质流（mp4 最高仅 ${maxMp4Bitrate}bps）")
+    val formatSelector: String = "bestvideo+bestaudio/best",
+    val streamCount: Int = 2,
+) : Exception("检测到下载前已确认的更高画质视频源")
 
 /**
  * 引擎一：FXTwitter 直连下载器。
@@ -97,50 +98,14 @@ class InternalMediaDownloader(private val context: Context) {
             val media = if (skipVideos) allMedia.filter { it.kind == "image" } else allMedia
             if (media.isEmpty()) error("推文中没有可下载的视频或图片")
 
-            // 2026-11-11 画质策略升级：X 的 HLS 自适应流码率/帧率恒 ≥ 渐进 mp4（网页端清晰、
-            // App 内模糊的根源）。旧策略仅「mp4 <2Mbps」才路由 yt-dlp，1080p 档渐进变体
-            // （≥2Mbps）永远直下 mp4 错过 HLS 高帧率。现放宽：用户已配置 X Cookie（登录态
-            // 可拉最高档 HLS）→ 所有含 HLS 流的视频默认路由 yt-dlp 一次到位；
-            // 未配 Cookie 保持保守（无登录态拉不到高档 HLS，直下 mp4 即无登录最佳）。
-            // yt-dlp 已开 --concurrent-fragments 8 并发分片，「HLS 慢」不再是理由。
-            // 守卫：仅含视频的推文路由（纯图片推文无流可拉）；16KB 页机型 ffmpeg 不可用不路由；
-            // 调用方 allowHlsRouting=false 时跳过（回退通道专用）
-            val (maxMp4Bitrate, hasHls) = analyzeVariants(tweet)
-            val hasVideoMedia = media.any { it.kind != "image" }
-            val cookieBoost = runCatching {
-                com.ed.edqiu.data.preferences.CookiePreferences(context).hasCookies()
-            }.getOrDefault(false)
+            val manifest = TweetMediaManifest(File(context.filesDir, "download-manifests"))
+            if (!skipVideos) manifest.begin(tweetId, media.map { "${it.kind}:${it.url.substringBefore('?')}" })
+            val (_, hasHls) = analyzeVariants(tweet)
+            val cookieBoost = com.ed.edqiu.data.preferences.CookiePreferences(context).hasCookies()
             val is16kPage = (context.applicationContext as? com.ed.edqiu.TwitterDownloaderApp)
                 ?.is16kPageDevice == true
-            // 2026-11-07 审计修复：码率解析不到（=0）≠ 低码率——旧实现 0 < 2M 恒真 +
-            // cookieBoost 使配 Cookie 用户的所有视频（包括本已高码率的）都绕道 yt-dlp
-            // 白跑一遍。现语义反转（Cookie 登录态=画质优先）：hasHls 存在时，
-            // 码率已知且低（<2Mbps，含 0=纯 HLS）→ 无 Cookie 也路由；
-            // 配了 Cookie → 无条件路由（拉 HLS 最高帧率/码率档）
-            val shouldRouteHls = hasVideoMedia && !is16kPage && hasHls &&
-                (maxMp4Bitrate <= 1_999_999 || cookieBoost)
-            if (allowHlsRouting && shouldRouteHls) {
-                throw HlsBetterSourceException(maxMp4Bitrate, uploader)
-            }
-            // 2026-11-11 B1 漏报兜底：hasHls=false = FXTwitter 漏报高发区（旧逻辑此场景
-            // 「低码率+Cookie 盲赌路由」，09-16 定案；高码率+漏报则永远直下 1080p30 mp4，
-            // 错过 HLS 60fps / Premium+ 2160p）。主用户 Cookie 恒配置 → 此场景让 yt-dlp
-            // 实证探测一次真实格式表（height/fps/tbr 一手值）：存在显著高于渐进 mp4 基准
-            // 的 video 档（10% 容差过滤同档噪声）才路由，探测失败/无增益 → 直下 mp4 零损耗。
-            if (allowHlsRouting && !shouldRouteHls && hasVideoMedia && !is16kPage && cookieBoost) {
-                val probedBestBps = probeYtdlpBestBitrate(normalizedUrl)
-                if (probedBestBps != null &&
-                    probedBestBps > maxMp4Bitrate * 1.1 &&
-                    probedBestBps > 0
-                ) {
-                    Log.i(
-                        TAG,
-                        "漏报兜底路由：FXTwitter 未报 m3u8，yt-dlp 实测最高档 $probedBestBps bps " +
-                            "> 渐进基准 $maxMp4Bitrate bps，转 yt-dlp 拉 HLS（tweet=$tweetId）"
-                    )
-                    throw HlsBetterSourceException(maxMp4Bitrate, uploader)
-                }
-            }
+            val canSelectSource = allowHlsRouting && !is16kPage && (hasHls || cookieBoost)
+            var videoIndex = 0
 
             val outputDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                 ?: File(context.filesDir, "Download")
@@ -155,29 +120,66 @@ class InternalMediaDownloader(private val context: Context) {
                 ?: media.firstNotNullOfOrNull { it.thumbnail }
                     ?.takeIf { it.startsWith("http") }
                     ?.let { CoverStore.ensureLocalCover(context, tweetId, it, timeoutMs = 4_000L) }
+            // 开始前一次登记全部媒体，排队项也占总工作量，串行切换不会扩大分母。
+            val tasks = media.mapIndexed { index, item ->
+                DownloadTask(
+                    id = "${taskPrefix}_${tweetId}_${index + 1}", url = normalizedUrl,
+                    title = caption ?: normalizedUrl, thumbnail = localCover ?: item.thumbnail ?: item.url,
+                    uploader = uploader, formatId = "fx_internal", quality = item.quality, ext = item.ext,
+                    mediaType = if (item.kind == "image") MediaType.IMAGE else MediaType.VIDEO,
+                    mediaIndex = index + 1, status = DownloadStatus.PENDING,
+                    avatarUrl = avatarUrl ?: "", authorName = authorName ?: "",
+                ).also { DownloadTaskBus.add(it) }
+            }
             media.forEachIndexed { index, item ->
                 val mediaIndex = index + 1
+                if (item.kind == "video") videoIndex++
+                val selectedVideoIndex = videoIndex
                 val filename = sanitize("${uploader}_${tweetId}_${mediaIndex}_${item.kind}_${item.quality}.${item.ext}")
-                val target = File(outputDir, filename)
-                val task = DownloadTask(
-                    id = "${taskPrefix}_${tweetId}_$mediaIndex",
-                    url = normalizedUrl,
-                    title = caption ?: normalizedUrl,
-                    thumbnail = localCover ?: item.thumbnail ?: item.url,
-                    uploader = uploader,
-                    formatId = "fx_internal",
-                    quality = item.quality,
-                    ext = item.ext,
-                    mediaType = if (item.kind == "image") MediaType.IMAGE else MediaType.VIDEO,
-                    mediaIndex = mediaIndex,
-                    status = DownloadStatus.DOWNLOADING,
-                    avatarUrl = avatarUrl ?: "",
-                    authorName = authorName ?: ""
-                )
-                DownloadTaskBus.add(task)
+                var target = File(outputDir, filename)
+                var quality = item.quality
+                val task = tasks[index]
+                if (cancelledAny) {
+                    DownloadTaskBus.updateTask(task.id) { it.copy(status = DownloadStatus.CANCELLED) }
+                    return@forEachIndexed
+                }
+                DownloadTaskBus.updateTask(task.id) { it.copy(status = DownloadStatus.DOWNLOADING) }
 
                 runCatching {
-                    downloadFile(item.url, target, proxy, taskId = task.id)
+                    // 仅复用本引擎已完整写入 sidecar 的同一媒体，部分失败重试不重下成功项。
+                    val complete = target.isFile && target.length() > 0L && runCatching {
+                        val meta = JSONObject(File(target.absolutePath + META_SUFFIX).readText())
+                        meta.optString("tweetId") == tweetId && meta.optInt("mediaIndex") == mediaIndex &&
+                            meta.optString("quality") == item.quality &&
+                            meta.optLong("fileSize", -1L) == target.length()
+                    }.getOrDefault(false)
+                    val previousFile = if (!skipVideos) manifest.completedFile(tweetId, index) else null
+                    if (previousFile != null) {
+                        target = previousFile
+                    } else if (!complete) {
+                        val baseline = VideoSourcePolicy.Format("progressive", item.width, item.height, item.fps, item.bitrate)
+                        val selected = if (item.kind == "video" && canSelectSource) {
+                            VideoSourcePolicy.selectBetter(baseline,
+                                probeYtdlpFormats(normalizedUrl, proxy, selectedVideoIndex, item.requiresAudio))
+                        } else null
+                        if (selected != null) {
+                            DownloadTaskBus.updateTask(task.id) { it.copy(formatId = selected.selector) }
+                            val result = downloadSelectedVideo(normalizedUrl, proxy, selectedVideoIndex, selected, task.id, outputDir)
+                            result.onSuccess { downloadedPath ->
+                                target = moveSelectedVideo(File(downloadedPath), outputDir, uploader, tweetId, mediaIndex)
+                                quality = selected.shortEdge.takeIf { it > 0 }?.let { "${it}p" } ?: "best"
+                            }.onFailure { error ->
+                                if (error is DownloadCancelledException || error is kotlinx.coroutines.CancellationException ||
+                                    DownloadCancellation.isCancelled(task.id)) throw DownloadCancelledException()
+                                DownloadTaskBus.updateTask(task.id) {
+                                    it.copy(progress = 0f, stageMessage = "高画质源失败，切换直连源")
+                                }
+                                downloadFile(item.url, target, proxy, taskId = task.id)
+                            }
+                        } else {
+                            downloadFile(item.url, target, proxy, taskId = task.id)
+                        }
+                    }
                     writeSidecar(
                         mediaFile = target,
                         sourceUrl = normalizedUrl,
@@ -186,13 +188,14 @@ class InternalMediaDownloader(private val context: Context) {
                         authorName = authorName,
                         caption = caption,
                         thumbnail = localCover ?: item.thumbnail ?: item.url,
-                        quality = item.quality,
+                        quality = quality,
                         mediaIndex = mediaIndex,
                         mediaType = item.kind.uppercase(Locale.ROOT),
                         ext = item.ext,
                         publishedAt = publishedAt,
                         avatarUrl = avatarUrl
                     )
+                    if (!skipVideos) manifest.record(tweetId, index, target)
                     DownloadedFile(
                         tweetId = tweetId,
                         filePath = target.absolutePath,
@@ -228,13 +231,11 @@ class InternalMediaDownloader(private val context: Context) {
             // 2026-11-07 审计修复：取消语义上抛（旧实现部分取消会被下面的「部分成功」
             // 判定吞成整体成功/失败，触发无谓自动重试）
             if (cancelledAny) throw DownloadCancelledException()
-            if (downloaded.isEmpty()) error("没有媒体下载成功")
-            // 2026-11-07 审计修复：部分成功不再算整体成功——旧实现只要 ≥1 个文件成功
-            // 就返回、状态置 DOWNLOADED，失败索引永不重试。改为抛错走既有 FAILED→重试
-            // 链路补齐（重试会重下已成功的文件，量小可接受；换取状态与实际文件一致）
+            // 部分成功仍标记待重试，但不跨引擎整条重下；下轮校验 sidecar 后复用成品。
             if (downloaded.size < media.size) {
-                error("部分媒体下载失败（${downloaded.size}/${media.size} 成功），将自动重试补齐")
+                throw PartialMediaDownloadException("部分媒体下载失败（${downloaded.size}/${media.size} 成功），将续传补齐")
             }
+            if (!skipVideos) manifest.finish(tweetId)
             downloaded
         }
     }
@@ -273,16 +274,10 @@ class InternalMediaDownloader(private val context: Context) {
         return maxBitrate to hasHls
     }
 
-    /**
-     * yt-dlp 实证探测（2026-11-11 B1 漏报兜底）：FXTwitter 报了视频但没报 m3u8 时，
-     * 让 yt-dlp 解析一次 x.com 页面拿全部真实格式（`--dump-single-json`，只探测不下载），
-     * 返回最高 video 档的码率（bps）。yt-dlp 的 tbr 单位 kbit/s，×1000 换算后与
-     * FXTwitter 的 bitrate（bps）口径对齐。
-     *
-     * 探测失败（网络/解析异常/无 video 格式）返回 null → 调用方直下 mp4 零损耗。
-     * Cookie 文件用完即删（同 ytdlpFallback 纪律）。
-     */
-    private suspend fun probeYtdlpBestBitrate(url: String): Int? {
+    /** 下载前读取真实格式表，保留格式 ID/尺寸/帧率/码率；失败则继续渐进源。 */
+    private suspend fun probeYtdlpFormats(
+        url: String, proxy: ProxySettings?, videoIndex: Int, requiresAudio: Boolean,
+    ): List<VideoSourcePolicy.Format> {
         val cookiePreferences = com.ed.edqiu.data.preferences.CookiePreferences(context)
         val cookieFile = if (cookiePreferences.hasCookies()) {
             com.ed.edqiu.service.YoutubeDLService.writeCookieFile(
@@ -290,28 +285,86 @@ class InternalMediaDownloader(private val context: Context) {
             )
         } else null
         return try {
-            val proxyUrl = com.ed.edqiu.data.preferences.ProxyPreferences(context)
-                .getProxySettings().toProxyUrl()
-            val json = com.ed.edqiu.service.YoutubeDLService.probeVideoFormats(url, proxyUrl, cookieFile)
-                .getOrNull() ?: return null
-            val formats = json.optJSONArray("formats") ?: return null
-            var bestKbps = 0.0
-            (0 until formats.length()).forEach { i ->
-                val f = formats.optJSONObject(i) ?: return@forEach
-                // vcodec=none 是纯音频流，不参与画质对比
-                if (f.optString("vcodec", "none") == "none") return@forEach
-                bestKbps = maxOf(bestKbps, f.optDouble("tbr", 0.0))
+            val json = com.ed.edqiu.service.YoutubeDLService.probeVideoFormats("$url/video/$videoIndex", proxy?.toProxyUrl(), cookieFile)
+                .getOrNull() ?: return emptyList()
+            val formats = json.optJSONArray("formats") ?: return emptyList()
+            val audio = (0 until formats.length()).mapNotNull { formats.optJSONObject(it) }
+                .filter { it.optString("vcodec", "none") == "none" && it.optString("acodec", "none") != "none" }
+                .maxByOrNull { it.optDouble("abr", 0.0) }?.optString("format_id")
+            (0 until formats.length()).mapNotNull { index ->
+                val format = formats.optJSONObject(index) ?: return@mapNotNull null
+                if (format.optString("vcodec", "none") == "none" ||
+                    format.optString("ext") != "mp4") return@mapNotNull null
+                VideoSourcePolicy.Format(
+                    id = format.optString("format_id"),
+                    width = format.optInt("width", 0),
+                    height = format.optInt("height", 0),
+                    fps = format.optDouble("fps", 0.0).takeIf { it.isFinite() } ?: 0.0,
+                    bitrate = (format.optDouble("tbr", 0.0) * 1000)
+                        .takeIf { it.isFinite() }?.toInt() ?: 0,
+                    hasAudio = format.optString("acodec", "none") != "none",
+                    audioId = if (format.optString("acodec", "none") == "none" && requiresAudio) audio else null,
+                    requiresAudio = requiresAudio,
+                )
             }
-            if (bestKbps <= 0.0) null else (bestKbps * 1000).toInt()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.w(TAG, "yt-dlp 格式探测失败（漏报兜底跳过，直下 mp4）: $url", e)
-            null
+            Log.w(TAG, "视频格式探测失败，保留渐进源: $url", e)
+            emptyList()
         } finally {
             cookieFile?.let { runCatching { File(it).delete() } }
         }
     }
 
-    private fun extractMedia(tweet: JSONObject): List<MediaItem> {        val mediaObject = tweet.optJSONObject("media") ?: JSONObject()
+    private suspend fun downloadSelectedVideo(
+        url: String, proxy: ProxySettings?, videoIndex: Int, selected: VideoSourcePolicy.Format,
+        taskId: String, outputDir: File,
+    ): Result<String> {
+        val prefs = com.ed.edqiu.data.preferences.CookiePreferences(context)
+        val cookie = if (prefs.hasCookies()) com.ed.edqiu.service.YoutubeDLService.writeCookieFile(
+            context, prefs.getAuthToken(), prefs.getCt0()) else null
+        return try {
+            com.ed.edqiu.service.YoutubeDLService.downloadVideo(
+                url = "$url/video/$videoIndex", formatId = selected.selector,
+                outputDir = outputDir.absolutePath, proxyUrl = proxy?.toProxyUrl(),
+                cookieFilePath = cookie, processId = taskId, expectedStreams = selected.streams,
+                onProgress = { progress, eta -> DownloadTaskBus.updateTask(taskId) {
+                    it.copy(progress = progress, etaSeconds = eta)
+                } },
+            )
+        } finally {
+            cookie?.let { File(it).delete() }
+        }
+    }
+
+    private fun moveSelectedVideo(
+        raw: File, outputDir: File, uploader: String, tweetId: String, mediaIndex: Int,
+    ): File {
+        check(raw.isFile && raw.length() > 0L) { "视频源未返回有效成品" }
+        var suffix = 0
+        var target: File
+        do {
+            val tag = if (suffix == 0) "best" else "best$suffix"
+            target = File(outputDir, sanitize("${uploader}_${tweetId}_${mediaIndex}_video_$tag.mp4"))
+            suffix++
+        } while (target.exists() && target.absolutePath != raw.absolutePath)
+        if (target.absolutePath == raw.absolutePath) return raw
+        if (!raw.renameTo(target)) {
+            try {
+                raw.copyTo(target, overwrite = false)
+                check(raw.length() == target.length()) { "成品复制不完整" }
+                raw.delete()
+            } catch (error: Exception) {
+                target.delete()
+                throw error
+            }
+        }
+        return target
+    }
+
+    private fun extractMedia(tweet: JSONObject): List<MediaItem> {
+        val mediaObject = tweet.optJSONObject("media") ?: JSONObject()
         val candidates = buildList {
             addAll(mediaObject.optObjects("videos"))
             addAll(mediaObject.optObjects("photos"))
@@ -342,7 +395,15 @@ class InternalMediaDownloader(private val context: Context) {
                     thumbnail = item.firstString("thumbnail_url", "thumbnail", "thumb"),
                     ext = "mp4",
                     quality = bitrateToQuality(bestVideo?.optInt("bitrate", 0) ?: 0),
-                    kind = "video"
+                    kind = "video",
+                    requiresAudio = type != "gif" && type != "animated_gif",
+                    bitrate = bestVideo?.optInt("bitrate", 0) ?: 0,
+                    width = bestVideo?.optInt("width", 0)?.takeIf { it > 0 }
+                        ?: videoDimensions(videoUrl)?.first ?: item.optInt("width", 0),
+                    height = bestVideo?.optInt("height", 0)?.takeIf { it > 0 }
+                        ?: videoDimensions(videoUrl)?.second ?: item.optInt("height", 0),
+                    fps = bestVideo?.optDouble("fps", 0.0)?.takeIf { it.isFinite() && it > 0 }
+                        ?: item.optDouble("fps", 0.0).takeIf { it.isFinite() } ?: 0.0
                 )
             }
 
@@ -579,6 +640,9 @@ class InternalMediaDownloader(private val context: Context) {
                             }
                         }
                     }
+                    if (segFile.length() != segLen) {
+                        error("分段响应提前结束（${segFile.length()}/$segLen），保留断点续传")
+                    }
                     return
                 } finally {
                     connection.disconnect()
@@ -665,6 +729,9 @@ class InternalMediaDownloader(private val context: Context) {
                             }
                         }
                     }
+                    if (contentLength > 0L && written != startOffset + contentLength) {
+                        error("响应提前结束（$written/${startOffset + contentLength}），保留断点续传")
+                    }
                     // 下载完成：.part 转正
                     if (target.exists()) target.delete()
                     if (!part.renameTo(target)) {
@@ -746,6 +813,7 @@ class InternalMediaDownloader(private val context: Context) {
             .put("thumbnail", thumbnail ?: "")
             .put("quality", quality)
             .put("formatId", "fx_internal")
+            .put("fileSize", mediaFile.length())
             .put("mediaIndex", mediaIndex)
             .put("mediaType", mediaType)
             .put("ext", ext)
@@ -796,6 +864,13 @@ class InternalMediaDownloader(private val context: Context) {
         else -> "$url?name=orig"
     }
 
+    private fun videoDimensions(url: String): Pair<Int, Int>? =
+        Regex("/(\\d+)x(\\d+)/").find(url)?.destructured?.let { (width, height) ->
+            val w = width.toIntOrNull() ?: 0
+            val h = height.toIntOrNull() ?: 0
+            (w to h).takeIf { w > 0 && h > 0 }
+        }
+
     private fun bitrateToQuality(bitrate: Int): String = when {
         bitrate >= 2_000_000 -> "1080p"
         bitrate >= 832_000 -> "720p"
@@ -811,7 +886,12 @@ class InternalMediaDownloader(private val context: Context) {
         val thumbnail: String?,
         val ext: String,
         val quality: String,
-        val kind: String
+        val kind: String,
+        val bitrate: Int = 0,
+        val width: Int = 0,
+        val height: Int = 0,
+        val fps: Double = 0.0,
+        val requiresAudio: Boolean = true,
     )
 
     companion object {

@@ -4,7 +4,8 @@ import com.ed.edqiu.ui.util.pressableNoRipple
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
+import com.ed.edqiu.ui.privacy.privacyRevealGesture
+import com.ed.edqiu.ui.privacy.PrivacyBlurBox
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -123,7 +124,7 @@ fun DetailScreen(
 
     // 隐私模式（2026-11-12）：详情页文字与收件箱同规则——按住任意位置临时显示，松开恢复。
     val privacyActive = LocalPrivacyBlur.current
-    var reveal by remember { mutableStateOf(false) }
+    var reveal by remember(tweetId, privacyActive) { mutableStateOf(false) }
     val hideText = privacyActive && !reveal
 
     FeedbackDialog(message = downloadErrorDialog, onDismiss = { downloadErrorDialog = null })
@@ -147,26 +148,11 @@ fun DetailScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
                 // 隐私模式：整页按住显示文字（仅 onPress，不消费子元素的点击/长按）
-                .pointerInput(privacyActive) {
-                    if (privacyActive) {
-                        detectTapGestures(
-                            onPress = {
-                                // 长按 3 秒才显示（避免滑动/轻触瞬时露字）；满 3 秒后保持显示直到松开
-                                try {
-                                    delay(3000L)
-                                    reveal = true
-                                    try {
-                                        awaitRelease()
-                                    } finally {
-                                        reveal = false
-                                    }
-                                } finally {
-                                    reveal = false
-                                }
-                            }
-                        )
-                    }
-                },
+                .privacyRevealGesture(
+                    enabled = privacyActive,
+                    gestureKey = tweetId,
+                    onRevealChange = { reveal = it },
+                ),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             DetailTopBar(
@@ -181,7 +167,7 @@ fun DetailScreen(
                 privacyEnabled = hideText
             )
 
-            MediaPreview(data = data)
+            MediaPreview(data = data, privacyEnabled = hideText)
 
             // 视频/图片预览下方的文案（视频资源显示其推文文案，长文案可折叠）
             if (!data.caption.isNullOrBlank()) {
@@ -323,7 +309,7 @@ private fun NavCircleButton(
 
 /** 媒体预判区：大尺寸视频/图片预览图卡片，右下角叠加状态徽章。 */
 @Composable
-private fun MediaPreview(data: SavedLink) {
+private fun MediaPreview(data: SavedLink, privacyEnabled: Boolean) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -334,8 +320,8 @@ private fun MediaPreview(data: SavedLink) {
         // 背景：无缩略图时回退到品牌渐变
         if (!data.thumbnailUrl.isNullOrBlank()) {
             // 隐私模式（2026-11-07）：大图模糊+按住查看；状态徽章保持清晰
-            com.ed.edqiu.ui.privacy.PrivacyGateBox(
-                enabled = com.ed.edqiu.ui.privacy.LocalPrivacyBlur.current,
+            PrivacyBlurBox(
+                enabled = privacyEnabled,
                 modifier = Modifier.fillMaxSize()
             ) {
                 AsyncImage(
@@ -565,6 +551,16 @@ private fun SnapshotTimeCell(label: String, value: String, modifier: Modifier = 
     }
 }
 
+/** 隐私下整段手势留给三秒查看，显示期间也不临时挂回文字选区。 */
+@Composable
+private fun PrivacySelectionContainer(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    if (LocalPrivacyBlur.current) {
+        Box(modifier = modifier) { content() }
+    } else {
+        SelectionContainer(modifier = modifier, content = content)
+    }
+}
+
 /** 原始链接卡片：链接文本 + 复制按钮 + 跳转该推文详细页按钮。 */
 @Composable
 private fun OriginalLinkCard(
@@ -583,7 +579,7 @@ private fun OriginalLinkCard(
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            SelectionContainer(modifier = Modifier.weight(1f)) {
+            PrivacySelectionContainer(modifier = Modifier.weight(1f)) {
                 PrivacyText(
                     text = data.rawUrl,
                     enabled = privacyEnabled,
@@ -637,7 +633,7 @@ private fun CollapsibleCaption(caption: String, privacyEnabled: Boolean = false)
             .animateContentSize(tween(com.ed.edqiu.ui.anim.Motion.PanelIn))
     ) {
         Column {
-            SelectionContainer {
+            PrivacySelectionContainer {
                 Text(
                     text = if (privacyEnabled) "••••••" else caption,
                     style = style,

@@ -348,6 +348,16 @@ Text(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                    // 阶段提示（2026-11-20）：换源等瞬时状态与最终错误分开显示，避免误读为失败。
+                    if (task.stageMessage.isNotBlank() && task.isActive) {
+                        Text(
+                            task.stageMessage,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     if (task.errorMessage.isNotBlank()) {
                         Text(
                             task.errorMessage,

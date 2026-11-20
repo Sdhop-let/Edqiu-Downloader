@@ -46,10 +46,12 @@ object YoutubeDLService {
         proxyUrl: String? = null,
         cookieFilePath: String? = null,
         playlistIndex: Int? = null,
-        processId: String? = null
+        processId: String? = null,
+        expectedStreams: Int = 2
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val pid = processId ?: UUID.randomUUID().toString()
+            val progressTracker = YtdlpProgressTracker(expectedStreams)
             val outputPath = if (playlistIndex != null) {
                 "$outputDir/%(uploader)s/%(title)s_%(playlist_index)s.%(ext)s"
             } else {
@@ -60,6 +62,7 @@ object YoutubeDLService {
                 addOption("-f", formatId)
                 addOption("-o", outputPath)
                 addOption("--newline")
+                addOption("--progress-template", YtdlpProgressTracker.PROGRESS_TEMPLATE)
                 // 2026-11-11 提速：X 视频 HLS 自适应流是数百个分片，yt-dlp 默认串行拉取
                 // （一次 1 个 fragment），高延迟代理线路上吞吐被 RTT 串行化——这是
                 // 「网络良好但下载极慢」的主因之一。开 8 并发分片，网页播放器同款策略。
@@ -96,9 +99,9 @@ object YoutubeDLService {
                 YoutubeDL.getInstance().execute(
                     request,
                     pid,
-                    { progress, eta, _ ->
+                    { progress, eta, line ->
                         lastProgressAt.set(System.currentTimeMillis())
-                        onProgress?.invoke(progress, eta)
+                        onProgress?.invoke(progressTracker.update(progress, line), eta)
                     }
                 )
             } finally {
@@ -371,7 +374,7 @@ object YoutubeDLService {
     fun writeCookieFile(context: Context, authToken: String, ct0: String): String {
         val cookieDir = File(context.filesDir, "yt-dlp-cookies")
         cookieDir.mkdirs()
-        val cookieFile = File(cookieDir, "twitter_cookies.txt")
+        val cookieFile = File.createTempFile("twitter-", ".txt", cookieDir)
 
         val content = buildString {
             appendLine("# Netscape HTTP Cookie File")
@@ -384,17 +387,12 @@ object YoutubeDLService {
             appendLine(".twitter.com\tTRUE\t/\tTRUE\t0\tct0\t$ct0")
         }
 
-        // 2026-10 整改：原子写（tmp+rename）——并发下载同时触发写入时读者不会读到半截文件
-        // 2026-10：tmp 名带时间戳——并发下载同时写 cookie 时不再互踩同一个 tmp
-        val tmp = File(cookieDir, cookieFile.name + "." + System.currentTimeMillis() + ".tmp")
-        tmp.writeText(content)
-        if (!tmp.renameTo(cookieFile)) {
-            // 2026-11-07 审计修复：并发写方可能恰好把同一个 tmp rename 走，copy 会抛
-            // FileNotFoundException 直接打挂下载——兜底失败按重试处理而非崩溃
-            runCatching {
-                cookieFile.outputStream().use { output -> tmp.inputStream().use { it.copyTo(output) } }
-            }.onFailure { Log.w(TAG, "cookie 文件兜底复制失败（并发写入方接管），由其原子 rename 保证完整性") }
-            tmp.delete()
+        // 文件只归本次调用所有，返回路径前写完；调用方 finally 只删除自己的文件。
+        try {
+            cookieFile.writeText(content)
+        } catch (error: Exception) {
+            cookieFile.delete()
+            throw error
         }
         // 2026-10-24 审计：cookie 文件路径属敏感信息，仅 debug 构建记录
         if (com.ed.edqiu.BuildConfig.DEBUG) {

@@ -147,7 +147,17 @@ class DownloaderClient(private val context: Context) {
                         health.recordEngineSuccess(DownloadEngineHealth.ENGINE_FXTWITTER)
                         return LaunchResult.TweetGone
                     }
-                    // 2026-09-15 源头画质优化：仅低码率 mp4 + 存在 HLS 流 → 直接转 yt-dlp 拉 HLS 最佳。
+                    if (error is DownloadCancelledException || error is kotlinx.coroutines.CancellationException) {
+                        return LaunchResult.Failed("下载已取消")
+                    }
+                    if (error is com.ed.edqiu.downloader.PartialMediaDownloadException) {
+                        // API 和已落盘媒体均有效，避免打熔断/亲和使下一轮绕去其他源整条重下。
+                        health.recordEngineSuccess(DownloadEngineHealth.ENGINE_FXTWITTER)
+                        return LaunchResult.Failed(error.message ?: "部分媒体等待续传")
+                    }
+                    // 2026-11-20 引擎重构后 HlsBetterSourceException 已无抛出点：下载前
+                    // 格式探测与高画质源选择收敛进 InternalMediaDownloader（探测失败自动
+                    // 回退直连源，不再跨引擎路由）。分支保留作历史路由通道，当前为死路径。
                     // 这是路由决策而非引擎故障：API 活着，不计熔断。
                     if (error is HlsBetterSourceException) {
                         health.recordEngineSuccess(DownloadEngineHealth.ENGINE_FXTWITTER)
@@ -155,9 +165,9 @@ class DownloaderClient(private val context: Context) {
                             normalizedUrl,
                             tweetId,
                             error.message ?: "存在 HLS 高画质源",
-                            // 2026-11-11 实证闸门基准：FXTwitter 渐进 mp4 最高变体码率。
-                            // HLS 产物实测码率必须严格超过它才落位，否则丢弃走回退直下 mp4
-                            baselineBitrate = error.maxMp4Bitrate
+                            uploader = error.uploader,
+                            formatSelector = error.formatSelector,
+                            expectedStreams = error.streamCount
                         )
                         // 2026-10-25 宽路由保底：yt-dlp 拉流失败（无 HLS / 登录失效 / 网络）时
                         // 回退内部引擎直下 mp4——「拉不到最高画质」不能变成「什么都拿不到」。
@@ -254,8 +264,8 @@ class DownloaderClient(private val context: Context) {
         tweetId: String,
         internalError: String?,
         uploader: String = "unknown",
-        /** 2026-11-11 实证闸门基准：FXTwitter 渐进 mp4 最高变体码率（0 = 无基准，跳过闸门）。 */
-        baselineBitrate: Int = 0,
+        formatSelector: String = "bestvideo+bestaudio/best",
+        expectedStreams: Int = 2,
     ): LaunchResult {
         return runCatching {
             val proxyUrl = ProxyPreferences(context).getProxySettings().toProxyUrl()
@@ -283,35 +293,24 @@ class DownloaderClient(private val context: Context) {
             DownloadTaskBus.add(task)
             DownloadCancellation.register(task.id)
 
-            // 2026-11-11 回弹修复：`bestvideo+bestaudio/best` 会先下视频流再下音频流，
-            // yt-dlp 每段各自 0→100 报数——旧实现直接透传，视频流下完瞬间进度从 ~100%
-            // 回弹到 0% 重新爬（用户误读为「下载到一半重来」）。段切换检测（进度骤降
-            // >10 个百分点）后按段数加权：显示值 = (已完成段×100 + 当前段进度) / 段数。
-            var segCount = 1
-            var segPeak = 0f
-            val launchResult = YoutubeDLService.downloadVideo(
+            // Service 依据格式身份计算固定阶段总进度，禁止用百分比骤降猜测音频切换。
+            val launchResult = try { YoutubeDLService.downloadVideo(
                 url = url,
                 // 2026-11-07 审计修复：`best` 只选预合并（video+audio 单文件）格式，X 的
                 // 1080p+ 是 video-only HLS 自适应流——v1.9.10「直拉 1080p+」实际只拉到
                 // 最高码率渐进 mp4。改为 video+audio 合并选择
-                formatId = "bestvideo+bestaudio/best",
+                formatId = formatSelector,
                 outputDir = outputDir.absolutePath,
                 onProgress = { progress, eta ->
-                    if (progress < segPeak - 10f && segCount == 1) {
-                        segCount = 2
-                        segPeak = progress
-                    } else if (progress > segPeak) {
-                        segPeak = progress
-                    }
-                    val aggregated = ((segCount - 1) * 100f + progress) / segCount
                     DownloadTaskBus.updateTask(task.id) {
-                        it.copy(progress = aggregated, etaSeconds = eta)
+                        it.copy(progress = progress, etaSeconds = eta)
                     }
                 },
                 proxyUrl = proxyUrl,
                 cookieFilePath = cookieFile,
                 playlistIndex = null,
-                processId = task.id
+                processId = task.id,
+                expectedStreams = expectedStreams,
             ).fold(
                 onSuccess = { rawPath ->
                     // 2026-10-25 产物规约化（对齐 MediaQualityUpgrader.performHlsUpgrade 修复）：
@@ -321,7 +320,7 @@ class DownloaderClient(private val context: Context) {
                     // 2026-11-07 审计修复：规约名已存在时递增 idx——旧实现无条件 delete 旧产物，
                     // 同推文先后两次 yt-dlp 下载（不同视频）会静默覆盖丢上一份
                     val rawFile = File(rawPath)
-                    if (!rawFile.exists()) {
+                    if (!rawFile.isFile) {
                         // 2026-11-07 审计修复：产物存在性防御——绝不给不存在的文件写
                         // sidecar/置 COMPLETED（旧链路会出现「下载成功但文件不存在」横跳）
                         val msg = "下载完成但产物不存在（${rawPath.take(120)}）"
@@ -330,23 +329,16 @@ class DownloaderClient(private val context: Context) {
                         }
                         return@fold LaunchResult.Failed(msg)
                     }
-                    // 2026-11-11 画质实证闸门：路由 yt-dlp ≠ 拉到了更高画质——hasHls 只是
-                    // FXTwitter 的字符串级弱信号（m3u8 URL 匹配，标记可缺失可误报），无
-                    // Cookie 时 HLS 上限甚至可能低于渐进 mp4。产物必须实测（码率 =
-                    // fileSize*8/duration，含音频口径与渐进变体一致）严格优于基准才落位；
-                    // 测不出（retriever 失败/损坏文件）一律按不达标处理。拒绝落位 → 走宽
-                    // 路由回退直下 mp4——用户要的是肉眼可见的提升，不是「走过 HLS 通道」。
-                    val measured = measureMediaSpecs(rawFile)
-                    if (baselineBitrate > 0 && (measured == null || measured.first <= baselineBitrate)) {
-                        val msg = "HLS 产物画质未超过渐进变体" +
-                            "（实测 ${measured?.first?.toString() ?: "未知"}bps vs 基准 ${baselineBitrate}bps），回退直下 mp4"
-                        android.util.Log.w("DownloaderClient", "HLS gate rejected tweet=$tweetId: $msg")
-                        runCatching { rawFile.delete() }
+                    // 画质已在传输前按格式表选择。名义码率与文件平均码率不可直接比较，
+                    // 有效成品不因码率相等/偏低删除重下；空文件仍按真实失败处理。
+                    if (rawFile.length() == 0L) {
+                        val msg = "下载产物为空"
                         DownloadTaskBus.updateTask(task.id) {
                             it.copy(status = DownloadStatus.FAILED, errorMessage = msg)
                         }
                         return@fold LaunchResult.Failed(msg)
                     }
+                    val measured = measureMediaSpecs(rawFile)
                     // 落位：sidecar 画质标签用实测分辨率（短边）/码率反推的档位（实证值，不再写死 "best"）
                     val measuredQuality = bitrateToQualityLabel(
                         measured?.first ?: 0,
@@ -441,11 +433,10 @@ class DownloaderClient(private val context: Context) {
                     }
                     LaunchResult.Failed(if (cancelled) "下载已取消" else (error.message ?: "未知错误"))
                 }
-            )
-            DownloadCancellation.unregister(task.id)
-            // 2026-11-07 审计修复：明文 cookie 文件用完即删（旧实现会话期内常驻磁盘，
-            // 清理仅在 App 启动时做一次）
-            cookieFile?.let { runCatching { File(it).delete() } }
+            ) } finally {
+                DownloadCancellation.unregister(task.id)
+                cookieFile?.let { runCatching { File(it).delete() } }
+            }
             launchResult
         }.getOrElse { error ->
             LaunchResult.Failed("yt-dlp 回退异常：${error.message ?: "未知错误"}")
@@ -580,9 +571,8 @@ class DownloaderClient(private val context: Context) {
     private fun sanitizeName(name: String): String = name.replace(Regex("[/\\\\:*?\"<>|]"), "_")
 
     /**
-     * 实测产物规格（2026-11-11 画质实证闸门）：MediaMetadataRetriever 读时长与宽高，
-     * 码率 = fileSize*8/duration（含音频，与 X 渐进 mp4 变体的 bitrate 字段口径一致，
-     * 可直接对比）。读不出（损坏/不支持的封装）返回 null → 闸门按不达标处理。
+     * 成品规格用于画质标签：平均码率只作展示，不与源格式的名义码率作拒收比较。
+     * MediaMetadataRetriever 读不出时返回 null，保留已完成的非空文件。
      * 返回 (码率bps, 宽, 高)。
      */
     private fun measureMediaSpecs(file: File): Triple<Int, Int, Int>? {

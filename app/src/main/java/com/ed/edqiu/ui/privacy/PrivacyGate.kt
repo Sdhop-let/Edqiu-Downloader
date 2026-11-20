@@ -2,7 +2,10 @@ package com.ed.edqiu.ui.privacy
 
 import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -18,13 +21,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -50,6 +56,59 @@ fun Modifier.privacyBlur(enabled: Boolean): Modifier =
     if (enabled && Build.VERSION.SDK_INT >= 31) {
         this.blur(PrivacyBlurRadius, BlurredEdgeTreatment.Unbounded)
     } else this
+
+/**
+ * 整卡/详情共用：持续按住 3 秒才显示，松手、滚动接管或离开立即复位。
+ * 使用指针事件作用域的超时，同时监听松手/取消；null 取消不能当成超时显示。
+ * 有 onTap 时接管整卡短按，无 onTap 时保留子控件点击与父级滚动。
+ */
+@Composable
+fun Modifier.privacyRevealGesture(
+    enabled: Boolean,
+    gestureKey: Any?,
+    onRevealChange: (Boolean) -> Unit,
+    onTap: (() -> Unit)? = null,
+): Modifier {
+    val currentOnRevealChange by rememberUpdatedState(onRevealChange)
+    val currentOnTap by rememberUpdatedState(onTap)
+    return this.pointerInput(enabled, gestureKey) {
+        try {
+            if (!enabled) return@pointerInput
+            awaitEachGesture {
+                // 详情只观察按下，不抢走按钮短按；整卡则沿用点击手势的消费规则。
+                val down = awaitFirstDown(
+                    pass = if (currentOnTap != null) PointerEventPass.Main else PointerEventPass.Initial,
+                )
+                if (currentOnTap != null) down.consume()
+                try {
+                    var finished = false
+                    val up = withTimeoutOrNull(3000L) {
+                        val result = waitForUpOrCancellation()
+                        finished = true
+                        result
+                    }
+                    if (finished) {
+                        // 松手才允许短按；取消（null）不得点击或显示。
+                        if (up != null && currentOnTap != null) {
+                            up.consume()
+                            currentOnTap?.invoke()
+                        }
+                    } else {
+                        currentOnRevealChange(true)
+                        // 满 3 秒后只负责收尾，绝不再派发整卡点击。
+                        // Initial 阶段消费松手，避免子按钮先收到 up 而误触点击。
+                        waitForUpOrCancellation(pass = PointerEventPass.Initial)?.consume()
+                    }
+                } finally {
+                    currentOnRevealChange(false)
+                }
+            }
+        } finally {
+            // pointerInput 因 key/模式变化或组件离开被取消时也必须隐藏。
+            currentOnRevealChange(false)
+        }
+    }
+}
 
 /**
  * 隐私模式媒体门控容器：内容整体模糊，**按住查看**——手指按住期间临时清晰，

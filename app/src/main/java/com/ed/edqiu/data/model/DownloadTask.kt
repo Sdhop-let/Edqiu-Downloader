@@ -23,7 +23,9 @@ data class DownloadTask(
     /** 作者头像 URL（FXTwitter author.avatar_url，2026-09-16 播放页真头像）。 */
     val avatarUrl: String = "",
     /** 作者显示名（X 昵称，区别于 uploader handle）。 */
-    val authorName: String = ""
+    val authorName: String = "",
+    /** 当前尝试阶段（例如真实失败后的换源），与任务错误分开。 */
+    val stageMessage: String = "",
 ) {
     val progressInt: Int
         get() = progress.toInt()

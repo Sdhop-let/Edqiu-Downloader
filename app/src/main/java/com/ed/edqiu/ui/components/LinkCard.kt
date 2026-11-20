@@ -5,7 +5,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectTapGestures
+import com.ed.edqiu.ui.privacy.privacyRevealGesture
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -95,7 +95,7 @@ fun LinkCard(
 
     // 隐私模式（2026-11-12）：文字 + 缩略图统一由整卡 reveal 控制，按住期间临时显示。
     val privacyActive = LocalPrivacyBlur.current
-    var reveal by remember { mutableStateOf(false) }
+    var reveal by remember(link.tweetId, privacyActive) { mutableStateOf(false) }
     val hideText = privacyActive && !reveal
 
     // L1 玻璃卡片（双层玻璃：卡片在玻璃背景上的玻璃）—— 圆角 20dp 对齐原型 .lcard
@@ -113,25 +113,12 @@ fun LinkCard(
     // 隐私模式手势：按住显示（reveal）+ 点击；隐私下长按不弹菜单（避免菜单泄露链接）。
     // 非隐私模式：点击 + 长按弹菜单，保持原行为。
     val gestureModifier = if (privacyActive) {
-        Modifier.pointerInput(Unit) {
-            detectTapGestures(
-                onPress = {
-                    // 长按 3 秒才显示（避免滑动/轻触瞬时露字）；满 3 秒后保持显示直到松开
-                    try {
-                        delay(3000L)
-                        reveal = true
-                        try {
-                            awaitRelease()
-                        } finally {
-                            reveal = false
-                        }
-                    } finally {
-                        reveal = false
-                    }
-                },
-                onTap = { if (selectionMode) onSelectionToggle() else onClick() },
-            )
-        }
+        Modifier.privacyRevealGesture(
+            enabled = privacyActive,
+            gestureKey = link.tweetId,
+            onRevealChange = { reveal = it },
+            onTap = { if (selectionMode) onSelectionToggle() else onClick() },
+        )
     } else {
         Modifier.combinedClickable(
             interactionSource = interactionSource,
