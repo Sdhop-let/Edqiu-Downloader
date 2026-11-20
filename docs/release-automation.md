@@ -26,8 +26,8 @@ CI 按仓库 Secrets 是否配置签名凭据走双模式：
 1. **更新版本号**（`app/build.gradle.kts`，`versionCode` 每版 +1）：
 
    ```kotlin
-   versionCode = 48
-   versionName = "1.8.0"
+   versionCode = 103
+   versionName = "E-0.1.3"
    ```
 
 2. **写本版说明**：新建 `docs/RELEASE_NOTES-<版本号>.md`。

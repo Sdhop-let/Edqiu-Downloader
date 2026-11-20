@@ -4,12 +4,12 @@
 
 Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数据只存在你自己的手机和网盘里。
 
-[**下载 E-0.1.0**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
+[**下载 E-0.1.2**](../../releases/latest)　·　[更新说明](docs/CHANGELOG.md)　·　[文档](#文档)
 
 [![Release CI](https://img.shields.io/badge/发版-推送_tag_自动构建-2EA043)](.github/workflows/release.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-F0B429)](LICENSE)
 
-> E-0.1.0（versionCode 100，2026-11-12）· Android 13+（API 33）· 仅 arm64-v8a
+> E-0.1.2（versionCode 102，2026-11-21）· Android 13+（API 33）· 仅 arm64-v8a
 > 现用正式签名（v1.9.11 起更换）——v1.9.10 及更早版本须卸载重装，先网盘全量备份，见[升级路径](#升级路径)
 > 曾用名：XInvox / EsQp / TwitterDownloader（已合并为 Edqiu）
 
@@ -36,7 +36,7 @@ Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数
 |---|---|
 | **链接捕获** | 四通道共用一条捕获管线：系统分享面板、任意 App 划词、跨 App 下载契约（`DOWNLOAD_TWEET`）、收件箱粘贴（自动读剪贴板，多条链接一键批量入库）。剪贴板多形态全兼容（多条目 ClipData / Intent / HTML / URI / URL 编码正文，小米 HyperOS 实测）；正文只有 t.co 短链时网络展开兜底（逐条限时，失败静默回退）；裸链（无 https://）与零宽不可见字符容错 |
 | **收件箱** | iOS large title 语义：统计总览卡（待处理 / 已完成 / 失败 + **全部下载**与数据同位）随滚动收缩成进度摘要条，筛选行吸顶常驻；批量管理与多选；删除可撤销（撤销按钮直接在玻璃胶囊上） |
-| **下载器** | FXTwitter → yt-dlp → 第三方 API 三级引擎自动降级；HLS 直拉（配 Cookie 时 ≤720p 视频下载即拉 1080p+，失败自动回退 mp4）；点按即刻反馈进度（引擎链启动期无空窗）；引擎熔断按发起方隔离——后台路径的失败永不误伤手动下载 |
+| **下载器** | FXTwitter → yt-dlp → 第三方 API 三级引擎自动降级；**下载前格式实证选型**（短边/像素/帧率/码率择优，有声源永不静音）；进度按流峰值聚合单调不减；HLS 直拉（配 Cookie 时 ≤720p 视频下载即拉 1080p+，失败自动回退 mp4）；点按即刻反馈进度（引擎链启动期无空窗）；引擎熔断按发起方隔离——后台路径的失败永不误伤手动下载；多媒体续传只补缺项，取消不烧重试额度 |
 | **失败可见** | 失败的引擎链详情直接写在卡片上，弹窗同步完整信息；自动重试按退避策略最多 3 次 |
 | **媒体库** | **双列封面网格**（大封面 + 时长角标 + 作者/画质行，一屏尽览）；**默认按下载时间排序**——刚下完的在最上，可一键切换按发布时间（作者 · 发布日分组）；筛选计数胶囊固定在标题正下方；pHash 感知哈希查重；画质升级；与收件箱状态互相自愈 |
 | **播放器** | 抖音式纵向滑动流，按素材类型分流；媒体框比例跟手形变、切条零黑帧；倍速 / 横屏 / seek；返回自动落位回网格中该卡片并高亮 |
@@ -77,12 +77,13 @@ Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数
 | **网盘同步** | WebDAV 直连任意私有云盘（123网盘 / 城通 / CloudDrive2 / 坚果云 / NAS…）；每网盘独立账号；双向同步（本地文件永不覆盖）+ 断点续传；逐文件对账详情（暂停 / 优先 / 冲突改名保留）；**「停止本轮」随时中断**（已传部分保留）；单文件失败不拖垮整轮（per-file 隔离，下轮自动续传）；网关假失败终局复核（城通等收完大文件后响应超时→ HEAD 复核成品已落地，不误报重传）；与自动同步撞车时如实提示「已跳过」，不报假成功 |
 | **数据备份** | 收件箱 / 回收站数据本地 JSON 备份与导入导出（SHA-256 校验）；回收站 30 天保留期自动清理 |
 | **应用内更新** | 检查更新 → 国内镜像 / GitHub 双下载源；安装包完整性自校验（版本 + 签名）；跳去开「未知来源安装」权限返回后**自动继续安装**，同版本包永不重复下载 |
+| **引擎自更新** | yt-dlp 解析引擎独立于 App 发版：每日后台自动检查（可关）+ 设置页手动「立即更新」；双通道自动回退（代理直连 GitHub → gh-proxy 镜像）；新版本先在真机试运行（`--version`）通过才启用，失败自动回滚并回退到仓库内验证过的「最后已知可用版本」——上游发坏版本不影响你 |
 
 ---
 
 ## 安装
 
-1. 从 [Releases](../../releases/latest) 下载 `Edqiu-vX.X.X.apk`（约 74 MB）；
+1. 从 [Releases](../../releases/latest) 下载 `Edqiu-vX.X.X.apk`（约 118 MB）；
 2. 允许「安装未知来源应用」（仅首次）；
 3. 覆盖安装，数据全部保留。
 
@@ -90,7 +91,7 @@ Android 原生（Jetpack Compose）。无广告、无账号、无埋点——数
 
 | 当前版本 | 升级方式 |
 |---|---|
-| **v1.9.11 及以上**（Android 13+ 设备） | 直接覆盖安装（应用内「检查更新」或下载 APK），数据全保留；建议升级前在 设置 · 备份中心 做一次网盘备份 |
+| **E-0.1.x / v1.9.11 及以上**（Android 13+ 设备） | 直接覆盖安装（应用内「检查更新」或下载 APK），数据全保留；建议升级前在 设置 · 备份中心 做一次网盘备份 |
 | **v1.9.10 及更早** | 签名已更换（v1.9.11 安全整顿），**无法直接覆盖**——先在 设置 · 备份中心 做网盘全量备份 → 卸载旧版 → 安装新版 → 从网盘恢复 |
 | **Android 12 及以下设备** | v1.9.17 起不再支持（仅 Android 13+），请停留在 v1.9.16 |
 
@@ -131,6 +132,7 @@ X 轮换 GraphQL queryId 后，更新此文件并推送 main 即可热更新所�
 |---|---|
 | **app/** | 应用全部源码与资源：Kotlin + Jetpack Compose，`app/src/main/java/com/ed/edqiu/` 下按 `ui/`（页面与组件，含 `ui/privacy/` 浏览模式门控）、`data/`（数据库与仓库）、`data/xapi/`（X GraphQL 检测客户端）、`downloader/`（三级下载引擎）、`service/`（订阅轮询 / WebDAV 同步 / 媒体扫描）、`navigation/`（双层导航）等分包；`app/src/debug/` 为实验性构建源集（当前：液态玻璃渲染实验页，不影响 release） |
 | **docs/** | 项目文档：版本历史（CHANGELOG）、各版本发布说明（RELEASE_NOTES-\*）、架构说明、发版自动化、WebDAV 图文指南；子目录 `design/` 为图标源文件与液态玻璃原型，`archive/` 为历史文档归档 |
+| **engine/** | yt-dlp 引擎「最后已知可用版本」（LKG）静态清单——后台自更新遇到上游坏版本时自动回退到此处指向的验证版本；维护方式见文件内 `_doc` 字段 |
 | **tools/** | 开发辅助脚本（产物归档、构建推送、UI 一致性审核等），不参与 App 构建，仅本机开发用 |
 | **gradle/wrapper/** | Gradle Wrapper 本体（`gradle-wrapper.jar` + `gradle-wrapper.properties`），保证任何人克隆后用统一版本构建 |
 | **.github/workflows/** | GitHub Actions 工作流：`release.yml`（推 `v*` tag 自动签名构建并发布 Release） |
@@ -175,7 +177,8 @@ Cookie、网盘凭证等登录态经 AndroidKeyStore + AES/GCM 加密存储，�
 | 文档 | 说明 |
 |---|---|
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | **全部版本历史**（v1.3.0 起） |
-| [docs/RELEASE_NOTES-1.9.17.md](docs/RELEASE_NOTES-1.9.17.md) | 当前版本完整说明 |
+| [docs/RELEASE_NOTES-E-0.1.2.md](docs/RELEASE_NOTES-E-0.1.2.md) | 当前版本完整说明（审计修复 / 引擎云控） |
+| [engine/ytdlp-manifest.json](engine/ytdlp-manifest.json) | yt-dlp 引擎「最后已知可用版本」清单（维护说明见内文 `_doc`） |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构：技术栈、模块划分、主要链路 |
 | [docs/release-automation.md](docs/release-automation.md) | 发版流程 |
 | [docs/webdav-cloud-backup-guide/](docs/webdav-cloud-backup-guide/webdav-cloud-backup-guide.html) | WebDAV 备份图文指南 |
