@@ -65,6 +65,49 @@ class YtdlpEngineUpdaterTest {
         assertTrue(YtdlpEngineUpdater.isRemoteNewer("2025.11.12", "v2026.11.20"))
     }
 
+    @Test fun parseManifestReadsLastKnownGood() {
+        // 仓库静态 LKG 清单（engine/ytdlp-manifest.json 同构）：version/assetUrl/size
+        val manifest = """
+            {
+              "_doc": "说明字段应被忽略",
+              "lastKnownGood": {
+                "version": "v2025.11.12",
+                "assetUrl": "https://github.com/yt-dlp/yt-dlp/releases/download/2025.11.12/yt-dlp",
+                "size": 3170726,
+                "verifiedAt": "2025-11-12",
+                "notes": "随 E-0.1.2 APK 内置分发"
+              }
+            }
+        """.trimIndent()
+        val lkg = YtdlpEngineUpdater.parseManifest(manifest)
+        assertEquals("2025.11.12", lkg.version)
+        assertEquals(
+            "https://github.com/yt-dlp/yt-dlp/releases/download/2025.11.12/yt-dlp",
+            lkg.downloadUrl
+        )
+        assertEquals(
+            "https://gh-proxy.com/https://github.com/yt-dlp/yt-dlp/releases/download/2025.11.12/yt-dlp",
+            lkg.downloadMirrorUrl
+        )
+        assertEquals(3170726L, lkg.assetSize)
+    }
+
+    @Test fun parseManifestRejectsMalformed() {
+        val cases = listOf(
+            """{"_doc":"没有 lastKnownGood"}""",
+            """{"lastKnownGood":{"assetUrl":"https://github.com/x/yt-dlp"}}""",
+            """{"lastKnownGood":{"version":"2025.11.12"}}"""
+        )
+        cases.forEach { body ->
+            try {
+                YtdlpEngineUpdater.parseManifest(body)
+                fail("应拒绝畸形清单: $body")
+            } catch (expected: Exception) {
+                assertTrue(expected is IllegalArgumentException || expected is IllegalStateException)
+            }
+        }
+    }
+
     @Test fun validateBinaryAcceptsZipappShebangForm() {
         // 2026-11-21 机器直测：GitHub `yt-dlp` 资产是 shebang + 内嵌 zip 的 zipapp
         //（3,073,072 字节，头两字节 `#!`）——旧实现只认 "PK" 会把正常产物拒掉

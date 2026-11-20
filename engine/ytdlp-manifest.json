@@ -1,0 +1,10 @@
+{
+  "_doc": "yt-dlp 引擎「最后已知可用版本」（LKG）清单。云控更新时若上游最新版真机试运行失败，App 自动回退到本清单指向的版本。升级引擎并真机验证通过后，手动更新 version/assetUrl/size/verifiedAt 四个字段再提交（size 必须与 GitHub release 资产元数据一致，App 下载后会做长度精确校验）。",
+  "lastKnownGood": {
+    "version": "2025.11.12",
+    "assetUrl": "https://github.com/yt-dlp/yt-dlp/releases/download/2025.11.12/yt-dlp",
+    "size": 3170726,
+    "verifiedAt": "2025-11-12",
+    "notes": "随 E-0.1.2 APK 内置分发，真机长期验证（2160p/1080p60 均正常）"
+  }
+}

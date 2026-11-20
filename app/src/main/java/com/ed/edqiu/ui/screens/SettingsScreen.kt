@@ -357,6 +357,14 @@ fun DownloaderSettingsPage(
                                 "（${if (outcome.viaMirror) "镜像" else "代理"}通道），下次下载生效",
                             FeedbackKind.SUCCESS
                         )
+                        is YtdlpEngineUpdater.Outcome.RolledBackToFallback -> FeedbackMessage(
+                            "上游 ${outcome.failedVersion} 未能通过运行验证，已回退到仓库验证版 ${outcome.version}",
+                            FeedbackKind.NEUTRAL
+                        )
+                        is YtdlpEngineUpdater.Outcome.KeptCurrent -> FeedbackMessage(
+                            "上游 ${outcome.failedVersion} 未能通过运行验证，已保持当前版本",
+                            FeedbackKind.NEUTRAL
+                        )
                         YtdlpEngineUpdater.Outcome.AlreadyUpToDate -> FeedbackMessage(
                             "yt-dlp 引擎已是最新（${YoutubeDLService.engineVersion(context)}）",
                             FeedbackKind.NEUTRAL

@@ -239,6 +239,17 @@ object YoutubeDLService {
                     Log.i(TAG, "yt-dlp engine updated to ${outcome.version} (viaMirror=${outcome.viaMirror})")
                     outcome.version
                 }
+                is YtdlpEngineUpdater.Outcome.RolledBackToFallback -> {
+                    Log.w(
+                        TAG,
+                        "远端 ${outcome.failedVersion} 试运行失败，已回退仓库 LKG ${outcome.version}"
+                    )
+                    outcome.version
+                }
+                is YtdlpEngineUpdater.Outcome.KeptCurrent -> {
+                    Log.w(TAG, "远端 ${outcome.failedVersion} 未能验证，保持当前版本 ${outcome.version}")
+                    outcome.version
+                }
                 YtdlpEngineUpdater.Outcome.AlreadyUpToDate ->
                     YtdlpEngineUpdater.currentVersion(context) ?: "already-up-to-date"
             }
