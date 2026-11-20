@@ -93,7 +93,14 @@ class DownloadQueueWorker(
         return runCatching {
             val link = container.savedLinkRepository.getByTweetId(tweetId)
                 ?: return@runCatching Result.success()
-            if (link.status == LinkStatus.DOWNLOADED || link.status == LinkStatus.DELETED) {
+            // P2 审计修复（2026-11-21）：旧实现只豁免 DOWNLOADED/DELETED——手动下载失败
+            // （FAILED）后，本 Worker 立即原样重跑整条引擎链，attemptCount 双烧、
+            // DownloadRetryPolicy 退避形同虚设。现豁免一切 FAILED：
+            // - 取消（next_retry_at=NULL）绝不自动复活；
+            // - 退避未到的失败交还给 retryDueDownloads 按点重试（单烧）；
+            // - 已到点的失败由 Worker/轮询谁先抢到谁跑，仍是单次。
+            // 进程被杀续跑场景不受影响：首次下载中途被杀时 status 仍是 PENDING。
+            if (link.status != LinkStatus.PENDING) {
                 return@runCatching Result.success()
             }
             // viaQueue = true：不再次触发登记钩子，避免 Worker 自我递归

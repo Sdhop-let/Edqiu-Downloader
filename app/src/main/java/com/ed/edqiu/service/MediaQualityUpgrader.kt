@@ -107,7 +107,10 @@ object MediaQualityUpgrader {
         val bestVideoUrl: String?,
         val bestVideoBitrate: Int,
         val hasHls: Boolean,
-        val imageOrigUrl: String?
+        val imageOrigUrl: String?,
+        /** 推文内视频总数（2026-11-21 审计修复）：>1 的推文跳过 HLS 升级——
+         *  裸 status URL 是 playlist，会拿 video#1 的内容顶替目标 video#N 的 DB 行。 */
+        val videoCount: Int = 1
     )
 
     /** 媒体库扫描后触发（档位间隔节流；SLOW 档暂停一轮并提示）。 */
@@ -308,20 +311,22 @@ object MediaQualityUpgrader {
                             MediaType.IMAGE -> remote.imageOrigUrl != null
                             else -> false
                         }
-                        if (!better) {
+                        // P2 审计修复（2026-11-21）：多视频推文跳过两条升级路径——HLS 走裸
+                        // status URL 会拿 video#1 的内容顶替目标 video#N；直连路径的
+                        // bestVideoUrl 是全推文最高码率 mp4 变体，同样可能属于另一条视频。
+                        if (entity.mediaType == MediaType.VIDEO && remote.videoCount > 1) {
+                            Log.i(TAG, "Upgrade skipped for multi-video tweet: $tweetId")
                             checkedBatch += tweetId
                             doneCounter.incrementAndGet(); report()
                             return@withPermit
                         }
-                        // 有 HLS 高画质源且 mp4 变体不够好 → 走 yt-dlp 拉 HLS 最佳（预算制）。
-                        // 2026-11-11 画质策略升级（对齐源头路由）：配 Cookie（登录态可拉最高档）
-                        // 时，检测到 HLS 流的视频**无条件**尝试 HLS 升级——不再要求远端 mp4
-                        // <2Mbps，1080p 档渐进变体也换 HLS 高帧率；产物有大小保护（不比原文件
-                        // 大就不替换），失败进 retry。hasHls 标记缺失时仍只对低档位尝试
-                        // （避免高码率视频在标记缺失下白跑 yt-dlp）。
                         val hasCookies = runCatching {
                             com.ed.edqiu.data.preferences.CookiePreferences(context).hasCookies()
                         }.getOrDefault(false)
+                        // P2 审计修复（2026-11-21）：needsHls 判定提到 better 闸门之前。
+                        // 2026-11-11「配 Cookie 检测到 HLS 无条件升级」实际被 better 挡成死路——
+                        // videoNeedsUpgrade 要求远端 mp4 显著优于本地（>1.25 倍且 >500kbps），
+                        // HLS-only 推文（恰是目标场景）直接 checked 永久跳过。
                         val needsHls = entity.mediaType == MediaType.VIDEO && (
                             (remote.hasHls && (remote.bestVideoBitrate < 2_000_000 || hasCookies)) ||
                                 (entity.quality in LOW_QUALITY_TIERS && hasCookies)
@@ -336,6 +341,11 @@ object MediaQualityUpgrader {
                                     UpgradeResult.FAILED
                                 }
                         } else {
+                            if (!better) {
+                                checkedBatch += tweetId
+                                doneCounter.incrementAndGet(); report()
+                                return@withPermit
+                            }
                             runCatching { performUpgrade(dao, entity, remote) }
                                 .getOrElse { error ->
                                     Log.w(TAG, "Upgrade failed for ${entity.filePath}", error)
@@ -424,7 +434,18 @@ object MediaQualityUpgrader {
                     imageOrig = toOrigImageUrl(imageUrl)
                 }
             }
-            RemoteMedia(bestUrl, bestBitrate, hasHls, imageOrig)
+            // P1 审计修复（2026-11-21）：推文内视频总数。candidates 混合 videos/all/photos/
+            // images（同一视频出现两次）不能直接数——按 media.all（真实顺序、无重复）统计，
+            // 缺 all 时退回 videos 数组。
+            val videoCount = run {
+                val items = media.optJSONArray("all")?.let { arr ->
+                    (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+                } ?: media.optJSONArray("videos")?.let { arr ->
+                    (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+                } ?: emptyList()
+                items.count { it.optString("type", "") in VIDEO_TYPES }
+            }
+            RemoteMedia(bestUrl, bestBitrate, hasHls, imageOrig, videoCount)
         }.getOrNull()
     }
 
@@ -533,6 +554,19 @@ object MediaQualityUpgrader {
         if (!newFile.exists() || (!samePath && newFile.length() <= File(entity.filePath).length())) {
             // 异常小的产物不替换
             if (newFile.exists() && !samePath) newFile.delete()
+            return UpgradeResult.FAILED
+        }
+
+        // P0 审计修复（2026-11-21）：HLS 产物完整性校验。「比原文件大」防不住截断体
+        // （低清原文件 + 高清截断片段仍可能更大）。读不出时长 = 损坏；时长显著短于
+        // 原文件 = 截断/错片。samePath 时坏产物已原地覆盖旧文件，删除后下轮才能真正重下。
+        val expectedDuration = entity.duration.takeIf { it > 0 } ?: readDuration(File(entity.filePath))
+        val measuredDuration = readDuration(newFile)
+        if (measuredDuration == null ||
+            (expectedDuration != null && measuredDuration < expectedDuration * 0.85)
+        ) {
+            Log.w(TAG, "HLS upgrade: integrity check failed (measured=$measuredDuration, expected=$expectedDuration), drop: ${newFile.name}")
+            runCatching { newFile.delete() }
             return UpgradeResult.FAILED
         }
 
@@ -651,6 +685,22 @@ object MediaQualityUpgrader {
             return UpgradeResult.NO_GAIN
         }
 
+        // P0 审计修复（2026-11-21）：视频替换前完整性校验。downloadToFile 只保证「流正常
+        // 读到 EOF」——服务端提前断流/中间盒劫持返回截断体时同样「成功」，旧实现会让坏
+        // 产物直接顶替并删除原好文件（数据丢失）。读不出时长 = 损坏产物；时长显著短于
+        // 原文件 = 截断。两类一律拒绝替换，保留原文件等下轮重试。
+        if (isVideo) {
+            val expectedDuration = entity.duration.takeIf { it > 0 } ?: readDuration(File(entity.filePath))
+            val measuredDuration = readDuration(newFile)
+            if (measuredDuration == null ||
+                (expectedDuration != null && measuredDuration < expectedDuration * 0.85)
+            ) {
+                Log.w(TAG, "Upgrade: integrity check failed (measured=$measuredDuration, expected=$expectedDuration), drop: ${newFile.name}")
+                newFile.delete()
+                return UpgradeResult.FAILED
+            }
+        }
+
         // sidecar：旧 → 新（quality 更新）
         val oldSidecar = File(entity.filePath + ".meta.json")
         val newSidecar = File(newFile.absolutePath + ".meta.json")
@@ -712,6 +762,13 @@ object MediaQualityUpgrader {
                         }
                     }
                 }
+                // P0 审计修复（2026-11-21）：带 Content-Length 的响应必须收满——服务端
+                // 提前断流（截断体）按失败处理，坏产物绝不进入替换链路。
+                // contentLengthLong <= 0 = chunked/未知长度，无从校验，交给调用方时长校验兜底。
+                val expectedLength = conn.contentLengthLong
+                if (expectedLength > 0 && part.length() != expectedLength) {
+                    error("响应不完整（${part.length()}/$expectedLength 字节）")
+                }
                 if (target.exists()) target.delete()
                 if (!part.renameTo(target)) {
                     part.copyTo(target, overwrite = true)
@@ -738,6 +795,9 @@ object MediaQualityUpgrader {
     }
 
     private fun sanitize(name: String): String = name.replace(Regex("[/\\\\:*?\"<>|]"), "_")
+
+    /** 与 InternalMediaDownloader 同口径的视频类型集合（GIF 也走 yt-dlp 视频通道）。 */
+    private val VIDEO_TYPES = setOf("video", "gif", "animated_gif")
 
     private fun fetchText(url: String): String? = runCatching {
         val conn = URL(url).openConnection() as HttpURLConnection

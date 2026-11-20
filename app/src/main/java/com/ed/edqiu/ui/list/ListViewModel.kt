@@ -103,9 +103,13 @@ class ListViewModel(
             if (com.ed.edqiu.domain.BatchTweetUrlExtractor
                     .extractWithOriginals(effective).isEmpty()
             ) {
-                effective = runCatching {
-                    com.ed.edqiu.capture.TcoLinkResolver.expand(text)
-                }.getOrDefault(text)
+                // P3 审计修复（2026-11-21）：与 CaptureIntentActivity 同口径 8s 总超时——
+                // 旧实现无包装，3 条短链串行最坏 ~15s，主界面粘贴后胶囊空转无反馈
+                effective = kotlinx.coroutines.withTimeoutOrNull(8_000L) {
+                    runCatching {
+                        com.ed.edqiu.capture.TcoLinkResolver.expand(text)
+                    }.getOrDefault(text)
+                } ?: text
             }
             val pairs = com.ed.edqiu.domain.BatchTweetUrlExtractor
                 .extractWithOriginals(effective)
@@ -153,25 +157,32 @@ class ListViewModel(
     }
 
     fun requestDownload(tweetId: String) {
+        // P3 审计修复（2026-11-21）：单卡下载防连点——批量有 AtomicBoolean 门，单卡没有；
+        // 快速连点会叠两轮引擎链（第一轮失败时第二轮立刻真跑一遍），胶囊互相覆盖
+        if (!singleDownloadInFlight.add(tweetId)) return
         // 下载执行放应用级 downloadScope：退后台/页面销毁不中断（不划掉 App 就继续下载）；
         // 进度走与批量统一的胶囊（剩余 N 条 + 当前条百分比），结果仍走弹窗反馈。
         val tracker = startProgressCapsule(listOf(tweetId))
         downloadScope.launch {
-            val result = runCatching { repo.requestDownload(tweetId, manual = true) }
-                .getOrElse { error ->
-                    SavedLinkRepository.DownloadRequestResult.Failed(
-                        error.message ?: "下载异常",
-                        nextRetryAt = null
-                    )
-                }
-            tracker.cancel()
-            batchDownloadStateMutable.value = null
-            actionFeedback.value = ActionFeedback(
-                message = downloadMessage(result),
-                asDialog = true,
-                success = downloadSuccess(result)
-            )
-            scheduleRetry(tweetId, result)
+            try {
+                val result = runCatching { repo.requestDownload(tweetId, manual = true) }
+                    .getOrElse { error ->
+                        SavedLinkRepository.DownloadRequestResult.Failed(
+                            error.message ?: "下载异常",
+                            nextRetryAt = null
+                        )
+                    }
+                tracker.cancel()
+                batchDownloadStateMutable.value = null
+                actionFeedback.value = ActionFeedback(
+                    message = downloadMessage(result),
+                    asDialog = true,
+                    success = downloadSuccess(result)
+                )
+                scheduleRetry(tweetId, result)
+            } finally {
+                singleDownloadInFlight.remove(tweetId)
+            }
         }
     }
 
@@ -207,7 +218,10 @@ class ListViewModel(
     ): Job = downloadScope.launch {
         combine(repo.observeUserLinks(), DownloadTaskBus.tasks) { links, tasks ->
             val remaining = links.count { it.tweetId in batchIds && it.status != LinkStatus.DOWNLOADED }
-            val pct = InboxDownloadProgress.progressByTweet(tasks).values.maxOrNull()
+            // P3 审计修复（2026-11-21）：pct 按 batchIds 过滤再取 max——旧实现取全部推文
+            // max，后台订阅线/批外下载进行中时，批量胶囊显示别人的百分比
+            val pct = InboxDownloadProgress.progressByTweet(tasks)
+                .filterKeys { it in batchIds }.values.maxOrNull()
             remaining to pct
         }.collect { (remaining, pct) ->
             stateFlow.update { state ->
@@ -249,6 +263,10 @@ class ListViewModel(
      */
     /** 防连点（2026-10）：连点两次会派发同批 id 双份下载，两个进度胶囊互相覆盖。 */
     private val downloadAllInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** 单卡下载防连点（P3 审计修复 2026-11-21）：按 tweetId 记在飞，重复点击直接忽略。 */
+    private val singleDownloadInFlight =
+        java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     fun downloadAllPending() {
         if (!downloadAllInFlight.compareAndSet(false, true)) return
@@ -343,6 +361,8 @@ class ListViewModel(
                 "该作品已在媒体库，跳过下载"
             SavedLinkRepository.DownloadRequestResult.Missing -> "记录不存在"
             SavedLinkRepository.DownloadRequestResult.Gone -> "推文不存在"
+            // 2026-11-21 审计修复：取消语义（不烧重试额度，中性展示）
+            SavedLinkRepository.DownloadRequestResult.Cancelled -> "下载已取消"
             is SavedLinkRepository.DownloadRequestResult.Failed ->
                 if (result.nextRetryAt != null) {
                     "${result.reason}，稍后自动重试"
@@ -359,6 +379,8 @@ class ListViewModel(
             is SavedLinkRepository.DownloadRequestResult.AlreadyInLibrary -> true
             SavedLinkRepository.DownloadRequestResult.Gone,
             is SavedLinkRepository.DownloadRequestResult.Failed -> false
+            // 2026-11-21 审计修复：取消中性展示（非失败），不标红
+            SavedLinkRepository.DownloadRequestResult.Cancelled,
             SavedLinkRepository.DownloadRequestResult.Launched,
             SavedLinkRepository.DownloadRequestResult.Missing -> null
         }

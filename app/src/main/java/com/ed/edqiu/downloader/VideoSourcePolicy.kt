@@ -35,6 +35,10 @@ internal object VideoSourcePolicy {
                 return candidate.fps > baseline.fps
             }
         }
+        // P2 审计修复（2026-11-21）：基准信息不足（无尺寸且无码率）时无从判断优劣，
+        // 一律不换源保持渐进源——旧实现 `candidate.bitrate > 0 > baseline.bitrate * 1.1`
+        // 恒真，任何 tbr>0 候选（含 240p HLS）都入选，可反向降质。
+        if (baseline.shortEdge <= 0 && baseline.bitrate <= 0) return false
         return candidate.bitrate > 0 && candidate.bitrate > baseline.bitrate * 1.1
     }
 }

@@ -27,10 +27,13 @@ internal class TweetMediaManifest(private val directory: File) {
         read(tweetId)?.let { validFile(it, index) }
     }
 
-    fun record(tweetId: String, index: Int, file: File) = synchronized(lock) {
+    fun record(tweetId: String, index: Int, file: File, expectedKey: String? = null) = synchronized(lock) {
         require(file.isFile && file.length() > 0L)
         val props = requireNotNull(read(tweetId)) { "缺少媒体清单" }
         require(index in 0 until props.getProperty("count").toInt())
+        // 2026-11-21 审计修复：bgimg 补图按原序号回写时校验清单键——键不匹配
+        // （旧会话清单/媒体构成已变）绝不写，防把图片记录成视频项导致假完成
+        if (expectedKey != null && props.getProperty("key.$index") != expectedKey) return@synchronized
         putFile(props, index, file)
         save(tweetId, props)
     }

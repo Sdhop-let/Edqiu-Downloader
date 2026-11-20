@@ -86,12 +86,21 @@ class ThirdPartyApiResolver {
             val clean = url?.trim().takeIf { !it.isNullOrBlank() && it.startsWith("http") } ?: return
             val key = clean.substringBefore("?")
             if (!seen.add(key)) return
+            // P1 审计修复（2026-11-21）：视频只有 HLS 变体时第三方端点返回 m3u8 播放列表
+            // ——消费端 downloadFile 是纯 HTTP/Range 下载，会把几 KB 的列表文本存成
+            // .mp4 假成品（标 COMPLETED、不可播、重试被 AlreadyDownloaded 拦死）。一律拒绝。
+            if (kind == "video" && clean.substringBefore("?").substringAfterLast('.', "").equals("m3u8", true)) return
             val ext = if (kind == "image") {
                 val format = Regex("[?&]format=([a-zA-Z0-9]+)").find(clean)?.groupValues?.getOrNull(1)?.lowercase()
                 format?.takeIf { it in IMAGE_EXTS }
                     ?: clean.substringBefore("?").substringAfterLast('.', "jpg").lowercase().takeIf { it in IMAGE_EXTS }
                     ?: "jpg"
-            } else "mp4"
+            } else {
+                // P3 审计修复（2026-11-21）：视频扩展名按 URL 实推（形态②③可能给 webm 等），
+                // 不再硬编码 mp4 造成内容/扩展名不符
+                clean.substringBefore("?").substringAfterLast('.', "")
+                    .lowercase().takeIf { it in VIDEO_EXTS } ?: "mp4"
+            }
             out += ThirdPartyMedia(clean, kind, ext, "best", thumbnail)
         }
 
@@ -152,5 +161,7 @@ class ThirdPartyApiResolver {
 
     private companion object {
         val IMAGE_EXTS = setOf("jpg", "jpeg", "png", "webp", "gif")
+        /** 视频扩展名白名单（2026-11-21 审计修复：按 URL 实推，m3u8 已在 add() 内拒绝）。 */
+        val VIDEO_EXTS = setOf("mp4", "webm", "mov", "m4v", "mkv")
     }
 }

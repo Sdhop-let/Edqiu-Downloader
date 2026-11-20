@@ -38,4 +38,21 @@ class InboxDownloadProgressTest {
         assertNull(InboxDownloadProgress.tweetIdOf("bgimg_${tweet}_1"))
         assertEquals(tweet, InboxDownloadProgress.tweetIdOf("tpapi_${tweet}_1"))
     }
+
+    @Test fun cancelledPlaceholderStillAnchorsSessionBoundary() {
+        // P2 审计修复（2026-11-21）：占位被取消（isActive=false）后，会话分界不再锚在
+        // 占位活性上——历史会话任务（更早 createdAt）不得泄入当前会话分母。
+        val oldFailed = task("xinvox_${tweet}_1", DownloadStatus.FAILED, 50f, 10L)
+        val cancelledPending = task("pending_$tweet", DownloadStatus.CANCELLED, 0f, 100L)
+        val fresh = task("xinvox_${tweet}_2", DownloadStatus.DOWNLOADING, 40f, 110L)
+        // 占位失活前：分母 = 本次会话任务（fresh 单个），进度 40%（旧 FAILED 不计入）
+        assertEquals(40, InboxDownloadProgress.progressByTweet(listOf(oldFailed, cancelledPending, fresh))[tweet])
+    }
+
+    @Test fun activeEmptyWithoutLivePlaceholderHandsBackToDb() {
+        // 占位被取消且无活跃任务：不显示 99 哨兵，交回 DB 状态（与旧语义一致）
+        val cancelledPending = task("pending_$tweet", DownloadStatus.CANCELLED, 0f, 100L)
+        val failed = task("xinvox_${tweet}_1", DownloadStatus.FAILED, 50f, 110L)
+        assertTrue(InboxDownloadProgress.progressByTweet(listOf(cancelledPending, failed)).isEmpty())
+    }
 }

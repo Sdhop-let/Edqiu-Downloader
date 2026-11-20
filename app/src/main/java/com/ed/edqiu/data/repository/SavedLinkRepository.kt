@@ -67,6 +67,12 @@ class SavedLinkRepository(
         data object Gone : DownloadRequestResult
 
         /**
+         * 用户主动取消（2026-11-21 审计修复）：非成功非失败——DB 记 FAILED +
+         * 「已取消」+ next_retry_at=NULL（不烧 attemptCount、不自动复活）。
+         */
+        data object Cancelled : DownloadRequestResult
+
+        /**
          * 媒体库已有同推文文件（2026-10-21 下载去重）：订阅/收件箱点下载前比对
          * download_history——命中即回写 saved_links 为 DOWNLOADED 并跳过引擎链，
          * 不重复下载同一条作品。
@@ -183,6 +189,12 @@ class SavedLinkRepository(
         // P0-4：登记进 WorkManager 持久队列（幂等 KEEP）——执行中途进程被杀也能续跑
         if (!viaQueue) onDownloadRequested?.invoke(tweetId)
 
+        // 2026-11-21 审计修复：会话起点统一回收上次下载残留的取消标记（session_/任务 id）。
+        // 此前 xinvox_/bgimg_ 任务从不注销——取消一次后同推文每次重试都秒命中残留标记
+        // 自取消，直到进程重启。per-tweet 互斥保证这里串行，cancelDownload 写入的活跃
+        // 标记只属于当前会话，跨会话残留由这里清除。
+        DownloadCancellation.clearTweet(tweetId)
+
         val now = System.currentTimeMillis()
         val attemptNumber = link.attemptCount + 1
         // 双线隔离（2026-10-17）：用户下载进行中→置位车道信号，订阅线队列让位；
@@ -233,6 +245,13 @@ class SavedLinkRepository(
                     DownloadRequestResult.Failed(result.reason, nextRetryAt)
                 }
             }
+            DownloaderClient.LaunchResult.Cancelled -> {
+                // 2026-11-21 审计修复：取消不是失败——不烧 attemptCount、不设
+                // next_retry_at（NULL 不会被 retryDueDownloads 捞起），手动重试仍可用。
+                // 旧实现记 FAILED + 30s 自动重试，把用户刚取消的下载静默复活。
+                dao.markDownloadCancelled(tweetId, now, "已取消")
+                DownloadRequestResult.Cancelled
+            }
             DownloaderClient.LaunchResult.TweetGone -> {
                 dao.markTweetGone(tweetId, now)
                 DownloadRequestResult.Gone
@@ -262,6 +281,8 @@ class SavedLinkRepository(
                 // 2026-10-21 去重命中算跳过（媒体库已有文件）
                 is DownloadRequestResult.AlreadyInLibrary,
                 DownloadRequestResult.Missing,
+                // 2026-11-21：用户取消计入跳过（非失败，不进失败弹窗统计）
+                DownloadRequestResult.Cancelled,
                 DownloadRequestResult.Gone -> skipped++
             }
         }

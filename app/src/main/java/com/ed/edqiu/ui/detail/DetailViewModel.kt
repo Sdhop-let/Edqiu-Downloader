@@ -120,6 +120,9 @@ class DetailViewModel(
                 "记录不存在"
             SavedLinkRepository.DownloadRequestResult.Gone ->
                 "推文不存在"
+            // 2026-11-21 审计修复：取消语义（不烧重试额度，中性展示）
+            SavedLinkRepository.DownloadRequestResult.Cancelled ->
+                "下载已取消"
             is SavedLinkRepository.DownloadRequestResult.Failed ->
                 result.reason
         }
@@ -131,6 +134,8 @@ class DetailViewModel(
             is SavedLinkRepository.DownloadRequestResult.AlreadyInLibrary -> true
             SavedLinkRepository.DownloadRequestResult.Gone,
             is SavedLinkRepository.DownloadRequestResult.Failed -> false
+            // 2026-11-21 审计修复：取消中性展示（非失败），不标红
+            SavedLinkRepository.DownloadRequestResult.Cancelled,
             SavedLinkRepository.DownloadRequestResult.Launched,
             SavedLinkRepository.DownloadRequestResult.Missing -> null
         }

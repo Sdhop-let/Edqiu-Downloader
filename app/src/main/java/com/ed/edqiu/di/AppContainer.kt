@@ -10,7 +10,6 @@ import com.ed.edqiu.data.preferences.CloudSyncPreferences
 import com.ed.edqiu.data.preferences.ProxyPreferences
 import com.ed.edqiu.data.preferences.SettingsRepository
 import com.ed.edqiu.data.repository.DownloadMonitor
-import com.ed.edqiu.data.repository.DownloadTaskRepo
 import com.ed.edqiu.data.repository.DownloaderClient
 import com.ed.edqiu.data.repository.LinkHistoryRepository
 import com.ed.edqiu.data.repository.SavedLinkRepository
@@ -74,7 +73,6 @@ class AppContainer(context: Context) {
     val settingsRepository: SettingsRepository = SettingsRepository(context)
 
     /** 独立下载器（Direct/yt-dlp）活跃任务的持久化仓库，供启动恢复与后台 Worker 使用。 */
-    val downloadTaskRepo: DownloadTaskRepo = DownloadTaskRepo(context.applicationContext)
 
     // ================= 网盘备份 → 2026-10 整体移除 =================
     // 备份中心（BackupEngine 队列 / 多网盘适配器 / 账本 / 任务存储）随功能删除；

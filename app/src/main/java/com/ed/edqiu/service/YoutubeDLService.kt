@@ -47,16 +47,27 @@ object YoutubeDLService {
         cookieFilePath: String? = null,
         playlistIndex: Int? = null,
         processId: String? = null,
-        expectedStreams: Int = 2
+        expectedStreams: Int = 2,
+        /** true = 解析全部产物行（裸 status URL 对多视频推文是 playlist，逐个落位）。 */
+        multiVideo: Boolean = false
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val pid = processId ?: UUID.randomUUID().toString()
             val progressTracker = YtdlpProgressTracker(expectedStreams)
+            // P1 审计修复（2026-11-21）：输出模板加 [%(id)s]。旧模板 {uploader}/{title}.ext
+            // 无推文 id——yt-dlp 标题 = 作者 + 文案前 72 字符，同作者两条文案开头相同的推文
+            // （模板句/GIF 常见）触发标题碰撞：第二条命中 "has already been downloaded"
+            // 不下载任何内容，旧文件还被改名挂到新推文规约名下（内容错配 + 旧路径悬空）。
+            // id 进文件名后碰撞消失；extractFilePath 同步校验 "已存在" 行的身份。
             val outputPath = if (playlistIndex != null) {
-                "$outputDir/%(uploader)s/%(title)s_%(playlist_index)s.%(ext)s"
+                "$outputDir/%(uploader)s/%(title)s_%(playlist_index)s_[%(id)s].%(ext)s"
             } else {
-                "$outputDir/%(uploader)s/%(title)s.%(ext)s"
+                "$outputDir/%(uploader)s/%(title)s_[%(id)s].%(ext)s"
             }
+            // 从 URL 提取推文 id（.../status/{id} 或 .../status/{id}/video/{n}），
+            // 供 extractFilePath 校验 "has already been downloaded" 行确属本推文
+            val expectedTweetId = url.substringAfterLast("/status/", "")
+                .substringBefore('/').takeIf { it.matches(Regex("\\d+")) }
 
             val request = YoutubeDLRequest(url).apply {
                 addOption("-f", formatId)
@@ -114,11 +125,18 @@ object YoutubeDLService {
             }
 
             // Extract the actual file path from yt-dlp output
-            val filePath = extractFilePath(result.out, outputDir)
-                ?: return@withContext Result.failure(
+            val filePaths = if (multiVideo) {
+                extractAllFilePaths(result.out, outputDir, expectedTweetId)
+            } else {
+                listOfNotNull(extractFilePath(result.out, outputDir, expectedTweetId))
+            }
+            if (filePaths.isEmpty()) {
+                return@withContext Result.failure(
                     Exception("下载完成但无法从 yt-dlp 输出确认产物路径，请重试或反馈日志")
                 )
-            Result.success(filePath)
+            }
+            // 单路径直接返回；多视频以 \n 连接（路径不含换行符），调用方按行拆分逐个落位
+            Result.success(filePaths.joinToString("\n"))
         } catch (e: Exception) {
             Log.e(TAG, "downloadVideo error", e)
             Result.failure(translateLinkerFailure(e))
@@ -335,8 +353,12 @@ object YoutubeDLService {
      * 首个 [download] Destination（单格式下载的最终文件）。
      * 注意合并下载时首个 Destination 是视频单流中间文件（合并后即被 yt-dlp 删除），
      * 旧实现先命中它导致返回已删除路径、下载误判失败（2026-10 修复）。
+     *
+     * P1 审计修复（2026-11-21）：expectedTweetId 非空时，"has already been downloaded"
+     * 行必须包含该推文 id（模板产物名含 [id]）才采纳——旧实现无身份校验，同作者标题
+     * 碰撞时会把旧推文的已存在文件直接当作本推文产物返回。
      */
-    private fun extractFilePath(output: String, baseDir: String): String? {
+    private fun extractFilePath(output: String, baseDir: String, expectedTweetId: String? = null): String? {
         val lines = output.lines()
         for (line in lines) {
             val trimmed = line.trim()
@@ -348,7 +370,9 @@ object YoutubeDLService {
         for (line in lines) {
             val trimmed = line.trim()
             if (trimmed.contains("has already been downloaded")) {
-                return trimmed.substringAfter("[download] ").substringBefore(" has already").trim()
+                val path = trimmed.substringAfter("[download] ").substringBefore(" has already").trim()
+                if (expectedTweetId != null && !path.contains("[$expectedTweetId]")) continue
+                return path
             }
         }
         for (line in lines) {
@@ -361,6 +385,28 @@ object YoutubeDLService {
         // 旧实现兜底返回必然不存在的 "$baseDir/downloaded_video.mp4"，下游照样写
         // sidecar、置 COMPLETED，随后状态机把它降回 PENDING，反复横跳
         return null
+    }
+
+    /**
+     * 多视频模式（2026-11-21 审计修复）：解析 yt-dlp 输出的全部产物路径。
+     * 裸 status URL 对多视频推文是 playlist——yt-dlp 逐条下载并逐条输出 Merger 行，
+     * 旧实现只认首条导致其余视频滞留孤儿目录。优先级与 [extractFilePath] 一致：
+     * 全部 [Merger] 行 → 全部 "already downloaded" 行（带 id 校验）→ 首个 Destination。
+     */
+    private fun extractAllFilePaths(output: String, baseDir: String, expectedTweetId: String?): List<String> {
+        val lines = output.lines().map { it.trim() }
+        val merged = lines.filter { it.startsWith("[Merger] Merging formats into") }
+            .map { it.removePrefix("[Merger] Merging formats into").trim().removeSurrounding("\"") }
+        if (merged.isNotEmpty()) return merged
+        val already = lines.mapNotNull { trimmed ->
+            if (!trimmed.contains("has already been downloaded")) return@mapNotNull null
+            val path = trimmed.substringAfter("[download] ").substringBefore(" has already").trim()
+            if (expectedTweetId != null && !path.contains("[$expectedTweetId]")) null else path
+        }
+        if (already.isNotEmpty()) return already
+        val destination = lines.firstOrNull { it.startsWith("[download] Destination:") }
+            ?.removePrefix("[download] Destination:")?.trim()
+        return listOfNotNull(destination)
     }
 
     /**

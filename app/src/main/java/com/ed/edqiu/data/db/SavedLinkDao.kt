@@ -62,6 +62,10 @@ interface SavedLinkDao {
            OR avatar_url IS NULL
            OR thumbnail_url IS NULL
            OR thumbnail_url = ''
+        -- P3 审计修复（2026-11-21）：排除 DELETED 终态——推文不存在/已被删除的行
+        -- 每轮同步都重复打 fxtwitter（永远修不回来），且 ORDER BY saved_at DESC 让
+        -- 「修不回来」的行霸占 LIMIT 名额，饿死更旧的可修复行
+           AND status != 'DELETED'
         ORDER BY saved_at DESC
         LIMIT :limit
         """
@@ -176,6 +180,24 @@ interface SavedLinkDao {
         attemptedAt: Long,
         error: String
     )
+
+    /**
+     * 用户取消（2026-11-21 审计修复）：取消不是失败——不烧 attemptCount、不设
+     * next_retry_at（getRetryableFailures 只捞 next_retry_at 非空的 FAILED，NULL
+     * 不会被自动复活），手动重试仍可用。旧实现取消记 FAILED + 30s 自动重试，
+     * 把用户刚取消的下载静默复活并与「取消→秒取消」循环叠加烧光重试额度。
+     */
+    @Query(
+        """
+        UPDATE saved_links
+        SET status = 'FAILED',
+            last_attempt_at = :attemptedAt,
+            last_error = :error,
+            next_retry_at = NULL
+        WHERE tweetId = :tweetId
+        """
+    )
+    suspend fun markDownloadCancelled(tweetId: String, attemptedAt: Long, error: String)
 
     @Query(
         """

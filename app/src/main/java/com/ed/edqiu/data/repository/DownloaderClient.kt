@@ -58,6 +58,13 @@ class DownloaderClient(private val context: Context) {
 
         /** 推文已不存在（被删/私密/未公开）——永久失败，不再回退、不再重试。 */
         data object TweetGone : LaunchResult
+
+        /**
+         * 用户主动取消（2026-11-21 审计修复）：不是失败——不烧 attemptCount、不设
+         * next_retry_at、不记熔断/亲和。旧实现取消与真失败同型（Failed("下载已取消")），
+         * 账本记 FAILED 并挂 30s 自动重试，把用户刚取消的下载静默复活并烧光重试额度。
+         */
+        data object Cancelled : LaunchResult
     }
 
     private val internalDownloader = InternalMediaDownloader(context)
@@ -148,7 +155,7 @@ class DownloaderClient(private val context: Context) {
                         return LaunchResult.TweetGone
                     }
                     if (error is DownloadCancelledException || error is kotlinx.coroutines.CancellationException) {
-                        return LaunchResult.Failed("下载已取消")
+                        return LaunchResult.Cancelled
                     }
                     if (error is com.ed.edqiu.downloader.PartialMediaDownloadException) {
                         // API 和已落盘媒体均有效，避免打熔断/亲和使下一轮绕去其他源整条重下。
@@ -171,8 +178,8 @@ class DownloaderClient(private val context: Context) {
                         )
                         // 2026-10-25 宽路由保底：yt-dlp 拉流失败（无 HLS / 登录失效 / 网络）时
                         // 回退内部引擎直下 mp4——「拉不到最高画质」不能变成「什么都拿不到」。
-                        // 用户主动取消不回退（尊重取消）
-                        if (ytResult is LaunchResult.Failed && ytResult.reason != "下载已取消") {
+                        // 用户主动取消（LaunchResult.Cancelled）不回退（尊重取消）
+                        if (ytResult is LaunchResult.Failed) {
                             val files = internalDownloader
                                 .downloadTweet(normalizedUrl, effectiveProxy, allowHlsRouting = false)
                                 .getOrNull()
@@ -210,10 +217,16 @@ class DownloaderClient(private val context: Context) {
             anyEngineExecuted = true
             when (val result = ytdlpFallback(normalizedUrl, tweetId, internalError)) {
                 is LaunchResult.Downloaded -> {
+                    // P3 审计修复（2026-11-21）：引擎二成功清熔断/亲和计数（此前只有
+                    // 引擎一/三 recordEngineSuccess，yt-dlp 成功不影响任何账目）
+                    health.recordEngineSuccess(DownloadEngineHealth.ENGINE_YTDLP)
                     health.markTweetSuccess(tweetId)
                     return result
                 }
                 is LaunchResult.TweetGone -> return result
+                // 2026-11-21 审计修复：取消直接上抛——不记亲和（旧实现落 else 分支
+                // markTweetFailed 把 yt-dlp 引擎拉黑 24h）、不进第三方兜底、不烧 attempt
+                is LaunchResult.Cancelled -> return LaunchResult.Cancelled
                 is LaunchResult.Failed -> {
                     ytdlpError = result.reason
                     health.markTweetFailed(tweetId, DownloadEngineHealth.ENGINE_YTDLP)
@@ -237,11 +250,15 @@ class DownloaderClient(private val context: Context) {
                     if (!ytdlpError.isNullOrBlank()) append("；yt-dlp 回退失败（$ytdlpError）")
                     if (!tpReason.isNullOrBlank()) append("；$tpReason")
                 }
-                // P0-2 自救热修（2026-09-15 批次2）：三层全挂 → 解析规则大概率整体过时。
+                // P0-2 自救热修（2026-09-15 批次2）：三层真失败 → 解析规则大概率整体过时。
                 // 每进程一次：运行时更新 yt-dlp 至最新（新 extractor 常能救回解析），成功清空全部熔断。
+                // P3 审计修复（2026-11-21）：fromSkip（三层全被熔断/亲和跳过、无引擎真跑）时
+                // 不消耗——自救热修的设计前提是「真失败→规则过时」，断网期首个全跳过请求
+                // 白白烧掉每进程唯一一次机会，网络恢复后 extractor 真过时反而无热修可用。
                 // 2026-10：16KB 内存页设备上更新 yt-dlp 二进制解决不了 ffmpeg 依赖库 4KB 对齐问题，
                 // 自救热修必败，跳过以免白耗流量与时间（安全写法：cast 失败/null 视为非 16KB 设备）
-                if (DownloadEngineHealth.shouldAttemptSelfHeal() &&
+                if (anyEngineExecuted &&
+                    DownloadEngineHealth.shouldAttemptSelfHeal() &&
                     (context.applicationContext as? com.ed.edqiu.TwitterDownloaderApp)?.is16kPageDevice != true
                 ) {
                     runCatching { YoutubeDLService.updateYoutubeDL(context) }
@@ -311,82 +328,104 @@ class DownloaderClient(private val context: Context) {
                 playlistIndex = null,
                 processId = task.id,
                 expectedStreams = expectedStreams,
+                // P1 审计修复（2026-11-21）：裸 status URL 对多视频推文是 playlist——
+                // 旧实现只认首条 Merger，其余视频滞留孤儿目录且推文被标成功。解析全部产物。
+                multiVideo = true,
             ).fold(
-                onSuccess = { rawPath ->
-                    // 2026-10-25 产物规约化（对齐 MediaQualityUpgrader.performHlsUpgrade 修复）：
-                    // yt-dlp 模板产物在 {uploader}/{标题}.mp4 子目录且名含推文无关标题——
-                    // 扫描期解析依赖规约名，历史遗留曾因此产生重复条目。此处重命名/移动回
-                    // 规约名 {uploader}_{tweetId}_{idx}_video_best.mp4（根目录），并清空残留子目录。
-                    // 2026-11-07 审计修复：规约名已存在时递增 idx——旧实现无条件 delete 旧产物，
-                    // 同推文先后两次 yt-dlp 下载（不同视频）会静默覆盖丢上一份
-                    val rawFile = File(rawPath)
-                    if (!rawFile.isFile) {
-                        // 2026-11-07 审计修复：产物存在性防御——绝不给不存在的文件写
-                        // sidecar/置 COMPLETED（旧链路会出现「下载成功但文件不存在」横跳）
-                        val msg = "下载完成但产物不存在（${rawPath.take(120)}）"
+                onSuccess = { rawPaths ->
+                    // 产物规约化（2026-10-25 起）：yt-dlp 模板产物在 {uploader}/{标题}_[id].mp4
+                    // 子目录且名含推文无关标题——重命名/移动回规约名
+                    // {uploader}_{tweetId}_{序号}_video_best.mp4（根目录），并清空残留子目录。
+                    // 规约名占用时递增后缀防覆盖（2026-11-07 审计修复）。
+                    // 2026-11-21：多视频按本次下载内的视频序号逐个落位，sidecar mediaIndex
+                    // = 视频序号（与引擎一直连路径的序号口径对齐）；任一产物无效整单失败，
+                    // 绝不「部分成功即终局」。
+                    val rawList = rawPaths.split('\n').map { it.trim() }.filter { it.isNotBlank() }
+                    if (rawList.isEmpty()) {
+                        val msg = "下载完成但 yt-dlp 未返回产物路径"
                         DownloadTaskBus.updateTask(task.id) {
                             it.copy(status = DownloadStatus.FAILED, errorMessage = msg)
                         }
                         return@fold LaunchResult.Failed(msg)
                     }
-                    // 画质已在传输前按格式表选择。名义码率与文件平均码率不可直接比较，
-                    // 有效成品不因码率相等/偏低删除重下；空文件仍按真实失败处理。
-                    if (rawFile.length() == 0L) {
-                        val msg = "下载产物为空"
-                        DownloadTaskBus.updateTask(task.id) {
-                            it.copy(status = DownloadStatus.FAILED, errorMessage = msg)
-                        }
-                        return@fold LaunchResult.Failed(msg)
-                    }
-                    val measured = measureMediaSpecs(rawFile)
-                    // 落位：sidecar 画质标签用实测分辨率（短边）/码率反推的档位（实证值，不再写死 "best"）
-                    val measuredQuality = bitrateToQualityLabel(
-                        measured?.first ?: 0,
-                        measured?.second ?: 0,
-                        measured?.third ?: 0
-                    )
-                    android.util.Log.i(
-                        "DownloaderClient",
-                        "HLS 产物落位 tweet=$tweetId：实测 ${measured?.second ?: 0}x${measured?.third ?: 0} /" +
-                            "${(measured?.first ?: 0) / 1000}kbps → 档位 $measuredQuality"
-                    )
                     val safeUploader = uploader.replace(Regex("[/\\:*?\"<>|]"), "_").ifBlank { "unknown" }
-                    val convention = run {
-                        var idx = 1
-                        var candidate = File(outputDir, "${safeUploader}_${tweetId}_${idx}_video_best.mp4")
-                        while (candidate.exists() && candidate.absolutePath != rawFile.absolutePath) {
-                            idx++
-                            candidate = File(outputDir, "${safeUploader}_${tweetId}_${idx}_video_best.mp4")
+                    val files = mutableListOf<InternalMediaDownloader.DownloadedFile>()
+                    var invalidCount = 0
+                    rawList.forEachIndexed { ordinal, rawPath ->
+                        val rawFile = File(rawPath)
+                        // 产物存在性/非空防御（2026-11-07 审计修复语义，多产物逐个执行）——
+                        // 绝不给不存在/空文件写 sidecar/置 COMPLETED
+                        if (!rawFile.isFile || rawFile.length() == 0L) {
+                            invalidCount++
+                            return@forEachIndexed
                         }
-                        candidate
+                        val measured = measureMediaSpecs(rawFile)
+                        // 落位：sidecar 画质标签用实测分辨率（短边）/码率反推的档位（实证值，不再写死 "best"）
+                        val measuredQuality = bitrateToQualityLabel(
+                            measured?.first ?: 0,
+                            measured?.second ?: 0,
+                            measured?.third ?: 0
+                        )
+                        android.util.Log.i(
+                            "DownloaderClient",
+                            "yt-dlp 产物落位 tweet=$tweetId #${ordinal + 1}/${rawList.size}：" +
+                                "实测 ${measured?.second ?: 0}x${measured?.third ?: 0} /" +
+                                "${(measured?.first ?: 0) / 1000}kbps → 档位 $measuredQuality"
+                        )
+                        // 序号位从 ordinal+1 起找空闲规约名：正常场景 _1/_2/... 与视频序号对齐；
+                        // 序号位被残留孤儿占用时递增后缀防覆盖（副作用：文件名序号可能后移，
+                        // 但 sidecar mediaIndex 仍记录真实视频序号）
+                        var nameIdx = ordinal + 1
+                        var convention = File(outputDir, "${safeUploader}_${tweetId}_${nameIdx}_video_best.mp4")
+                        while (convention.exists() && convention.absolutePath != rawFile.absolutePath) {
+                            nameIdx++
+                            convention = File(outputDir, "${safeUploader}_${tweetId}_${nameIdx}_video_best.mp4")
+                        }
+                        val finalFile = if (convention.absolutePath != rawFile.absolutePath) {
+                            runCatching {
+                                if (convention.exists()) convention.delete()
+                                if (rawFile.renameTo(convention)) {
+                                    rawFile.parentFile
+                                        ?.takeIf { it.isDirectory && it.list()?.isEmpty() == true }
+                                        ?.delete()
+                                    convention
+                                } else {
+                                    rawFile.copyTo(convention, overwrite = true).also { rawFile.delete() }
+                                }
+                            }.getOrElse { rawFile }
+                        } else rawFile
+                        val path = finalFile.absolutePath
+                        writeSidecar(File(path), url, tweetId, quality = measuredQuality, mediaIndex = ordinal + 1)
+                        files += InternalMediaDownloader.DownloadedFile(
+                            tweetId = tweetId,
+                            filePath = path,
+                            downloadedAt = System.currentTimeMillis(),
+                            authorId = null,
+                            authorName = null,
+                            caption = null,
+                            thumbnailUrl = null
+                        )
                     }
-                    val finalFile = if (convention.absolutePath != rawFile.absolutePath) {
-                        runCatching {
-                            if (convention.exists()) convention.delete()
-                            if (rawFile.renameTo(convention)) {
-                                rawFile.parentFile
-                                    ?.takeIf { it.isDirectory && it.list()?.isEmpty() == true }
-                                    ?.delete()
-                                convention
-                            } else {
-                                rawFile.copyTo(convention, overwrite = true).also { rawFile.delete() }
-                            }
-                        }.getOrElse { rawFile }
-                    } else rawFile
-                    val path = finalFile.absolutePath
-                    writeSidecar(File(path), url, tweetId, quality = measuredQuality)
+                    if (invalidCount > 0 || files.isEmpty()) {
+                        val msg = "yt-dlp 产物异常（${rawList.size} 个中 $invalidCount 个无效）"
+                        DownloadTaskBus.updateTask(task.id) {
+                            it.copy(status = DownloadStatus.FAILED, errorMessage = msg)
+                        }
+                        return@fold LaunchResult.Failed(msg)
+                    }
                     // 2026-11-11 真机实测修复（收件箱 99% 卡住）：旧实现补拉图片**同步**跑在
                     // COMPLETED 更新之前——FXTwitter API + 封面补拉 10-30s 里，视频文件早已
                     // 落盘且被媒体库扫描收编（用户看到「下载完成」），但 Bus 还是
                     // ytdlp COMPLETED(100) + 补拉图片 DOWNLOADING(99) → 收件箱聚合
                     // (100+99)/2=99% 卡住，DB 落位同样被拖住。改为先置 COMPLETED、
                     // 补拉图片 fire-and-forget 到应用级 IO scope（失败静默，升级器兜底）。
+                    val completedAt = System.currentTimeMillis()
                     DownloadTaskBus.updateTask(task.id) {
                         it.copy(
                             status = DownloadStatus.COMPLETED,
-                            outputPath = path,
+                            outputPath = files.first().filePath,
                             progress = 100f,
-                            completedAt = System.currentTimeMillis()
+                            completedAt = completedAt
                         )
                     }
                     runCatching {
@@ -409,29 +448,22 @@ class DownloaderClient(private val context: Context) {
                             }
                         }
                     }
-                    LaunchResult.Downloaded(
-                        listOf(
-                            InternalMediaDownloader.DownloadedFile(
-                                tweetId = tweetId,
-                                filePath = path,
-                                downloadedAt = System.currentTimeMillis(),
-                                authorId = null,
-                                authorName = null,
-                                caption = null,
-                                thumbnailUrl = null
-                            )
-                        )
-                    )
+                    LaunchResult.Downloaded(files)
                 },
                 onFailure = { error ->
-                    val cancelled = error is DownloadCancelledException || DownloadCancellation.isCancelled(task.id)
+                    val cancelled = error is DownloadCancelledException ||
+                        error is kotlinx.coroutines.CancellationException ||
+                        DownloadCancellation.isCancelled(task.id) ||
+                        DownloadCancellation.isCancelled("session_$tweetId")
                     DownloadTaskBus.updateTask(task.id) {
                         it.copy(
                             status = if (cancelled) DownloadStatus.CANCELLED else DownloadStatus.FAILED,
                             errorMessage = if (cancelled) "下载已取消" else (error.message ?: "yt-dlp 下载失败")
                         )
                     }
-                    LaunchResult.Failed(if (cancelled) "下载已取消" else (error.message ?: "未知错误"))
+                    // 2026-11-21 审计修复：取消返回 Cancelled 语义（不再伪装成 Failed）
+                    if (cancelled) LaunchResult.Cancelled
+                    else LaunchResult.Failed(error.message ?: "未知错误")
                 }
             ) } finally {
                 DownloadCancellation.unregister(task.id)
@@ -439,7 +471,13 @@ class DownloaderClient(private val context: Context) {
             }
             launchResult
         }.getOrElse { error ->
-            LaunchResult.Failed("yt-dlp 回退异常：${error.message ?: "未知错误"}")
+            if (error is DownloadCancelledException || error is kotlinx.coroutines.CancellationException ||
+                DownloadCancellation.isCancelled("session_$tweetId")
+            ) {
+                LaunchResult.Cancelled
+            } else {
+                LaunchResult.Failed("yt-dlp 回退异常：${error.message ?: "未知错误"}")
+            }
         }
     }
 
@@ -488,6 +526,9 @@ class DownloaderClient(private val context: Context) {
             outputDir.mkdirs()
             val files = mutableListOf<InternalMediaDownloader.DownloadedFile>()
             var lastError: String? = null
+            // 2026-11-21 审计修复：取消语义——任一媒体被取消则整单 Cancelled（与引擎一
+            // cancelledAny 同口径），绝不带取消进入「部分成功即终局」判定
+            var cancelledAny = false
 
             medias.forEachIndexed { index, media ->
                 val mediaIndex = index + 1
@@ -543,7 +584,11 @@ class DownloaderClient(private val context: Context) {
                     }
                 }.onFailure { error ->
                     lastError = error.message
-                    val cancelled = error is DownloadCancelledException || DownloadCancellation.isCancelled(task.id)
+                    val cancelled = error is DownloadCancelledException ||
+                        error is kotlinx.coroutines.CancellationException ||
+                        DownloadCancellation.isCancelled(task.id) ||
+                        DownloadCancellation.isCancelled("session_$tweetId")
+                    if (cancelled) cancelledAny = true
                     DownloadTaskBus.updateTask(task.id) {
                         it.copy(
                             status = if (cancelled) DownloadStatus.CANCELLED else DownloadStatus.FAILED,
@@ -554,10 +599,20 @@ class DownloaderClient(private val context: Context) {
                 DownloadCancellation.unregister(task.id)
             }
 
-            if (files.isNotEmpty()) {
+            if (cancelledAny) {
+                return@withContext LaunchResult.Cancelled to true
+            }
+            if (files.isNotEmpty() && files.size >= medias.size) {
                 health.recordEngineSuccess(DownloadEngineHealth.ENGINE_THIRD_PARTY)
                 health.markTweetSuccess(tweetId)
                 LaunchResult.Downloaded(files) to true
+            } else if (files.isNotEmpty()) {
+                // P2 审计修复（2026-11-21）：部分成功 ≠ 整单成功——旧实现只下到 1 个媒体
+                // 也置 DOWNLOADED + attempt 清零，后续请求被 AlreadyDownloaded 短路，
+                // 缺的媒体永不补（引擎一有 PartialMediaDownloadException 续传语义，引擎三
+                // 漏掉同一语义）。保持 FAILED + 亲和记账交重试补齐；已落盘文件 sidecar 在位。
+                health.markTweetFailed(tweetId, DownloadEngineHealth.ENGINE_THIRD_PARTY)
+                LaunchResult.Failed("第三方兜底部分成功（${files.size}/${medias.size}），将重试补齐") to true
             } else {
                 if (manual) {
                     health.recordEngineFailure(DownloadEngineHealth.ENGINE_THIRD_PARTY, lastError)
@@ -633,7 +688,9 @@ class DownloaderClient(private val context: Context) {
         mediaFile: File,
         sourceUrl: String,
         tweetId: String,
-        quality: String = "best"
+        quality: String = "best",
+        /** 视频在推文内的序号（2026-11-21 多视频治理：playlist 逐个落位时按序号写）。 */
+        mediaIndex: Int = 1
     ) {
         val json = JSONObject()
             .put("url", sourceUrl)
@@ -644,11 +701,23 @@ class DownloaderClient(private val context: Context) {
             .put("thumbnail", "")
             .put("quality", quality)
             .put("formatId", "ytdlp")
-            .put("mediaIndex", 1)
+            .put("mediaIndex", mediaIndex)
             .put("mediaType", "VIDEO")
             .put("ext", "mp4")
             .put("publishedAt", JSONObject.NULL)
-        File(mediaFile.absolutePath + META_SUFFIX).writeText(json.toString())
+        // P3 审计修复（2026-11-21）：sidecar tmp+rename 原子写（同 InternalMediaDownloader）
+        val sidecarFile = File(mediaFile.absolutePath + META_SUFFIX)
+        val sidecarTmp = File.createTempFile("sidecar-", ".tmp", mediaFile.parentFile)
+        try {
+            sidecarTmp.writeText(json.toString())
+            if (!sidecarTmp.renameTo(sidecarFile)) {
+                sidecarTmp.copyTo(sidecarFile, overwrite = true)
+                sidecarTmp.delete()
+            }
+        } catch (error: Exception) {
+            sidecarTmp.delete()
+            throw error
+        }
     }
 
     private companion object {

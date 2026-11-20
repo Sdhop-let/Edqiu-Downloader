@@ -13,19 +13,16 @@ import com.ed.edqiu.data.model.MediaType
 @Database(
     entities = [
         DownloadHistoryEntity::class,
-        DownloadTaskEntity::class,
         SubscriptionEntity::class,
         SubscriptionMessageEntity::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = false
 )
 @TypeConverters(AppDatabase.Converters::class)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun downloadHistoryDao(): DownloadHistoryDao
-
-    abstract fun downloadTaskDao(): DownloadTaskDao
 
     abstract fun subscriptionDao(): SubscriptionDao
 
@@ -320,6 +317,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 2026-11-21（v17）：删除 download_tasks 死表。全库审计（2026-11-21）证实该层
+         * 从未通电：DAO 的 upsert 无任何调用方（updateTask/removeTask 全部依赖已有行）、
+         * recoverInterruptedTasks 零调用，任务账本实际完全落在内存 TaskBus + WorkManager
+         * 队列上。删除实体与整层死代码（DownloadTaskDao/DownloadTaskEntity/DownloadTaskRepo），
+         * 存量表 DROP（表内从未写入过业务数据）。
+         */
+        private val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("DROP TABLE IF EXISTS `download_tasks`")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -331,7 +341,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                     MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
-                    MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16
+                    MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17
                 )
                 // 2026-10 安全整改：移除 fallbackToDestructiveMigration()——
                 // 升级路径 schema 漂移时它会把整库（下载历史/任务/订阅）静默删除重建。

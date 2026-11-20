@@ -44,4 +44,21 @@ class VideoSourcePolicyTest {
         assertEquals("1080", selected.selector)
         assertEquals(1, selected.streams)
     }
+
+    @Test fun unknownBaselineNeverDowngradesToAnyCandidate() {
+        // P2 审计修复（2026-11-21）：基准无尺寸且无码率时无从判断优劣——
+        // 旧实现任何 tbr>0 候选（含 240p HLS）恒判「更优」，可反向降质。
+        val unknown = VideoSourcePolicy.Format("progressive", 0, 0, 0.0, 0)
+        val lowQualityHls = VideoSourcePolicy.Format("240", 426, 240, 30.0, 400_000, false, "bestaudio")
+        assertNull(VideoSourcePolicy.selectBetter(unknown, listOf(lowQualityHls)))
+        assertNull(VideoSourcePolicy.selectBetter(unknown, listOf(unknown.copy(id = "hls", bitrate = 9_000_000))))
+    }
+
+    @Test fun knownBitrateBaselineStillComparesByBitrate() {
+        // 尺寸未知但码率已知：码率比较口径保持不变（显著更高才换源）
+        val knownBitrate = VideoSourcePolicy.Format("progressive", 0, 0, 0.0, 2_000_000)
+        val higher = knownBitrate.copy(id = "hls", bitrate = 3_000_000)
+        assertEquals(higher, VideoSourcePolicy.selectBetter(knownBitrate, listOf(higher)))
+        assertNull(VideoSourcePolicy.selectBetter(knownBitrate, listOf(knownBitrate.copy(id = "hls", bitrate = 2_100_000))))
+    }
 }

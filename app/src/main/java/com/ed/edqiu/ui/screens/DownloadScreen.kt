@@ -370,7 +370,11 @@ Text(
                 }
             }
 
-            if (task.status == DownloadStatus.DOWNLOADING || task.progress > 0f) {
+            // P3 审计修复（2026-11-21）：进度条仅进行中/已完成显示——旧条件
+            // `progress > 0f` 让失败/取消任务残留半截红色进度条与百分比
+            if (task.status == DownloadStatus.DOWNLOADING ||
+                task.status == DownloadStatus.COMPLETED
+            ) {
                 LinearProgressIndicator(
                     progress = { (task.progress / 100f).coerceIn(0f, 1f) },
                     modifier = Modifier

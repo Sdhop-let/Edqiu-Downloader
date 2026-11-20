@@ -38,4 +38,16 @@ object DownloadCancellation {
     }
 
     fun isCancelled(taskId: String): Boolean = taskId in cancelled
+
+    /**
+     * 清除某推文的全部取消标记（2026-11-21 审计修复）：session_/pending_/ytdlp_/
+     * xinvox_/tpapi_/bgimg_ 前缀下第二段等于该推文 id 的键全部移除。
+     *
+     * 在 requestDownload 起点（per-tweet 互斥内）调用——新下载尝试不应继承上次会话
+     * 的取消残留。此前 xinvox_/bgimg_ 任务从不注销，下载中心取消一次后标记永留，
+     * 同推文重试重建同 id 秒命中残留标记自取消，直到进程重启才能恢复。
+     */
+    fun clearTweet(tweetId: String) {
+        cancelled.removeIf { key -> key.split('_').getOrNull(1) == tweetId }
+    }
 }

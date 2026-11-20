@@ -229,10 +229,19 @@ fun SubscriptionScreen(
                         onClick = { openInBrowser(context, link.rawUrl) },
                         // 2026-10-24：长按删除订阅作品（此前订阅线无任何删除入口）
                         onLongClick = { deletePostTarget = link.tweetId },
-                        onDownload = if (link.status == LinkStatus.PENDING ||
-                            link.status == LinkStatus.FAILED
+                        // P1 审计修复（2026-11-21）：下载通道现只认 Twitter/X 链接（
+                        // DownloaderClient.launch 用推文 id 提取）——IG/BSky 作品此前
+                        // 点下载 100% 失败且每次烧 attemptCount 直到进退避死区。
+                        // 非 Twitter 平台不给下载入口（卡片点击=浏览器打开可用）；
+                        // 多平台下载通道待后续版本评估。
+                        onDownload = if (link.rawUrl.contains("x.com/", ignoreCase = true) ||
+                            link.rawUrl.contains("twitter.com/", ignoreCase = true)
                         ) {
-                            { vm.downloadPost(link.tweetId) }
+                            if (link.status == LinkStatus.PENDING ||
+                                link.status == LinkStatus.FAILED
+                            ) {
+                                { vm.downloadPost(link.tweetId) }
+                            } else null
                         } else null,
                     )
                 }
