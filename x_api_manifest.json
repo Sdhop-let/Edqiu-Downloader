@@ -1,10 +1,14 @@
 {
   "schema": 1,
-  "updatedAt": "2026-10-17",
-  "note": "Edqiu 作者订阅 X 检测接口 manifest。App 内置默认值与本地缓存失效时拉取本文件热更新 queryId/bearer——改这里等于热更新所有客户端，无需发版。queryId 取自 X 网页版当前在线值。",
+  "updatedAt": "2026-11-21",
+  "note": "Edqiu 远程接口清单（X 检测 + FXTwitter 解析主机 + Bluesky 端点）。App 内置默认值与本地缓存失效时拉取本文件热更新——改这里等于热更新所有客户端，无需发版。queryId 取自 X 网页版当前在线值。fxHosts 必须是 FXTwitter 兼容 API 实例（响应含 code/tweet/media.* 结构，如自建 fxtwitter 部署），路径由客户端自行拼接；bskyEndpoint 为 Bluesky 公共 AppView 根地址。",
   "bearer": "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
   "queryIds": {
     "userByScreenName": "sLVLhk0bGj3MVFEKTdax1w",
     "userTweets": "E3opETHurmVJflFsUBVuUQ"
-  }
+  },
+  "fxHosts": [
+    "https://api.fxtwitter.com"
+  ],
+  "bskyEndpoint": "https://public.api.bsky.app"
 }

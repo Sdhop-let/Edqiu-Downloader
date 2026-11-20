@@ -452,7 +452,9 @@ private fun ProxyStep(
                                     host = host.ifBlank { "127.0.0.1" },
                                     port = port.toIntOrNull()?.takeIf { it in 1..65535 } ?: 7890,
                                     type = type
-                                )
+                                ),
+                                // 2026-11-21 云控：探针跟随 manifest fxHosts 首选主机
+                                probeHost = com.ed.edqiu.data.xapi.XApiClient.fxProbeHost(context)
                             )
                             message = outcome.fold(
                                 onSuccess = { "连通正常：$it" },

@@ -58,8 +58,6 @@ object MediaQualityUpgrader {
     private const val KEY_TIER = "last_tier"
     private const val KEY_PAUSED = "paused_slow_network"
     private const val PARALLELISM = 3
-    private const val API_BASE = "https://api.fxtwitter.com/status/"
-
     enum class Tier(val batchSize: Int, val intervalMs: Long, val label: String) {
         // 画质升级下载的是真实媒体文件（单条可达几十 MB），批量按 4 档保守放大；
         // 纯 JSON 的发布时间补拉（PublishedAtBackfiller）才用 300/200/100/50 的激进节奏
@@ -392,7 +390,7 @@ object MediaQualityUpgrader {
     /** FXTwitter 响应 → 最佳视频变体（最高码率 mp4 + 是否有 HLS）与图片原图。 */
     private fun fetchRemoteMedia(entity: DownloadHistoryEntity): RemoteMedia? {
         val tweetId = tweetIdOf(entity) ?: return null
-        val body = fetchText("$API_BASE$tweetId") ?: return null
+        val body = fetchRemoteBody(tweetId) ?: return null
         return runCatching {
             val root = JSONObject(body)
             if (root.optInt("code", -1) != 200) return null
@@ -456,6 +454,15 @@ object MediaQualityUpgrader {
         Regex("([?&])name=[^&]*").containsMatchIn(url) ->
             Regex("([?&])name=[^&]*").replace(url) { m -> "${m.groupValues[1]}name=orig" }
         else -> "$url&name=orig"
+    }
+
+    /** 按云控主机列表（XApiClient.fxHosts，manifest fxHosts 字段）顺序拉取推文 JSON 文本；
+     *  全部失败返回 null。2026-11-21 云控：旧实现 API_BASE 写死 api.fxtwitter.com。 */
+    private fun fetchRemoteBody(tweetId: String): String? {
+        com.ed.edqiu.data.xapi.XApiClient.fxHosts().forEach { host ->
+            fetchText("$host/status/$tweetId")?.let { return it }
+        }
+        return null
     }
 
     /** 视频升级判定：远端最高 mp4 码率 vs 本地码率（fileSize*8/时长），显著更高才升级。 */

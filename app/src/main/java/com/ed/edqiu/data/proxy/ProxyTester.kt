@@ -12,24 +12,28 @@ import java.net.UnknownHostException
 /**
  * 代理连通性测试器（2026-09-15 P0-3 内建代理分流）：设置页「测试连通」按钮使用。
  *
- * 以解析 API（api.fxtwitter.com）为探针：收到任意 HTTP 响应即视为通路成立
+ * 以解析 API（云控 fxHosts 首选主机，默认 api.fxtwitter.com）为探针：收到任意 HTTP 响应即视为通路成立
  * （无论 200/404——证明 DNS、TLS 与代理转发链路全通），并报告延迟。
  * 与下载链路熔断联动：测试失败提示「先修网络」，避免三层引擎无效重试。
  */
 object ProxyTester {
 
-    private const val PROBE_URL = "https://api.fxtwitter.com/Twitter/status/12"
-
-    /** 测试结果：success = 通路成立（附延迟与 HTTP 码）；failure = 面向用户的中文失败原因。 */
-    suspend fun test(settings: ProxySettings): Result<String> = withContext(Dispatchers.IO) {
+    /**
+     * 测试结果：success = 通路成立（附延迟与 HTTP 码）；failure = 面向用户的中文失败原因。
+     * @param probeHost 探针主机（2026-11-21 云控）：传 [com.ed.edqiu.data.xapi.XApiClient.fxProbeHost]
+     *   的返回值跟随 manifest fxHosts 切换；不传回退内置默认（api.fxtwitter.com）。
+     */
+    suspend fun test(settings: ProxySettings, probeHost: String? = null): Result<String> = withContext(Dispatchers.IO) {
         val label = settings.describe()
         val started = System.currentTimeMillis()
+        // 探针只测「网络路径可达」（任意 HTTP 响应即通过），主机切换不影响判定语义
+        val probeUrl = "${probeHost ?: "https://api.fxtwitter.com"}/Twitter/status/12"
         try {
             val proxyObj = settings.toJavaProxy()
             val connection = if (proxyObj != null) {
-                URL(PROBE_URL).openConnection(proxyObj) as HttpURLConnection
+                URL(probeUrl).openConnection(proxyObj) as HttpURLConnection
             } else {
-                URL(PROBE_URL).openConnection() as HttpURLConnection
+                URL(probeUrl).openConnection() as HttpURLConnection
             }
             connection.apply {
                 requestMethod = "GET"

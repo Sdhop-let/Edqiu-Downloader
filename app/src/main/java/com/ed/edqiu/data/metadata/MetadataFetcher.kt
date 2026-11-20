@@ -32,29 +32,38 @@ class MetadataFetcher(private val appContext: Context? = null) {
         //（旧实现连接不释放，补拉批量 300 条 × 8 并发时 socket 压力被放大）
         // 2026-11-07 审计修复：接入用户代理——api.fxtwitter.com 与 X 同域（设置页代理
         // 探针恰用它），仅应用代理场景下旧实现元数据必挂（订阅能检出作品但缺作者/封面）
+        // 2026-11-21 云控：主机列表来自 manifest fxHosts（XApiClient.fxHosts），按序回退
         val proxyObj = appContext?.let { ctx ->
             com.ed.edqiu.data.preferences.ProxyPreferences(ctx.applicationContext)
                 .getProxySettings().takeIf { it.enabled }?.toJavaProxy()
         }
-        val url = URL("https://api.fxtwitter.com/status/$tweetId")
-        val conn = (if (proxyObj != null) url.openConnection(proxyObj) else url.openConnection()) as HttpURLConnection
+        com.ed.edqiu.data.xapi.XApiClient.fxHosts().forEach { host ->
+            val fetched = fetchFromHost("$host/status/$tweetId", proxyObj)
+            if (fetched != null) return@withContext fetched
+        }
+        null
+    }
+
+    /** 单主机拉取 + 解析（失败返回 null，由 fetchFromTwitter 逐主机回退）。 */
+    private fun fetchFromHost(url: String, proxyObj: java.net.Proxy?): TweetMeta? {
+        val conn = (if (proxyObj != null) URL(url).openConnection(proxyObj) else URL(url).openConnection())
+            as HttpURLConnection
         conn.requestMethod = "GET"
         conn.connectTimeout = 10_000
         conn.readTimeout = 10_000
         conn.setRequestProperty("User-Agent", "Edqiu/1.0")
         try {
-            if (conn.responseCode == 200) {
-                val body = conn.inputStream.bufferedReader().use { it.readText() }
-                parseTwitterResponse(body)
-            } else {
+            if (conn.responseCode != 200) {
                 runCatching { conn.errorStream?.close() }
-                null
+                return null
             }
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            return parseTwitterResponse(body)
         } catch (e: Exception) {
             // 2026-10-24 审计：此前完全吞错——元数据拉取失败无法排查（上层还包了一层
             // runCatching 静默），补日志（返回值语义不变）
-            android.util.Log.w("MetadataFetcher", "fetch failed: ${conn.url}", e)
-            null
+            android.util.Log.w("MetadataFetcher", "fetch failed: $url", e)
+            return null
         } finally {
             conn.disconnect()
         }

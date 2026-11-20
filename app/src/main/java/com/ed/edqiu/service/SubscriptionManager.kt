@@ -481,7 +481,8 @@ object SubscriptionManager {
         limit: Int,
     ): List<String>? = withContext(Dispatchers.IO) {
         runCatching {
-            val url = "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed" +
+            // 2026-11-21 云控：AppView 根地址来自 manifest bskyEndpoint（XApiClient.bskyEndpoint）
+            val url = "${XApiClient.bskyEndpoint()}/xrpc/app.bsky.feed.getAuthorFeed" +
                 "?actor=${java.net.URLEncoder.encode(handle, "UTF-8")}&limit=$limit&filter=posts_with_media"
             // 2026-11-07 审计修复：共享基础客户端派生（连接池复用），代理参数动态下传
             val clientBuilder = bskyBaseClient.newBuilder()

@@ -861,9 +861,11 @@ fun DownloaderSettingsPage(
                                             ProxySettings(
                                                 enabled = true,
                                                 host = proxyHost.ifBlank { "127.0.0.1" },
-                                                port = proxyPort.toIntOrNull() ?: 7890,
+                                                port = proxyPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 7890,
                                                 type = proxyType
-                                            )
+                                            ),
+                                            // 2026-11-21 云控：探针跟随 manifest fxHosts 首选主机
+                                            probeHost = com.ed.edqiu.data.xapi.XApiClient.fxProbeHost(context)
                                         )
                                         isTestingProxy = false
                                         inlineFeedback = outcome.fold(

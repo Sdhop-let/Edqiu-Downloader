@@ -29,6 +29,10 @@ import java.util.concurrent.TimeUnit
  * 远程 manifest 热更新（[refreshManifest]，仓库 x_api_manifest.json）并重试一次；
  * 重试仍失败才向上抛 [XApiError.STALE_QUERY_ID]（UI 弹窗提示升级 App）。
  *
+ * 2026-11-21 云控扩展：同一 manifest 额外承载 `fxHosts`（FXTwitter 兼容 API 主机列表，
+ * 下载/元数据/画质升级按序回退）与 `bskyEndpoint`（Bluesky 公共 AppView 根地址）——
+ * 上游实例故障时改仓库清单即全体切换，无需发版。校验不过保留原值。
+ *
  * 网络要求：api.x.com / x.com 国内不可直连，调用方应传入代理（ProxySettings.toJavaProxy()）；
  * 无代理时本客户端仍会短超时尝试一次，失败按 [XApiError.NO_PROXY] 归类。
  */
@@ -46,6 +50,12 @@ object XApiClient {
 
     private const val DEFAULT_USER_BY_SCREEN_NAME = "sLVLhk0bGj3MVFEKTdax1w"
     private const val DEFAULT_USER_TWEETS = "E3opETHurmVJflFsUBVuUQ"
+
+    /** FXTwitter 兼容 API 主机（2026-11-21 云控）：下载/元数据/升级器的 API_BASE 主机部分。 */
+    private val DEFAULT_FX_HOSTS = listOf("https://api.fxtwitter.com")
+
+    /** Bluesky 公共 AppView 根地址（2026-11-21 云控）：订阅检测的 xrpc 调用前缀。 */
+    private const val DEFAULT_BSKY_ENDPOINT = "https://public.api.bsky.app"
 
     /** 远程 manifest（queryId 热更新源）：仓库 main 分支根目录。 */
     private const val MANIFEST_URL =
@@ -343,7 +353,7 @@ object XApiClient {
     // ==================== manifest 静默轮换 ====================
 
     /**
-     * 拉取远程 manifest 热更新 queryId/bearer 并落 SharedPreferences。
+     * 拉取远程 manifest 热更新 queryId/bearer/FX 主机/Bluesky 端点并落 SharedPreferences。
      * @return true = 配置已更新（调用方可重试原查询）。
      */
     fun refreshManifest(proxyUrl: String?): Boolean = runCatching {
@@ -380,6 +390,14 @@ object XApiClient {
                 .putString("qid_userTweets", userTweets)
                 .putLong("manifestAt", System.currentTimeMillis())
                 .apply()
+            // 2026-11-21 云控扩展：FX 主机列表 + Bluesky 端点（可选字段——清单缺省或
+            // 校验不过时保留原值，绝不清空回默认，防误伤已切换的实例）
+            validFxHosts(json.optJSONArray("fxHosts"))?.let { hosts ->
+                prefs().edit().putString("fxHosts", hosts.joinToString("\n")).apply()
+            }
+            validBskyEndpoint(json.optString("bskyEndpoint"))?.let { endpoint ->
+                prefs().edit().putString("bskyEndpoint", endpoint).apply()
+            }
             Log.i(TAG, "manifest 已热更新：$userByScreenName / $userTweets")
             true
         }
@@ -389,13 +407,14 @@ object XApiClient {
     }
 
     /**
-     * 代理开启时的机会性静默升级：manifest 超过 [MANIFEST_TTL_MS] 才拉，失败静默（不弹窗）。
-     * 由订阅轮询每轮开头调用一次——用户无感完成 queryId 保鲜。
+     * 代理开启时的机会性静默升级：manifest 超过 [ttlMs] 才拉，失败静默（不弹窗）。
+     * 由订阅轮询每轮开头调用一次——用户无感完成 queryId 保鲜；
+     * FXTwitter 全主机失败时以下降 TTL（1h）触发，加速云端切换实例的生效。
      */
-    fun maybeQuietUpgrade(proxyUrl: String?) {
+    fun maybeQuietUpgrade(proxyUrl: String?, ttlMs: Long = MANIFEST_TTL_MS) {
         if (proxyUrl == null) return
         val last = prefs().getLong("manifestAt", 0L)
-        if (System.currentTimeMillis() - last < MANIFEST_TTL_MS) return
+        if (System.currentTimeMillis() - last < ttlMs) return
         refreshManifest(proxyUrl)
     }
 
@@ -421,6 +440,54 @@ object XApiClient {
 
     private fun bearer(): String =
         prefs().getString("bearer", null)?.ifBlank { null } ?: DEFAULT_BEARER
+
+    // ==================== 云控端点存取（2026-11-21） ====================
+
+    /**
+     * FXTwitter 兼容 API 主机列表（云控）：下载引擎一 / 元数据 / 画质升级按序回退。
+     * 清单 `fxHosts` 校验通过后写入（`\n` 连接），未写入或为空回退内置默认。
+     */
+    fun fxHosts(): List<String> =
+        prefs().getString("fxHosts", null)?.split('\n')
+            ?.map { it.trim() }?.filter { it.isNotBlank() }
+            ?.takeIf { it.isNotEmpty() }
+            ?: DEFAULT_FX_HOSTS
+
+    /** Bluesky 公共 AppView 根地址（云控）：清单 `bskyEndpoint` 校验通过后写入。 */
+    fun bskyEndpoint(): String =
+        prefs().getString("bskyEndpoint", null)?.ifBlank { null } ?: DEFAULT_BSKY_ENDPOINT
+
+    /**
+     * FXTwitter 探针主机（代理测试用，无需 init 装配的轻量读取）：
+     * 优先云控主机，装配未完成时回退内置默认。
+     */
+    fun fxProbeHost(context: Context?): String {
+        val stored = context?.applicationContext
+            ?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            ?.getString("fxHosts", null)
+        return stored?.split('\n')?.firstOrNull()?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_FX_HOSTS.first()
+    }
+
+    /**
+     * fxHosts 白名单校验（纯函数，可单测）：https 主机形态（可选端口），1-5 条。
+     * 条目缺失/非法整体返回 null（保留原值，不清空回默认）。
+     */
+    internal fun validFxHosts(raw: org.json.JSONArray?): List<String>? {
+        raw ?: return null
+        if (raw.length() == 0) return null
+        val shape = Regex("^https://[A-Za-z0-9.-]+(:\\d{1,5})?$")
+        val hosts = (0 until raw.length()).mapNotNull { raw.optString(it).ifBlank { null } }
+        if (hosts.isEmpty() || hosts.size > 5) return null
+        return hosts.takeIf { list -> list.all { shape.matches(it) } }
+    }
+
+    /** bskyEndpoint 白名单校验（纯函数，可单测）：https 主机形态（可选端口），非法返回 null。 */
+    internal fun validBskyEndpoint(raw: String?): String? {
+        val s = raw?.trim().takeIf { !it.isNullOrBlank() } ?: return null
+        val shape = Regex("^https://[A-Za-z0-9.-]+(:\\d{1,5})?$")
+        return s.takeIf { shape.matches(it) }
+    }
 
     private fun queryId(operation: String): String {
         val key = when (operation) {

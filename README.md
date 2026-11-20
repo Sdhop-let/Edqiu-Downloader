@@ -116,9 +116,11 @@ JAVA_HOME="<JDK21>" ./gradlew :app:assembleRelease   # 需自备 keystore.proper
 **发版（维护者）**：推 `v*` tag → GitHub Actions 自动构建并创建 Release，说明自动取
 `docs/RELEASE_NOTES-<版本>.md`。详见 [docs/release-automation.md](docs/release-automation.md)。
 
-**订阅检测接口维护**：`x_api_manifest.json`（仓库根）是 X 检测通道的远程配置源——
-X 轮换 GraphQL queryId 后，更新此文件并推送 main 即可热更新所有客户端，无需发版。
-客户端在代理可用时每 7 天静默拉取，检测到陈旧签名时按需即时拉取并重试一次。
+**订阅检测与解析端点维护**：`x_api_manifest.json`（仓库根）是远程接口清单——承载三组云控配置：
+X 检测通道的 `queryId` / `bearer`（X 轮换 GraphQL queryId 后更新此文件即可热更新所有客户端）、
+`fxHosts`（FXTwitter 兼容 API 主机列表，下载/元数据/画质升级按序回退——官方实例故障时切自建/镜像实例）、
+`bskyEndpoint`（Bluesky 公共 AppView 根地址）。客户端在代理可用时每 7 天静默拉取，检测到陈旧签名或
+主机失联时按需即时拉取并重试；全部字段带形状白名单校验，垃圾值不落盘。
 
 ## 仓库结构
 

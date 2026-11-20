@@ -11,6 +11,7 @@ import com.ed.edqiu.data.model.MediaType
 import com.ed.edqiu.data.model.ProxySettings
 import com.ed.edqiu.data.repository.DownloadCancellation
 import com.ed.edqiu.data.repository.DownloadTaskBus
+import com.ed.edqiu.data.xapi.XApiClient
 import com.ed.edqiu.domain.TweetIdExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -79,7 +80,7 @@ class InternalMediaDownloader(private val context: Context) {
             val tweetId = TweetIdExtractor.fromUrl(rawUrl)
                 ?: error("链接中没有有效的推文 ID")
             val normalizedUrl = "https://x.com/i/status/$tweetId"
-            val root = JSONObject(fetchText("$API_BASE$tweetId", proxy))
+            val root = fetchTweetJson(tweetId, proxy)
             val code = root.optInt("code", -1)
             // FXTwitter 对已删除/私密推文返回 code=404：永久失败，直接抛专用异常
             if (code == 404) throw TweetGoneException("推文不存在或已被删除")
@@ -924,6 +925,32 @@ class InternalMediaDownloader(private val context: Context) {
         throw lastError ?: error("下载失败")
     }
 
+    /**
+     * 按云控主机列表（XApiClient.fxHosts，manifest fxHosts 字段）顺序拉取推文 JSON：
+     * 404（TweetGone，确定性知识）与取消立即上抛不换主机；网络/5xx 类失败逐主机回退，
+     * 全部失败触发一次节流（1h）manifest 刷新（云端可能已切换实例），上抛最后错误。
+     * 2026-11-21 云控：旧实现 API_BASE 写死 api.fxtwitter.com，实例故障只能等发版。
+     */
+    private fun fetchTweetJson(tweetId: String, proxy: ProxySettings?): JSONObject {
+        var lastError: Exception? = null
+        for (host in XApiClient.fxHosts()) {
+            try {
+                return JSONObject(fetchText("$host/Twitter/status/$tweetId", proxy))
+            } catch (e: TweetGoneException) {
+                throw e
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e
+                Log.w(TAG, "FXTwitter 主机失败，尝试下一个：$host（${e.message?.take(120)}）")
+            }
+        }
+        runCatching {
+            XApiClient.maybeQuietUpgrade(proxy?.toProxyUrl(), ttlMs = 60 * 60_000L)
+        }
+        throw lastError ?: IllegalStateException("FXTwitter 全部主机失败")
+    }
+
     private fun fetchText(url: String, proxy: ProxySettings?): String {
         val proxyObj = proxy?.toJavaProxy()
         val connection = if (proxyObj != null) {
@@ -1077,7 +1104,6 @@ class InternalMediaDownloader(private val context: Context) {
 
     companion object {
         private const val TAG = "InternalMediaDownloader"
-        private const val API_BASE = "https://api.fxtwitter.com/Twitter/status/"
         private const val META_SUFFIX = ".meta.json"
 
         /** 下载前磁盘最低水位（2026-11-07 审计修复：磁盘满预检）。 */
