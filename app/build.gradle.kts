@@ -139,8 +139,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
-    implementation("androidx.navigation:navigation-compose:2.10.1")
-    implementation("androidx.core:core-ktx:1.19.0")
+    implementation("androidx.navigation:navigation-compose:2.10.2")
+    implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.documentfile:documentfile:1.0.1")
 
     // Room 2.8.5：适配 KSP2（KSP 插件 2.3.12 与 Kotlin 2.4 语言级别组合）
@@ -149,7 +149,7 @@ dependencies {
     ksp("androidx.room:room-compiler:2.8.5")
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
-    implementation("androidx.work:work-runtime-ktx:2.9.0")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1")
