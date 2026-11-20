@@ -158,10 +158,18 @@ class DownloadMonitor(private val context: Context) {
         val result = mutableMapOf<String, DownloadedItem>()
         entries.forEach { entry ->
             if (!isSupportedMedia(entry.name)) return@forEach
+            // P3 审计修复（2026-11-21）：跳过 yt-dlp 中间态产物——「视频流完成→merge
+            // 完成→规约重命名」窗口内 {标题}.f137.mp4 / *.part 会被本轮扫描当作成品
+            // 导入，指向稍后被删除的临时文件（幽灵条目）。.part 后缀已过不了
+            // isSupportedMedia，这里补 .fN 中间段。
+            if (YTDLP_INTERMEDIATE.containsMatchIn(entry.name)) return@forEach
             val meta = metaByMediaPath[entry.relativePath]
             val tweetId = meta?.tweetId
                 ?.takeIf { TWEET_ID.matches(it) }
-                ?: TweetIdExtractor.fromFileName(entry.name)
+                // P3 审计修复（2026-11-21）：导入路径用严格版文件名解析——无 sidecar 时
+                // 只认下载器规约名（`{uploader}_{tweetId}_{序号}_…`），不再裸扫文件名里
+                // 的 11-25 位数字串（epoch 毫秒时间戳等 → 幽灵收件箱条目）
+                ?: TweetIdExtractor.fromConventionFileName(entry.name)
                 ?: return@forEach
             if (result.containsKey(tweetId)) return@forEach
 
@@ -240,6 +248,8 @@ class DownloadMonitor(private val context: Context) {
         private const val COLUMN_LAST_MODIFIED = "last_modified"
         private const val META_SUFFIX = ".meta.json"
         private val TWEET_ID = Regex("\\d{11,25}")
+        /** yt-dlp 中间态产物（{标题}.f137.mp4 等）：merge/规约重命名前不得导入。 */
+        private val YTDLP_INTERMEDIATE = Regex("""\.f\d+\.[A-Za-z0-9]+$""")
         private val SUPPORTED_MEDIA_EXTENSIONS = setOf(
             "mp4", "mkv", "webm", "mov", "m4v", "jpg", "jpeg", "png", "webp", "gif"
         )

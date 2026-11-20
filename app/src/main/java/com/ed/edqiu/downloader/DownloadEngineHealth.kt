@@ -84,7 +84,14 @@ object DownloadEngineHealth {
     }
 
     fun markTweetFailed(tweetId: String, engine: String) {
-        tweetFailures.getOrPut(tweetId) { ConcurrentHashMap() }[engine] = System.currentTimeMillis()
+        // P3 审计修复（2026-11-21）：写入时顺带清理整推文过期的记忆——旧实现只在
+        // failedBefore 被查到该 key 时惰性过期，长期使用后每条失败过的推文留一条
+        // 24h 后再不被触碰的陈绩（与 downloadMutexes 无界增长同类）。
+        val now = System.currentTimeMillis()
+        tweetFailures.entries.removeIf { (_, failures) ->
+            failures.values.all { now - it > TWEET_TTL_MS }
+        }
+        tweetFailures.getOrPut(tweetId) { ConcurrentHashMap() }[engine] = now
     }
 
     /** 任一引擎成功即清掉该推文的全部失败记忆（换网络后重试应从最快引擎重新开始）。 */

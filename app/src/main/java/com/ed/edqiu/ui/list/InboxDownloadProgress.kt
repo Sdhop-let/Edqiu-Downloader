@@ -30,10 +30,17 @@ object InboxDownloadProgress {
         // 换源表示新尝试，不能把失败源的进度计入新源，也不能重复计算历史成品。
         val active = current.filter { it.isActive }
         // 99 哨兵只在「占位仍活跃、引擎任务尚未产出终态」的会话内使用；
-        // 占位已失活（取消/移除）交回 DB 状态（与旧语义一致）
+        // 占位已失活（取消/移除）交回 DB 状态（与旧语义一致）。
+        // P3 审计修复（2026-11-21）：会话内有失败/取消任务时不亮 99——那是引擎
+        // 间空窗（可能换引擎续跑），亮 99 会造成 99→低位锯齿；无失败的真实
+        // 等待落库窗口才亮。
         val activePending = group.any { it.id.startsWith("pending_") && it.isActive }
         if (active.isEmpty()) {
             if (!activePending) return null
+            val sessionHasFailure = current.any {
+                it.status == DownloadStatus.FAILED || it.status == DownloadStatus.CANCELLED
+            }
+            if (sessionHasFailure) return null
             return if (current.any { it.status == DownloadStatus.COMPLETED }) 99 else 0
         }
         val engine = active.maxBy { it.createdAt }.id.substringBefore('_')

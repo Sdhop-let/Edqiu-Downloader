@@ -112,7 +112,10 @@ object YoutubeDLService {
                     pid,
                     { progress, eta, line ->
                         lastProgressAt.set(System.currentTimeMillis())
-                        onProgress?.invoke(progressTracker.update(progress, line), eta)
+                        // P3 审计修复（2026-11-21）：ETA ≥1h 自解析——随包库的
+                        // StreamProcessExtractor 只认 mm:ss，"01:02:03" 被当 62s；
+                        // 进度本体走 EDQIU 模板不受影响，这里只修显示
+                        onProgress?.invoke(progressTracker.update(progress, line), parseEtaSeconds(line) ?: eta)
                     }
                 )
             } finally {
@@ -200,6 +203,15 @@ object YoutubeDLService {
         } catch (e: Exception) {
             Log.e(TAG, "cancelDownload error", e)
         }
+    }
+
+    /** 解析进度行里的 h:mm:ss ETA（mm:ss 由库正常解析，此处只接管 ≥1h 的形态）。 */
+    private fun parseEtaSeconds(line: String): Long? {
+        val match = Regex("ETA (\\d+):(\\d+):(\\d+)").find(line) ?: return null
+        val hours = match.groupValues[1].toLongOrNull() ?: return null
+        val minutes = match.groupValues[2].toLongOrNull() ?: 0L
+        val seconds = match.groupValues[3].toLongOrNull() ?: 0L
+        return hours * 3600L + minutes * 60L + seconds
     }
 
     /**

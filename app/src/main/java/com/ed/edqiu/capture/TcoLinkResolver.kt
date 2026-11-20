@@ -1,5 +1,6 @@
 package com.ed.edqiu.capture
 
+import com.ed.edqiu.data.model.ProxySettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
@@ -11,6 +12,9 @@ import java.net.URL
  * 触发条件严格：文本里找不到任何严格 status 链接、却存在 t.co 短链时才走网络
  * （GET 跟随跳转取最终 URL），避免给正常捕获路径引入任何网络等待。
  * 逐条限时 2.5s、最多 3 条，失败静默回退原文——捕获离线语义不被破坏。
+ *
+ * P3 审计修复（2026-11-21）：跟随用户应用内代理——t.co 与 X 同域，国内不可直连；
+ * 旧实现恒走直连，对主要受众（无系统级 VPN、用应用内代理）该兜底形同虚设。
  */
 object TcoLinkResolver {
 
@@ -31,21 +35,27 @@ object TcoLinkResolver {
             .toList()
 
     /** 兜底展开：原文 + 逐条解析出的最终 URL 追加返回（解析失败保持原文）。 */
-    suspend fun expand(text: String): String {
+    suspend fun expand(text: String, proxy: ProxySettings? = null): String {
         val shorts = findShortLinks(text)
         if (shorts.isEmpty()) return text
         val resolved = shorts.mapNotNull { short ->
-            runCatching { resolveOne(short) }.getOrNull()
+            runCatching { resolveOne(short, proxy) }.getOrNull()
         }
         return if (resolved.isEmpty()) text
         else text + "\n" + resolved.joinToString("\n")
     }
 
-    private suspend fun resolveOne(short: String): String? = withContext(Dispatchers.IO) {
+    private suspend fun resolveOne(short: String, proxy: ProxySettings?): String? = withContext(Dispatchers.IO) {
         val target = if (short.startsWith("http", ignoreCase = true)) short else "https://$short"
         var conn: HttpURLConnection? = null
         try {
-            conn = (URL(target).openConnection() as HttpURLConnection).apply {
+            val proxyObj = proxy?.toJavaProxy()
+            conn = (if (proxyObj != null) {
+                URL(target).openConnection(proxyObj)
+            } else {
+                // 无代理时必须用无参 openConnection()，传 null 在部分 Android 版本会抛 "proxy can not be null"
+                URL(target).openConnection()
+            } as HttpURLConnection).apply {
                 instanceFollowRedirects = true
                 connectTimeout = TIMEOUT_MS
                 readTimeout = TIMEOUT_MS

@@ -23,6 +23,8 @@ object DirectoryScanner {
     private const val TAG = "DirectoryScanner"
     // 2026-10：\\b 对下划线相邻数字不成立（"user_1698…_1" 提取失败）——改用数字前瞻后顾
     private val TWEET_ID_REGEX = Regex("(?<!\\d)\\d{11,25}(?!\\d)")
+    /** yt-dlp 中间态产物（{标题}.f137.mp4 等）：merge/规约重命名前不得入库。 */
+    private val YTDLP_INTERMEDIATE = Regex("""\.f\d+\.[A-Za-z0-9]+$""")
 
     /**
      * Scan download directory and insert any new media files into history database.
@@ -45,6 +47,9 @@ object DirectoryScanner {
                 .filter { it.exists() && it.isDirectory }
                 .flatMap { it.walkTopDown() }
                 .filter { MediaFileTypes.isSupportedMediaFile(it) }
+                // P3 审计修复（2026-11-21）：跳过 yt-dlp 中间态产物（{标题}.f137.mp4，
+                // merge/规约重命名窗口内导入会成幽灵行，事后 cleanGhostRows 不如不收）
+                .filter { !YTDLP_INTERMEDIATE.containsMatchIn(it.name) }
                 // 2026-10-24 排查修复：扫描根含大小写两种拼写（resolveDownloadDir 与
                 // getExternalFilesDir 的 download/Download；FUSE 大小写不敏感=同一物理目录），
                 // 同一文件被走两遍 → 每轮扫描 ~1191 次重复 parse+MediaMetadataRetriever+

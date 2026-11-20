@@ -449,9 +449,12 @@ object MediaQualityUpgrader {
         }.getOrNull()
     }
 
-    /** pbs.twimg.com 图片 url 换 name=orig（原图，无压缩参数）。 */
+    /** pbs.twimg.com 图片 url 换 name=orig（原图，无压缩参数）；已带 name 参数则替换其值。 */
     private fun toOrigImageUrl(url: String): String = when {
-        url.contains("name=") -> url.substringBefore("name=") + "name=orig"
+        // P3 审计修复（2026-11-21）：精确匹配 name 参数（同 InternalMediaDownloader）——
+        // 旧 contains("name=") 会误判 username= 等子串并截掉后续参数
+        Regex("([?&])name=[^&]*").containsMatchIn(url) ->
+            Regex("([?&])name=[^&]*").replace(url) { m -> "${m.groupValues[1]}name=orig" }
         else -> "$url&name=orig"
     }
 

@@ -104,10 +104,11 @@ class ListViewModel(
                     .extractWithOriginals(effective).isEmpty()
             ) {
                 // P3 审计修复（2026-11-21）：与 CaptureIntentActivity 同口径 8s 总超时——
-                // 旧实现无包装，3 条短链串行最坏 ~15s，主界面粘贴后胶囊空转无反馈
+                // 旧实现无包装，3 条短链串行最坏 ~15s，主界面粘贴后胶囊空转无反馈；
+                // 同时跟随应用内代理（t.co 与 X 同域，直连恒死）
                 effective = kotlinx.coroutines.withTimeoutOrNull(8_000L) {
                     runCatching {
-                        com.ed.edqiu.capture.TcoLinkResolver.expand(text)
+                        com.ed.edqiu.capture.TcoLinkResolver.expand(text, repo.currentProxy())
                     }.getOrDefault(text)
                 } ?: text
             }
@@ -136,7 +137,12 @@ class ListViewModel(
             }
             actionFeedback.value = ActionFeedback(
                 message = "批量保存：新增 $added 条" +
-                    if (dup > 0) "，跳过重复 $dup 条" else "",
+                    (if (dup > 0) "，跳过重复 $dup 条" else "") +
+                    // P3 审计修复（2026-11-21）：超长输入被截断时明确提示（旧实现尾部
+                    // 链接无声丢失，用户只见「新增 N 条」无从察觉）
+                    (if (com.ed.edqiu.domain.BatchTweetUrlExtractor.isTruncated(text)) {
+                        "，仅解析前 ${com.ed.edqiu.domain.BatchTweetUrlExtractor.MAX_INPUT_LENGTH} 字符"
+                    } else ""),
                 asDialog = true,
                 // 三态：有新增=成功；有重复无新增=中性（不是失败，不该报「操作失败」）
                 success = if (added > 0) true else null

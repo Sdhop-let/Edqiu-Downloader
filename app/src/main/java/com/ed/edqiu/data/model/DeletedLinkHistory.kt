@@ -73,7 +73,14 @@ data class DeletedLinkHistory(
     val deletedAt: Long,
 
     @ColumnInfo(name = "deletion_reason")
-    val deletionReason: String
+    val deletionReason: String,
+
+    /**
+     * 来源线（P1 审计修复 2026-11-21）：user/subscription——旧快照无此列，订阅作品
+     * 删除→恢复后错落用户收件箱（双线隔离被打破：进错页、重试风暴走错线、订阅页消失）。
+     */
+    @ColumnInfo(name = "origin", defaultValue = SavedLink.ORIGIN_USER)
+    val origin: String = SavedLink.ORIGIN_USER
 ) {
     fun toRestoredLink(): SavedLink = SavedLink(
         tweetId = tweetId,
@@ -92,7 +99,8 @@ data class DeletedLinkHistory(
         attemptCount = attemptCount,
         lastAttemptAt = lastAttemptAt,
         lastError = lastError,
-        nextRetryAt = nextRetryAt
+        nextRetryAt = nextRetryAt,
+        origin = origin
     )
 
     companion object {
@@ -121,7 +129,8 @@ data class DeletedLinkHistory(
             lastError = link.lastError,
             nextRetryAt = link.nextRetryAt,
             deletedAt = deletedAt,
-            deletionReason = deletionReason
+            deletionReason = deletionReason,
+            origin = link.origin
         )
     }
 }

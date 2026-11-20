@@ -95,14 +95,37 @@ class SavedLinkRepository(
     // 用户手动下载另一条推文不再排队数分钟；同一推文的并发请求仍串行（attemptCount 一致性）
     private val downloadMutexes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
 
-    private fun mutexFor(tweetId: String): Mutex = downloadMutexes.getOrPut(tweetId) {
-        // 2026-11-07 审计修复：防无界增长（每条下载过的推文一个 Mutex 永不回收）——
-        // 超限时清理未被持有的 mutex（tryLock 成功 = 无并发持有，移除安全）
-        if (downloadMutexes.size > 512) {
-            downloadMutexes.entries.removeIf { entry ->
-                entry.value.tryLock().also { locked -> if (locked) entry.value.unlock() }
-            }
+    /**
+     * 元数据抓取单飞（P3 审计修复 2026-11-21）：capture 的后台补全与
+     * CaptureIntentActivity 的 fetchMetadata 会并发跑同一 tweetId——双倍 fxtwitter
+     * 请求 + CoverStore 全局锁串行挤占 8s 等待窗口。在飞的 tweetId 直接跳过。
+     */
+    private val metadataInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private suspend fun fetchAndApplyMetadataOnce(tweetId: String): Boolean {
+        if (!metadataInFlight.add(tweetId)) return true
+        try {
+            return fetchAndApplyMetadata(tweetId)
+        } finally {
+            metadataInFlight.remove(tweetId)
         }
+    }
+
+    /**
+     * 应用内代理设置（P3 审计修复 2026-11-21）：供无 Context 的调用方读取用户代理
+     * （ListViewModel 的 t.co 展开兜底等——t.co 与 X 同域，直连恒死）。
+     */
+    fun currentProxy(): ProxySettings? =
+        appContext?.let { ctx ->
+            com.ed.edqiu.data.preferences.ProxyPreferences(ctx)
+                .getProxySettings().takeIf { it.enabled }
+        }
+
+    private fun mutexFor(tweetId: String): Mutex = downloadMutexes.getOrPut(tweetId) {
+        // P3 审计修复（2026-11-21）：不做清理——旧实现超限时 tryLock 探测移除未持有的
+        // mutex，与 getOrPut 存在竞态（协程 A 拿到 M1 尚未 withLock 时清理线程 tryLock
+        // 成功并移除，A 随后锁上已出表的 M1，后续请求新建 M2 → 两协程同进临界区，
+        // attemptCount 一致性保证失效）。每条 Mutex 对象仅几十字节，常驻可接受。
         Mutex()
     }
 
@@ -132,9 +155,9 @@ class SavedLinkRepository(
         // 元数据抓取不阻塞捕获返回：后台异步补全（修复分享保存时前台卡顿）
         val scope = metadataScope
         if (scope != null) {
-            scope.launch { fetchAndApplyMetadata(tweetId) }
+            scope.launch { fetchAndApplyMetadataOnce(tweetId) }
         } else {
-            fetchAndApplyMetadata(tweetId)
+            fetchAndApplyMetadataOnce(tweetId)
         }
         return CaptureResult.Added(tweetId)
     }
@@ -144,7 +167,7 @@ class SavedLinkRepository(
      * @return 是否成功获取到元数据（供捕获结果页的「重试」判断）
      */
     suspend fun fetchMetadata(tweetId: String): Boolean =
-        dao.getByTweetId(tweetId)?.let { fetchAndApplyMetadata(tweetId) } ?: false
+        dao.getByTweetId(tweetId)?.let { fetchAndApplyMetadataOnce(tweetId) } ?: false
 
     suspend fun requestDownload(
         tweetId: String,
@@ -384,6 +407,7 @@ class SavedLinkRepository(
         // 会被下一轮扫描以 DOWNLOADED 重新插回收件箱，自动"复活"
         val deletedIds = linkHistoryRepository.deletedTweetIds().toHashSet()
         var imported = 0
+        val insertedTweetIds = mutableListOf<String>()
         scanned.values.forEach { item ->
             if (dao.exists(item.tweetId)) return@forEach
             if (item.tweetId in deletedIds) return@forEach
@@ -402,7 +426,22 @@ class SavedLinkRepository(
                     publishedAt = item.publishedAt
                 )
             )
-            if (insertedRowId != -1L) imported++
+            if (insertedRowId != -1L) {
+                imported++
+                insertedTweetIds += item.tweetId
+            }
+        }
+        // P3 审计修复（2026-11-21）：插入与删除的竞态复查——exists/deletedIds 快照之后、
+        // insert 之前用户删除该推文的窗口会把已删链接复活（违反「防删除复活」铁律）。
+        // 插入后按最新回收站记录复查一次，命中即撤（收窄至批次级，窗口远小于逐条间隙）。
+        if (insertedTweetIds.isNotEmpty()) {
+            val latestDeleted = linkHistoryRepository.deletedTweetIds().toHashSet()
+            val resurrected = insertedTweetIds.filter { it in latestDeleted }
+            if (resurrected.isNotEmpty()) {
+                dao.deleteMany(resurrected)
+                imported -= resurrected.size
+                Log.w("SavedLinkRepository", "Resurrected-deleted links rolled back: $resurrected")
+            }
         }
         if (imported > 0) {
             Log.i("SavedLinkRepository", "Imported $imported downloaded media into inbox")
@@ -412,7 +451,7 @@ class SavedLinkRepository(
 
     suspend fun retryMissingMetadata(limit: Int = 5) {
         dao.getMissingMetadata(limit).forEach { link ->
-            fetchAndApplyMetadata(link.tweetId)
+            fetchAndApplyMetadataOnce(link.tweetId)
         }
     }
 

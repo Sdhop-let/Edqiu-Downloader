@@ -38,4 +38,19 @@ class YtdlpProgressTrackerTest {
         assertEquals(80f, tracker.update(20f, "EDQIU|tweet|combined|downloading"))
         assertEquals(99f, tracker.update(100f, "EDQIU|tweet|combined|finished"))
     }
+
+    @Test fun singleFormatFallbackReachesFullProgressViaInfoLine() {
+        // P3 审计修复（2026-11-21）：单格式回退（GIF 无独立音轨）按 info 行动态定分母，
+        // 进度不再恒卡 ≤50%
+        val tracker = YtdlpProgressTracker(2)
+        tracker.update(0f, "[info] tweet: Downloading 1 format(s): 137")
+        assertEquals(99f, tracker.update(99f, "EDQIU|tweet|137|downloading"))
+        assertEquals(99f, tracker.update(100f, "EDQIU|tweet|137|finished"))
+    }
+
+    @Test fun twoFormatInfoLineKeepsDenominatorAtTwo() {
+        val tracker = YtdlpProgressTracker(2)
+        tracker.update(0f, "[info] tweet: Downloading 1 format(s): 137+140")
+        assertEquals(49.5f, tracker.update(99f, "EDQIU|tweet|video|downloading"))
+    }
 }

@@ -447,6 +447,13 @@ class InternalMediaDownloader(private val context: Context) {
                 throw error
             }
         }
+        // P3 审计修复（2026-11-21）：清理 yt-dlp 留下的空 {uploader} 子目录
+        // （DownloaderClient.ytdlpFallback 已有同款清理，此路径此前漏了）
+        if (raw.parentFile != target.parentFile) {
+            runCatching {
+                raw.parentFile?.takeIf { it.isDirectory && it.list()?.isEmpty() == true }?.delete()
+            }
+        }
         return target
     }
 
@@ -1027,9 +1034,13 @@ class InternalMediaDownloader(private val context: Context) {
         return if (ext in IMAGE_EXTENSIONS) ext else "jpg"
     }
 
-    /** pbs.twimg.com 图片 URL 换 name=orig（原图，无 CDN 压缩参数）；已带 name 则替换。 */
+    /** pbs.twimg.com 图片 URL 换 name=orig（原图，无 CDN 压缩参数）；已带 name 参数则替换其值。 */
     private fun toOrigImageUrl(url: String): String = when {
-        url.contains("name=") -> url.substringBefore("name=") + "name=orig"
+        // P3 审计修复（2026-11-21）：精确匹配 name 参数——旧 `contains("name=")` 会把
+        // username=/nickname= 等含 name= 子串的参数误判并截出畸形 URL
+        NAME_PARAM.containsMatchIn(url) -> NAME_PARAM.replace(url) { m ->
+            "${m.groupValues[1]}name=orig"
+        }
         url.contains("?") -> "$url&name=orig"
         else -> "$url?name=orig"
     }
@@ -1076,6 +1087,10 @@ class InternalMediaDownloader(private val context: Context) {
         private const val SPLIT_MIN_BYTES = 8L * 1024L * 1024L
         private val VIDEO_TYPES = setOf("video", "gif", "animated_gif")
         private val IMAGE_TYPES = setOf("photo", "image")
-        private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif")
+        // P3 审计修复（2026-11-21）：补 heic/avif——源给出 format=heic/avif 时旧白名单
+        // 落成 .jpg（内容/扩展名不符）
+        private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "avif")
+        /** name= 参数（?name= 或 &name=，组1 保留问号/和号）。 */
+        private val NAME_PARAM = Regex("([?&])name=[^&]*")
     }
 }

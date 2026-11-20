@@ -162,9 +162,12 @@ class CaptureIntentActivity : ComponentActivity() {
             ) {
                 // 2026-11-07 审计修复：t.co 展开加总超时——3 条短链串行每条 5s，
                 // 最坏 ~15s 无上限等待（与 fetchMetadata 的 8s 口径对齐）
+                // P3 审计修复（2026-11-21）：跟随应用内代理（t.co 与 X 同域，直连恒死）
                 candidate = runCatching {
                     withTimeoutOrNull(8_000L) {
-                        com.ed.edqiu.capture.TcoLinkResolver.expand(candidate)
+                        val proxy = com.ed.edqiu.data.preferences.ProxyPreferences(this@CaptureIntentActivity)
+                            .getProxySettings().takeIf { it.enabled }
+                        com.ed.edqiu.capture.TcoLinkResolver.expand(candidate, proxy)
                     } ?: candidate
                 }.getOrDefault(candidate)
             }
@@ -196,6 +199,9 @@ class CaptureIntentActivity : ComponentActivity() {
             }
             var added = 0
             var duplicated = 0
+            // P3 审计修复（2026-11-21）：区分入库异常（DB 错误等）——旧实现 Invalid/异常
+            // 全吞掉，全异常时谎报「链接都已在收件箱里（0 条）」
+            var failed = 0
             pairs.forEach { pair ->
                 when (
                     withContext(kotlinx.coroutines.NonCancellable) {
@@ -204,15 +210,18 @@ class CaptureIntentActivity : ComponentActivity() {
                 ) {
                     is SavedLinkRepository.CaptureResult.Added -> added++
                     SavedLinkRepository.CaptureResult.Duplicate -> duplicated++
-                    else -> Unit
+                    else -> failed++
                 }
             }
             withContext(Dispatchers.Main) {
-                if (added > 0) {
-                    val dupSuffix = if (duplicated > 0) "（重复 $duplicated 条）" else ""
-                    succeed("已保存 $added 条$dupSuffix")
-                } else {
-                    fail("链接都已在收件箱里（$duplicated 条）")
+                when {
+                    added > 0 -> {
+                        val dupSuffix = if (duplicated > 0) "（重复 $duplicated 条）" else ""
+                        val failSuffix = if (failed > 0) "，$failed 条保存失败" else ""
+                        succeed("已保存 $added 条$dupSuffix$failSuffix")
+                    }
+                    failed > 0 -> fail("保存失败，请重试")
+                    else -> fail("链接都已在收件箱里（$duplicated 条）")
                 }
             }
         }

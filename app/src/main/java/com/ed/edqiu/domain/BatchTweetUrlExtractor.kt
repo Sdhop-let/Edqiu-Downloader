@@ -13,8 +13,6 @@ import java.util.Locale
  */
 object BatchTweetUrlExtractor {
 
-    private const val MAX_INPUT_LENGTH = 8_192
-
     private val STATUS_URL = Regex(
         // 2026-11-04 与 TweetIdExtractor 同步：scheme 可选 + 前置负向断言防误命中
         // （fox.com / box.com 等域名字面含 x.com，不能吞进来）
@@ -56,6 +54,15 @@ object BatchTweetUrlExtractor {
         }
         return pairs.distinctBy { it.tweetId }
     }
+
+    /** 输入超长被静默截断（P3 审计修复 2026-11-21）：UI 据此提示「仅解析前 N 字符」。 */
+    fun isTruncated(text: String?): Boolean {
+        if (text == null) return false
+        return ZERO_WIDTH.replace(text, "").length > MAX_INPUT_LENGTH
+    }
+
+    /** 解析输入长度上限（与 isTruncated 同源）。 */
+    const val MAX_INPUT_LENGTH = 8_192
 
     /** 从匹配位置向后吞掉 query 部分，还原用户复制的原始 URL。 */
     private fun originalUrlOf(text: String, match: MatchResult): String {

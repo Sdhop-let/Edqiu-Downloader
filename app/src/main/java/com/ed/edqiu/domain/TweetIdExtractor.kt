@@ -54,5 +54,17 @@ object TweetIdExtractor {
         return if (matcher.find()) matcher.group(0) else null
     }
 
+    /**
+     * 严格版（P3 审计修复 2026-11-21）：仅认下载器规约名（`{uploader}_{tweetId}_{序号}_...`）
+     * 的第二段纯数字，**无裸数字兜底**——兜底版会把监控目录里带 epoch 毫秒时间戳等
+     * 11-25 位数字串的任意文件（`1731800000000.mp4`）赋伪 tweetId，扫进收件箱成
+     * 指向不存在推文的幽灵条目。供扫描导入路径使用；媒体库内已有条目的回填
+     * （升级器/发布时间/播放器）仍用 [fromFileName]（文件已是合法媒体）。
+     */
+    fun fromConventionFileName(fileName: String): String? {
+        val candidate = fileName.split("_").getOrNull(1) ?: return null
+        return candidate.takeIf { RAW_ID.matcher(it).matches() }
+    }
+
     /** 判定文本中是否包含严格匹配的 Twitter/X status URL。 */
 }

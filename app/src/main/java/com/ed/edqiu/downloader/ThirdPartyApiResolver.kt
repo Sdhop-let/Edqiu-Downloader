@@ -160,7 +160,7 @@ class ThirdPartyApiResolver {
         if (has(key) && !isNull(key)) optString(key).takeIf { it.isNotBlank() } else null
 
     private companion object {
-        val IMAGE_EXTS = setOf("jpg", "jpeg", "png", "webp", "gif")
+        val IMAGE_EXTS = setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "avif")
         /** 视频扩展名白名单（2026-11-21 审计修复：按 URL 实推，m3u8 已在 add() 内拒绝）。 */
         val VIDEO_EXTS = setOf("mp4", "webm", "mov", "m4v", "mkv")
     }

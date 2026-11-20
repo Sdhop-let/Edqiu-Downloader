@@ -55,4 +55,13 @@ class InboxDownloadProgressTest {
         val failed = task("xinvox_${tweet}_1", DownloadStatus.FAILED, 50f, 110L)
         assertTrue(InboxDownloadProgress.progressByTweet(listOf(cancelledPending, failed)).isEmpty())
     }
+
+    @Test fun noNinetyNineSentinelWhileSessionHasFailures() {
+        // P3 审计修复（2026-11-21）：引擎空窗（会话内有失败任务，可能换引擎续跑）
+        // 不亮 99 哨兵——避免「99→换引擎低位」锯齿；无失败的真实等待落库窗口才亮
+        val pending = task("pending_$tweet", DownloadStatus.DOWNLOADING, 0f, 100L)
+        val done = task("xinvox_${tweet}_1", DownloadStatus.COMPLETED, 100f, 110L)
+        val failed = task("xinvox_${tweet}_2", DownloadStatus.FAILED, 30f, 120L)
+        assertTrue(InboxDownloadProgress.progressByTweet(listOf(pending, done, failed)).isEmpty())
+    }
 }

@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 11,
-    "identityHash": "4b4a26c5d63f8208a8f01934235d7827",
+    "identityHash": "f453f013d828d3572c9771bce0e21e3c",
     "entities": [
       {
         "tableName": "saved_links",
@@ -127,7 +127,7 @@
       },
       {
         "tableName": "deleted_link_history",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`archive_id` TEXT NOT NULL, `tweet_id` TEXT NOT NULL, `raw_url` TEXT NOT NULL, `author_id` TEXT, `author_name` TEXT, `caption` TEXT, `thumbnail_url` TEXT, `avatar_url` TEXT, `author_bio` TEXT, `published_at` INTEGER, `saved_at` INTEGER NOT NULL, `status` TEXT NOT NULL, `file_path` TEXT, `downloaded_at` INTEGER, `attempt_count` INTEGER NOT NULL, `last_attempt_at` INTEGER, `last_error` TEXT, `next_retry_at` INTEGER, `deleted_at` INTEGER NOT NULL, `deletion_reason` TEXT NOT NULL, PRIMARY KEY(`archive_id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`archive_id` TEXT NOT NULL, `tweet_id` TEXT NOT NULL, `raw_url` TEXT NOT NULL, `author_id` TEXT, `author_name` TEXT, `caption` TEXT, `thumbnail_url` TEXT, `avatar_url` TEXT, `author_bio` TEXT, `published_at` INTEGER, `saved_at` INTEGER NOT NULL, `status` TEXT NOT NULL, `file_path` TEXT, `downloaded_at` INTEGER, `attempt_count` INTEGER NOT NULL, `last_attempt_at` INTEGER, `last_error` TEXT, `next_retry_at` INTEGER, `deleted_at` INTEGER NOT NULL, `deletion_reason` TEXT NOT NULL, `origin` TEXT NOT NULL DEFAULT 'user', PRIMARY KEY(`archive_id`))",
         "fields": [
           {
             "fieldPath": "archiveId",
@@ -236,6 +236,13 @@
             "columnName": "deletion_reason",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "origin",
+            "columnName": "origin",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'user'"
           }
         ],
         "primaryKey": {
@@ -268,7 +275,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '4b4a26c5d63f8208a8f01934235d7827')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f453f013d828d3572c9771bce0e21e3c')"
     ]
   }
 }

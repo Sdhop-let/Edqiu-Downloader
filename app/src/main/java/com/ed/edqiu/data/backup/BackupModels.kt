@@ -85,7 +85,9 @@ data class BackupLink(
     val attemptCount: Int = 0,
     val lastAttemptAt: Long? = null,
     val lastError: String? = null,
-    val nextRetryAt: Long? = null
+    val nextRetryAt: Long? = null,
+    /** 来源线（P1 审计修复 2026-11-21）：旧备份无此字段时 kotlinx 取默认值 user，向后兼容。 */
+    val origin: String = com.ed.edqiu.data.model.SavedLink.ORIGIN_USER
 ) {
     fun toNormalizedSavedLink(): SavedLink {
         val restoredStatus = runCatching { LinkStatus.valueOf(status) }
@@ -107,7 +109,8 @@ data class BackupLink(
             attemptCount = attemptCount.coerceAtLeast(0),
             lastAttemptAt = lastAttemptAt,
             lastError = lastError,
-            nextRetryAt = nextRetryAt
+            nextRetryAt = nextRetryAt,
+            origin = origin
         )
     }
 
@@ -129,7 +132,8 @@ data class BackupLink(
             attemptCount = link.attemptCount,
             lastAttemptAt = link.lastAttemptAt,
             lastError = link.lastError,
-            nextRetryAt = link.nextRetryAt
+            nextRetryAt = link.nextRetryAt,
+            origin = link.origin
         )
     }
 }
@@ -163,6 +167,7 @@ data class BackupHistoryEntry(
             lastAttemptAt = link.lastAttemptAt,
             lastError = link.lastError,
             nextRetryAt = link.nextRetryAt,
+            origin = link.origin,
             deletedAt = deletedAt,
             deletionReason = deletionReason
         )
@@ -188,7 +193,8 @@ data class BackupHistoryEntry(
                 attemptCount = entry.attemptCount,
                 lastAttemptAt = entry.lastAttemptAt,
                 lastError = entry.lastError,
-                nextRetryAt = entry.nextRetryAt
+                nextRetryAt = entry.nextRetryAt,
+                origin = entry.origin
             ),
             deletedAt = entry.deletedAt,
             deletionReason = entry.deletionReason

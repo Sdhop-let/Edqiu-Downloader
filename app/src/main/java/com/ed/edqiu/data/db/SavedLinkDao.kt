@@ -82,7 +82,10 @@ interface SavedLinkDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertAll(links: List<SavedLink>)
 
-    /** 刷新：用监控目录的扫描结果更新状态与命中文件（publishedAt 仅在提供时覆盖）。 */
+    /** 刷新：用监控目录的扫描结果更新状态与命中文件（publishedAt 仅在提供时覆盖）。
+     *  P3 审计修复（2026-11-21）：DELETED 永久终态守卫——「推文不存在被标 DELETED，
+     *  之后监控目录出现同 id 文件（另一设备/旧文件）」时不再静默翻转为 DOWNLOADED，
+     *  与「终态不可复活」状态机约定一致。 */
     @Query(
         """
         UPDATE saved_links
@@ -94,6 +97,7 @@ interface SavedLinkDao {
             last_error = NULL,
             next_retry_at = NULL
         WHERE tweetId = :tweetId
+          AND status != 'DELETED'
         """
     )
     suspend fun applyScanResult(
