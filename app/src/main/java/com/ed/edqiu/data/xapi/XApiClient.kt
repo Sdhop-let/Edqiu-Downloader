@@ -398,6 +398,21 @@ object XApiClient {
             validBskyEndpoint(json.optString("bskyEndpoint"))?.let { endpoint ->
                 prefs().edit().putString("bskyEndpoint", endpoint).apply()
             }
+            // 2026-11-21 云控扩展：WebDAV 预设覆盖 + 公告（可选字段，缺省或校验不过保留原值）
+            validWebdavPresets(json.optJSONArray("webdavPresets"))?.let { overrides ->
+                val arr = org.json.JSONArray()
+                overrides.forEach { o ->
+                    val e = JSONObject().put("id", o.id)
+                    o.name?.let { e.put("name", it) }
+                    o.serverUrlTemplate?.let { e.put("serverUrlTemplate", it) }
+                    o.description?.let { e.put("description", it) }
+                    arr.put(e)
+                }
+                prefs().edit().putString("webdavPresets", arr.toString()).apply()
+            }
+            validAnnouncements(json.optJSONArray("announcements"))?.let { list ->
+                prefs().edit().putString("announcements", announcementsToJson(list)).apply()
+            }
             Log.i(TAG, "manifest 已热更新：$userByScreenName / $userTweets")
             true
         }
@@ -488,6 +503,181 @@ object XApiClient {
         val shape = Regex("^https://[A-Za-z0-9.-]+(:\\d{1,5})?$")
         return s.takeIf { shape.matches(it) }
     }
+
+    // ==================== 云控：WebDAV 预设覆盖 + 公告（2026-11-21） ====================
+
+    /**
+     * WebDAV 预设云控覆盖条目：按 [com.ed.edqiu.ui.screens.WebDavProvider.id] 对齐，
+     * 提供的字段覆盖内置预设（name/serverUrlTemplate/description，均可选）。
+     * 未知 id 由合并层忽略——清单不能凭空创造新服务商（无图标/无历史文案）。
+     */
+    data class CloudWebDavOverride(
+        val id: String,
+        val name: String?,
+        val serverUrlTemplate: String?,
+        val description: String?,
+    )
+
+    /** 应用内公告条目：收件箱顶部一次性胶囊展示。 */
+    data class Announcement(
+        val id: String,
+        val severity: String,
+        val text: String,
+        val url: String?,
+        val once: Boolean,
+        val minApp: Int?,
+        val maxApp: Int?,
+    )
+
+    /**
+     * webdavPresets 白名单校验（纯函数，可单测）：id 形态 `^[a-z0-9_]{1,32}$`；
+     * serverUrlTemplate 须为 scheme:// 形态且无空白/引号（允许 {账号ID}/<内网IP> 类占位符
+     * 与中文——CloudDrive2 内网 IP 模板即含中文）；description ≤600 字。整批 ≤20 条。
+     * 任何一条非法 → 整体 null（保留原值，防部分写入造成状态分裂）。
+     */
+    internal fun validWebdavPresets(raw: org.json.JSONArray?): List<CloudWebDavOverride>? {
+        raw ?: return null
+        if (raw.length() == 0) return null
+        if (raw.length() > 20) return null
+        val idShape = Regex("^[a-z0-9_]{1,32}$")
+        val tplShape = Regex("^https?://[^\\s\"']{1,180}$")
+        val out = mutableListOf<CloudWebDavOverride>()
+        for (i in 0 until raw.length()) {
+            val o = raw.optJSONObject(i) ?: return null
+            val id = o.optString("id").trim()
+            if (!idShape.matches(id)) return null
+            val name = if (o.has("name")) {
+                o.optString("name").trim().takeIf { it.isNotEmpty() && it.length <= 20 } ?: return null
+            } else null
+            val tpl = if (o.has("serverUrlTemplate")) {
+                o.optString("serverUrlTemplate").trim().takeIf { tplShape.matches(it) } ?: return null
+            } else null
+            val desc = if (o.has("description")) {
+                o.optString("description").takeIf { it.isNotBlank() && it.length <= 600 } ?: return null
+            } else null
+            out += CloudWebDavOverride(id, name, tpl, desc)
+        }
+        return out
+    }
+
+    /**
+     * announcements 白名单校验（纯函数，可单测）：id 形态 `^[A-Za-z0-9_.-]{1,64}$`；
+     * text 1-300 字；url 可选须 https://；severity ∈ {info, warn}（缺省 info）；
+     * minApp/maxApp 可选非负 int；once 可选 bool（缺省 true）。整批 ≤10 条。
+     * 任何一条非法 → 整体 null（保留原值）。
+     */
+    internal fun validAnnouncements(raw: org.json.JSONArray?): List<Announcement>? {
+        raw ?: return null
+        if (raw.length() == 0) return null
+        if (raw.length() > 10) return null
+        val idShape = Regex("^[A-Za-z0-9_.-]{1,64}$")
+        val out = mutableListOf<Announcement>()
+        for (i in 0 until raw.length()) {
+            val o = raw.optJSONObject(i) ?: return null
+            val id = o.optString("id").trim()
+            if (!idShape.matches(id)) return null
+            val text = o.optString("text").trim()
+            if (text.isEmpty() || text.length > 300) return null
+            val url = o.optString("url").trim().takeIf { it.isNotBlank() }
+            if (url != null && !url.startsWith("https://")) return null
+            val severity = o.optString("severity", "info").also {
+                if (it != "info" && it != "warn") return null
+            }
+            val minApp = if (o.has("minApp")) o.optInt("minApp", -1).takeIf { it >= 0 } ?: return null else null
+            val maxApp = if (o.has("maxApp")) o.optInt("maxApp", -1).takeIf { it >= 0 } ?: return null else null
+            out += Announcement(id, severity, text, url, o.optBoolean("once", true), minApp, maxApp)
+        }
+        return out
+    }
+
+    /** 公告落盘为规范化 JSON（与清单原文字解耦，读取侧只认规范化形态）。 */
+    private fun announcementsToJson(list: List<Announcement>): String {
+        val arr = org.json.JSONArray()
+        list.forEach { a ->
+            val o = JSONObject().put("id", a.id).put("severity", a.severity)
+                .put("text", a.text).put("once", a.once)
+            a.url?.let { o.put("url", it) }
+            a.minApp?.let { o.put("minApp", it) }
+            a.maxApp?.let { o.put("maxApp", it) }
+            arr.put(o)
+        }
+        return arr.toString()
+    }
+
+    private fun parseAnnouncementsJson(raw: String?): List<Announcement> = runCatching {
+        val arr = org.json.JSONArray(raw ?: return emptyList())
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val id = o.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            Announcement(
+                id = id,
+                severity = o.optString("severity", "info"),
+                text = o.optString("text"),
+                url = o.optString("url").takeIf { it.startsWith("https://") },
+                once = o.optBoolean("once", true),
+                minApp = o.optInt("minApp", -1).takeIf { it >= 0 },
+                maxApp = o.optInt("maxApp", -1).takeIf { it >= 0 },
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    /**
+     * WebDAV 预设云控覆盖（安全读取，无需 init 装配）：设置页渲染前调用，
+     * 与内置预设按 id 合并（见 WebDavProviderSelector.webDavProvidersWithCloud）。
+     */
+    fun webdavPresetsSafe(context: Context?): List<CloudWebDavOverride> = runCatching {
+        val raw = context?.applicationContext
+            ?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            ?.getString("webdavPresets", null) ?: return emptyList()
+        val arr = org.json.JSONArray(raw)
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val id = o.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            CloudWebDavOverride(
+                id = id,
+                name = o.optString("name").takeIf { it.isNotBlank() },
+                serverUrlTemplate = o.optString("serverUrlTemplate").takeIf { it.isNotBlank() },
+                description = o.optString("description").takeIf { it.isNotBlank() },
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    /** 公告列表（安全读取，无需 init 装配）：规范化 JSON 解析，容错空列表。 */
+    fun announcementsSafe(context: Context?): List<Announcement> = runCatching {
+        val raw = context?.applicationContext
+            ?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            ?.getString("announcements", null) ?: return emptyList()
+        parseAnnouncementsJson(raw)
+    }.getOrDefault(emptyList())
+
+    /**
+     * 当前适用的公告（安全读取）：按 versionCode 区间过滤 + once 已读过滤，
+     * warn 优先于 info。收件箱顶部胶囊展示。
+     */
+    fun currentAnnouncement(context: Context): Announcement? {
+        val seen = dismissedAnnouncementIds(context)
+        val appCode = runCatching {
+            context.applicationContext.packageManager
+                .getPackageInfo(context.applicationContext.packageName, 0).longVersionCode.toInt()
+        }.getOrDefault(0)
+        return announcementsSafe(context)
+            .filter { a -> a.minApp?.let { appCode >= it } ?: true }
+            .filter { a -> a.maxApp?.let { appCode <= it } ?: true }
+            .filter { a -> !(a.once && a.id in seen) }
+            .maxByOrNull { if (it.severity == "warn") 1 else 0 }
+    }
+
+    /** 公告「知道了」：once 公告记入已读集合。 */
+    fun dismissAnnouncement(context: Context, id: String) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val seen = prefs.getStringSet("announcementsSeen", emptySet())?.toMutableSet() ?: mutableSetOf()
+        seen += id
+        prefs.edit().putStringSet("announcementsSeen", seen).apply()
+    }
+
+    private fun dismissedAnnouncementIds(context: Context): Set<String> =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getStringSet("announcementsSeen", emptySet()) ?: emptySet()
 
     private fun queryId(operation: String): String {
         val key = when (operation) {

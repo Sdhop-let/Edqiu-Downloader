@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -111,7 +112,30 @@ val webDavProviders: List<WebDavProvider> = listOf(
 )
 
 /**
+ * 云控合并（2026-11-21）：manifest `webdavPresets` 按 id 覆盖内置预设的
+ * name/serverUrlTemplate/description（字段级可选，只覆盖清单提供的字段）。
+ * 未知 id 忽略——清单不能凭空创造新服务商（无图标语义/无历史文案沉淀）。
+ * 服务商改端点/口径时改仓库清单即全体生效，无需发版。
+ */
+fun webDavProvidersWithCloud(
+    cloud: List<com.ed.edqiu.data.xapi.XApiClient.CloudWebDavOverride>,
+    builtIn: List<WebDavProvider> = webDavProviders,
+): List<WebDavProvider> {
+    if (cloud.isEmpty()) return builtIn
+    return builtIn.map { preset ->
+        val override = cloud.firstOrNull { it.id == preset.id } ?: return@map preset
+        preset.copy(
+            name = override.name ?: preset.name,
+            serverUrlTemplate = override.serverUrlTemplate ?: preset.serverUrlTemplate,
+            description = override.description ?: preset.description,
+        )
+    }
+}
+
+/**
  * 横向滚动的网盘预设胶囊 chips。
+ *
+ * 2026-11-21 云控：预设列表经 [webDavProvidersWithCloud] 与 manifest webdavPresets 合并。
  *
  * 视觉风格参考库内 FilterTabs：选中时 primaryContainer 底色 + 内描边 + 语义点，
  * 未选中时 surfaceContainer 半透明底 + 淡描边。
@@ -123,13 +147,17 @@ fun WebDavProviderSelector(
     onProviderSelected: (WebDavProvider) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val providers = remember {
+        webDavProvidersWithCloud(com.ed.edqiu.data.xapi.XApiClient.webdavPresetsSafe(context))
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        webDavProviders.forEach { provider ->
+        providers.forEach { provider ->
             val selected = provider.id == selectedProviderId
             Surface(
                 modifier = Modifier.clickable { onProviderSelected(provider) },

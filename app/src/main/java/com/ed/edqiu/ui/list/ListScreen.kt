@@ -362,6 +362,11 @@ fun ListScreen(
                             }
                         )
                     }
+                    // ── 2026-11-21 云控公告：manifest announcements 命中当前版本区间时
+                    // 展示一次性玻璃胶囊（warn 优先；「知道了」记入已读不再出现）
+                    item(key = "inbox_announcement") {
+                        AnnouncementBanner()
+                    }
                     stickyHeader(key = "inbox_filters") {
                         InboxFilterBar(
                             selectedFilter = filter,
@@ -1470,3 +1475,68 @@ private fun BatchDownloadPreviewDialog(
     )
 }
 
+
+/**
+ * 云控公告胶囊（2026-11-21）：manifest announcements 命中当前 versionCode 区间且
+ * 未读过（once）时展示于收件箱顶部；「知道了」记入已读集合不再出现。
+ * warn 级优先于 info。纯展示、静态拉取无遥测——与「无埋点」设计原则一致。
+ */
+@Composable
+private fun AnnouncementBanner() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var announcement by remember {
+        mutableStateOf(com.ed.edqiu.data.xapi.XApiClient.currentAnnouncement(context))
+    }
+    val active = announcement ?: return
+    val isWarn = active.severity == "warn"
+    GlassSurface(tier = com.ed.edqiu.ui.components.GlassTier.L1, shape = RoundedCornerShape(14.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (isWarn) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        }
+                    )
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    active.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                active.url?.let { url ->
+                    Text(
+                        "查看详情 ›",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.pressableNoRipple {
+                            runCatching {
+                                context.startActivity(
+                                    android.content.Intent(
+                                        android.content.Intent.ACTION_VIEW,
+                                        android.net.Uri.parse(url)
+                                    )
+                                )
+                            }
+                        }
+                    )
+                }
+            }
+            TextButton(onClick = {
+                com.ed.edqiu.data.xapi.XApiClient.dismissAnnouncement(context, active.id)
+                announcement = null
+            }) { Text("知道了", style = MaterialTheme.typography.labelMedium) }
+        }
+    }
+}

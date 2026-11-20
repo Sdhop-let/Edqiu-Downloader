@@ -116,11 +116,14 @@ JAVA_HOME="<JDK21>" ./gradlew :app:assembleRelease   # 需自备 keystore.proper
 **发版（维护者）**：推 `v*` tag → GitHub Actions 自动构建并创建 Release，说明自动取
 `docs/RELEASE_NOTES-<版本>.md`。详见 [docs/release-automation.md](docs/release-automation.md)。
 
-**订阅检测与解析端点维护**：`x_api_manifest.json`（仓库根）是远程接口清单——承载三组云控配置：
+**订阅检测与解析端点维护**：`x_api_manifest.json`（仓库根）是远程接口清单——承载五组云控配置：
 X 检测通道的 `queryId` / `bearer`（X 轮换 GraphQL queryId 后更新此文件即可热更新所有客户端）、
 `fxHosts`（FXTwitter 兼容 API 主机列表，下载/元数据/画质升级按序回退——官方实例故障时切自建/镜像实例）、
-`bskyEndpoint`（Bluesky 公共 AppView 根地址）。客户端在代理可用时每 7 天静默拉取，检测到陈旧签名或
-主机失联时按需即时拉取并重试；全部字段带形状白名单校验，垃圾值不落盘。
+`bskyEndpoint`（Bluesky 公共 AppView 根地址）、
+`webdavPresets`（网盘预设覆盖：服务商改端点/口径时按 id 热更 serverUrlTemplate/name/description）、
+`announcements`（收件箱顶部公告胶囊：签名更换提醒 / 故障通告，按 versionCode 区间定向、once 已读不再显示）。
+客户端在代理可用时每 7 天静默拉取，检测到陈旧签名或主机失联时按需即时拉取并重试；
+全部字段带形状白名单校验，垃圾值不落盘。
 
 ## 仓库结构
 
