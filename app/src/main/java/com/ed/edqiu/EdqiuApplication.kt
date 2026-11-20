@@ -109,6 +109,9 @@ class EdqiuApplication : TwitterDownloaderApp() {
                 if (cleaned > 0) android.util.Log.i("EdqiuApp", "孤儿 .part 清理：删除 $cleaned 个 7 天以上残留")
             }
         }
+        // 2026-11-21 轻云控：yt-dlp 引擎每日后台自更新（KEEP 策略防冷启动重置周期；
+        // Worker 内自查开关——默认开，已是最新只做一次 API 检查不下载，静默失败不打扰）
+        com.ed.edqiu.background.YtdlpEngineUpdateWorker.ensureScheduled(this)
         // 回收站 30 天保留期清理（2026-10-24 审计落地）：过期归档行删除——
         // 30 天粒度无需 WorkManager 精度，启动跑一次即可；媒体文件归媒体库管不动
         applicationScope.launch(Dispatchers.IO) {

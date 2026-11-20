@@ -163,6 +163,9 @@ fun DownloaderSettingsPage(
     var engineVersionText by remember {
         mutableStateOf("当前版本 ${YoutubeDLService.engineVersion(context)}")
     }
+    var engineAutoUpdate by remember {
+        mutableStateOf(YtdlpEngineUpdater.isAutoUpdateEnabled(context))
+    }
     var appUpdateInfo by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var isCheckingAppUpdate by remember { mutableStateOf(false) }
     var isDownloadingAppUpdate by remember { mutableStateOf(false) }
@@ -670,6 +673,34 @@ fun DownloaderSettingsPage(
                         actionText = if (isUpdatingYtdlp) "更新中" else "立即更新",
                         onClick = { updateYtdlpEngine() }
                     )
+                    // 2026-11-21 轻云控：每日后台自更新（Worker 静默执行，已是最新不下载；
+                    // 进行中的下载用旧进程不受影响——落位是原子 rename 换 inode）
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "自动更新引擎",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                "每日后台检查一次（代理/镜像双通道），已是最新不下载，更新后下次下载生效",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DynamicSwitch(
+                            checked = engineAutoUpdate,
+                            onCheckedChange = { enabled ->
+                                engineAutoUpdate = enabled
+                                YtdlpEngineUpdater.setAutoUpdateEnabled(context, enabled)
+                            }
+                        )
+                    }
                     HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color(0xFFE2E8F0))
                     ActionRow(
                         title = "检查 App 更新",

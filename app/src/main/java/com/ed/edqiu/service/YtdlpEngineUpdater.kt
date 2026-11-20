@@ -67,6 +67,20 @@ object YtdlpEngineUpdater {
         return prefs.getString(PREF_VERSION, null)?.takeIf { it.isNotBlank() }
     }
 
+    // ---------- 后台自更新开关（2026-11-21） ----------
+
+    private const val PREF_AUTO_UPDATE = "engineAutoUpdateEnabled"
+
+    /** 引擎每日后台自更新开关（默认开）：Worker 每日一次检查，已是最新不下载。 */
+    fun isAutoUpdateEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(PREF_AUTO_UPDATE, true)
+
+    fun setAutoUpdateEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(PREF_AUTO_UPDATE, enabled).apply()
+    }
+
     /**
      * 检查远端最新 release（双通道）：解析 tag_name + name 为 "yt-dlp" 的资产直链。
      * 代理通道失败自动回退 gh-proxy 镜像（直连）。
