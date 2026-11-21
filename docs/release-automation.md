@@ -35,6 +35,10 @@ CI 按仓库 Secrets 是否配置签名凭据走双模式：
 
 2. **写本版说明**：新建 `docs/RELEASE_NOTES-<版本号>.md`。
    CI 取 `docs/RELEASE_NOTES-*.md` 中**版本号最大**的一份作为 Release 正文，因此文件名必须与 tag 一致。
+   ⚠️ **文件名排序坑（E0.1.2plus 实测）**：CI 用 `sort -V` 选最新——`RELEASE_NOTES-E0.1.2plus.md`
+   （无连字符）版本排序反而落在 `E-0.1.2.md` 之前会被无视，正文被旧版覆盖；补丁说明文件名须用
+   连字符形式 `RELEASE_NOTES-E-0.1.2plus.md`（tag 名仍按补丁约定 `E0.1.2plus`），推前可本地自验：
+   `ls docs/RELEASE_NOTES-*.md | sort -V | tail -1` 是否命中新文件。
 
 3. **同步文档**：
    - `README.md` 顶部的版本行；
