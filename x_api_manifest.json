@@ -12,5 +12,14 @@
   ],
   "bskyEndpoint": "https://public.api.bsky.app",
   "webdavPresets": [],
-  "announcements": []
+  "announcements": [
+    {
+      "id": "e012-cloud-features",
+      "severity": "info",
+      "text": "Edqiu E-0.1.2 云控能力上线：yt-dlp 引擎支持每日后台自动更新（设置页可关）；WebDAV 网盘预设、FXTwitter/Bluesky 端点支持云端热更，无需等发版；保持代理开启即可自动接收后续配置与公告。",
+      "url": "https://github.com/Sdhop-let/Edqiu-Downloader/releases/tag/E0.1.2fix",
+      "once": true,
+      "minApp": 102
+    }
+  ]
 }
