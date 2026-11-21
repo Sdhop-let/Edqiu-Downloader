@@ -40,6 +40,8 @@ app/build_prev*/
 /*.apk
 /adb-backup/
 /backup-*/
+/smoke_*/
+/tmp_*/
 
 # ===== 工具本地数据 =====
 .workbuddy/
