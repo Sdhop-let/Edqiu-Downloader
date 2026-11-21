@@ -1487,6 +1487,26 @@ private fun AnnouncementBanner() {
     var announcement by remember {
         mutableStateOf(com.ed.edqiu.data.xapi.XApiClient.currentAnnouncement(context))
     }
+    // 2026-11-21 触达修正：拉取在订阅轮询中后台落盘，而 remember 只在组合时读一次——
+    // 当次会话错过新公告（真机实测拉取成功但横幅不现，重启才见）。
+    // announcements 落盘监听（前台拉取即时刷新）+ ON_RESUME 重读（后台轮询落盘后
+    // 回到前台也即时可见）。DisposableEffect 必须在 `?: return` 之前注册。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(context, lifecycleOwner) {
+        val unregister = com.ed.edqiu.data.xapi.XApiClient.onAnnouncementsChanged(context) {
+            announcement = com.ed.edqiu.data.xapi.XApiClient.currentAnnouncement(context)
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                announcement = com.ed.edqiu.data.xapi.XApiClient.currentAnnouncement(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            unregister()
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
     val active = announcement ?: return
     val isWarn = active.severity == "warn"
     GlassSurface(tier = com.ed.edqiu.ui.components.GlassTier.L1, shape = RoundedCornerShape(14.dp)) {

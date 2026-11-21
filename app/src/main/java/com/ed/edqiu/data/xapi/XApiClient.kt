@@ -422,14 +422,25 @@ object XApiClient {
     }
 
     /**
-     * 代理开启时的机会性静默升级：manifest 超过 [ttlMs] 才拉，失败静默（不弹窗）。
+     * 代理开启时的机会性静默升级：manifest 超过 TTL 才拉，失败静默（不弹窗）。
      * 由订阅轮询每轮开头调用一次——用户无感完成 queryId 保鲜；
      * FXTwitter 全主机失败时以下降 TTL（1h）触发，加速云端切换实例的生效。
+     *
+     * 2026-11-21 公告时效修正：7 天 [MANIFEST_TTL_MS] 是 queryId 保鲜的节奏，公告等不起
+     * （实测：设备 12:21 装机拉过一次清单，14:26 推公告，7 天 TTL 锁死到 11-28 才能收到）。
+     * 与调用方 [ttlMs] 取小：announcements 缓存为空（从未收到过公告）时 1h——新公告
+     * 最迟下一轮订阅轮询触达；已有公告缓存回落 24h 天级保鲜。
      */
     fun maybeQuietUpgrade(proxyUrl: String?, ttlMs: Long = MANIFEST_TTL_MS) {
         if (proxyUrl == null) return
-        val last = prefs().getLong("manifestAt", 0L)
-        if (System.currentTimeMillis() - last < ttlMs) return
+        val prefs = prefs()
+        val last = prefs.getLong("manifestAt", 0L)
+        val announceTtl = if (prefs.getString("announcements", null).isNullOrBlank()) {
+            60 * 60_000L // 未收到过公告：1h 加速，新公告最迟下一轮轮询触达
+        } else {
+            24L * 3600 * 1000 // 已有公告缓存：天级保鲜
+        }
+        if (System.currentTimeMillis() - last < minOf(ttlMs, announceTtl)) return
         refreshManifest(proxyUrl)
     }
 
@@ -673,6 +684,23 @@ object XApiClient {
         val seen = prefs.getStringSet("announcementsSeen", emptySet())?.toMutableSet() ?: mutableSetOf()
         seen += id
         prefs.edit().putStringSet("announcementsSeen", seen).apply()
+    }
+
+    /**
+     * 公告落盘监听（2026-11-21 触达修正）：manifest announcements 被静默拉取覆写时
+     * 通知 UI 立即重读——收件箱横幅当次会话即时可见，不等下次启动
+     * （真机实测：14:46 拉取落盘成功，横幅到 14:47 重启才出现）。
+     * 返回反注册闭包；闭包持有 prefs 与 listener 强引用（SharedPreferences 对监听器
+     * 只持弱引用，经典回收坑）。
+     */
+    fun onAnnouncementsChanged(context: Context?, onChange: () -> Unit): () -> Unit {
+        val prefs = context?.applicationContext
+            ?.getSharedPreferences(PREFS, Context.MODE_PRIVATE) ?: return {}
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "announcements") onChange()
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        return { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
     private fun dismissedAnnouncementIds(context: Context): Set<String> =
